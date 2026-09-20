@@ -113,6 +113,13 @@ interface Spec {
   transport?: TransportKind;
   /** Defaults to VLESS. */
   protocol?: Protocol;
+  /**
+   * Where a sweep measured this one actually exits, when that differs from its label.
+   *
+   * The common case with real subscriptions and impossible to reach by clicking, since it needs
+   * a completed test against live servers.
+   */
+  exitCountry?: string;
 }
 
 let uuidCounter = 0;
@@ -138,6 +145,7 @@ function serverFrom(groupId: string, spec: Spec): Server {
   };
 
   return {
+    exitCountry: spec.exitCountry,
     // Readable rather than random: a fixture is easier to reason about when the ids mean something.
     id: `${groupId}-${spec.host}`,
     groupId,
@@ -161,7 +169,9 @@ const BACKUP_ID = "mock-backup";
  */
 const MANUAL: Spec[] = [
   { country: "DE", city: "Frankfurt", name: "DE-1 Frankfurt", host: "fra-01", latency: 24, security: "reality" },
-  { country: "NL", city: "Amsterdam", name: "NL-2 Amsterdam", host: "ams-02", latency: 138, security: "tls", transport: "ws" },
+  // Labelled Amsterdam, measured exiting in the United States — the ordinary case with a
+  // Cloudflare-fronted provider, and the one that proves a sweep changes the flag and not the name.
+  { country: "NL", city: "Amsterdam", name: "NL-2 Amsterdam", host: "ams-02", latency: 138, security: "tls", transport: "ws", exitCountry: "US" },
   { country: "IR", city: "Tehran", name: "IR-1 Tehran", host: "thr-01", latency: null, security: "none", port: 8080 },
 ];
 

@@ -245,11 +245,16 @@ function buildPins(selected: Server | undefined): Pin[] {
   const seen = new Set<string>();
 
   for (const server of store.get().servers) {
-    if (!server.country || seen.has(server.country)) continue;
-    seen.add(server.country);
+    // The map answers "where does my traffic come out", so it follows the measured exit wherever
+    // there is one and falls back to the guess from the name. This is the same rule the flag
+    // uses, and for the same reason: it is about location, not about what the server is called.
+    const code = server.exitCountry ?? server.country;
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
 
-    const where = place(server.country);
-    const active = connection === "on" && selected?.country === server.country;
+    const where = place(code);
+    const active =
+      connection === "on" && (selected?.exitCountry ?? selected?.country) === code;
     pins.push({
       lon: where.lon,
       lat: where.lat,

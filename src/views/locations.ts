@@ -331,7 +331,13 @@ export class LocationsPanel {
             : undefined,
         onclick: () => this.callbacks.onSelect(server),
       },
-      h("span", { class: "flag", style: `background:${country.flag}` }),
+      // Flagged by where it was measured to come out, labelled by what it is called. The two
+      // disagree often enough that conflating them would rename half a subscription.
+      h("span", {
+        class: "flag",
+        style: `background:${place(server.exitCountry ?? server.country).flag}`,
+        title: server.exitCountry ? `Exits in ${place(server.exitCountry).name}` : undefined,
+      }),
       h(
         "span",
         { class: "loc-main" },

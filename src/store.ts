@@ -33,12 +33,15 @@ export interface Server {
   /** A refresh dropped this server, but it is kept because the tunnel is running on it. */
   retired?: boolean;
   /**
-   * The country came from asking the server where it exits, not from reading its name.
+   * Where a sweep found this server actually exits, as a country code.
    *
-   * Worth recording because the two are frequently different, and a provider's own label is the
-   * less trustworthy of them: once measured, a name-based guess must not overwrite it.
+   * Kept apart from `country` on purpose. `country` is read off the server's name and is what the
+   * row is *labelled* with; this is measured, and is what the row is *flagged* with. They are
+   * frequently different — a provider's "Germany" routinely exits in the United States — and
+   * overwriting the label with the measurement would silently rename the user's servers, which
+   * is not what a latency sweep is for.
    */
-  geoChecked?: boolean;
+  exitCountry?: string;
   /**
    * The user named this one themselves, so the row shows that name instead of the country.
    *
@@ -354,9 +357,9 @@ class Store {
           // A measured country outranks the name the provider gave this refresh. Letting the
           // guess win here would undo the measurement every time the subscription updated,
           // which is often enough that the flag would never settle.
-          country: previous.geoChecked ? previous.country : candidate.country,
-          city: previous.geoChecked ? previous.city : candidate.city,
-          geoChecked: previous.geoChecked,
+          // A measured exit survives a refresh; the label and city follow the provider, which
+          // is what a refresh is for.
+          exitCountry: previous.exitCountry,
           renamed: previous.renamed,
           retired: false,
         };
@@ -394,8 +397,9 @@ class Store {
       for (const server of data.servers) {
         const country = byId.get(server.id);
         if (!country) continue;
-        server.country = country;
-        server.geoChecked = true;
+        // The flag only. The name, the city and the label are the user's and the provider's;
+        // this is the one thing the measurement is entitled to change.
+        server.exitCountry = country;
       }
     });
   }

@@ -23,32 +23,68 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::config::{self, Profile};
 use crate::core_proc::CoreProcess;
 use crate::rpc::{gen, method, CoreLink};
 
-/// Where the probe asks. Reachable from every server in the sample that failed the core's own
-/// endpoints, and it answers over plain HTTP with a two-letter country code.
-const LOOKUP_URL: &str = "http://ipinfo.io/json";
+/// Endpoints that report the caller's address, asked **through** each server.
+///
+/// Deliberately not a geo endpoint. The obvious design — ask something like `ipinfo.io/json`
+/// through every server — collapses in practice, because servers share exits: four of ten in a
+/// real subscription came back on one Cloudflare address. A geo service rate-limits per client
+/// IP, so a sweep puts ten requests on three or four addresses and most come back `429`.
+/// Measured, that design located two servers out of ten while all eight reachable ones could
+/// reach the endpoint perfectly well.
+///
+/// These return the address and nothing else, are not rate-limited at the volumes a sweep
+/// produces, and are not Cloudflare-fronted — which matters because a Cloudflare Workers proxy,
+/// the shape most free subscriptions take, cannot make a subrequest to Cloudflare.
+const EXIT_IP_URLS: [&str; 2] = ["http://checkip.amazonaws.com/", "http://ifconfig.me/ip"];
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+/// Turns an address into a country, asked **directly** rather than through a server.
+///
+/// This is the half that is rate-limited, so it is the half that runs from the user's own
+/// connection and only once per *distinct* exit: ten servers on four exits cost four lookups.
+///
+/// A chain rather than one endpoint, because the free tiers are exhaustible and a day of testing
+/// is enough to exhaust one — at which point every flag silently stops updating. The first two
+/// answer in plain text and JSON respectively; both were reachable when `ipinfo.io` had started
+/// returning 429 to this machine.
+///
+/// Expect them to disagree occasionally. A Cloudflare anycast address has no single physical
+/// location, and the databases behind these services place the same address in different
+/// countries. The flag is "where this looks like it comes out", not a certificate.
+const COUNTRY_URLS: [fn(&str) -> String; 3] = [
+    |ip| format!("http://ip-api.com/line/{ip}?fields=countryCode"),
+    |ip| format!("https://api.country.is/{ip}"),
+    |ip| format!("http://ipinfo.io/{ip}/country"),
+];
+
+/// Per request, and deliberately short.
+///
+/// A sweep's wall time is set by its failures, not its successes: every reachable server answered
+/// in well under a second, while an unreachable one costs this much twice over — once per
+/// endpoint in the chain — on each attempt.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long to wait for the scratch core to dial back before giving up on it.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many lookups are in flight at once.
 ///
 /// Not tuned down for politeness: measured against a real subscription, dropping it to 3 made the
-/// sweep twice as slow *and* found fewer servers, so the misses are per-request flakiness through
-/// the proxies rather than the endpoint objecting to the pace.
+/// sweep twice as slow and found fewer servers, so the misses are per-request flakiness through
+/// the proxies rather than the endpoints objecting to the pace.
 const MAX_CONCURRENCY: usize = 8;
 
 /// How many times each server is asked before its guess is left alone.
-///
-/// Two, because a single pass reliably missed two or three of ten while the same servers answered
-/// on a later run. A retry is far cheaper than it looks: the scratch core and its ports are
-/// already up, so only the servers that failed are asked again.
 const ATTEMPTS: usize = 2;
+
+/// Gap between launching one lookup and the next, to spread servers that share an exit.
+const STAGGER: Duration = Duration::from_millis(120);
+
+/// Pause before asking the servers that failed again.
+const BACKOFF: Duration = Duration::from_secs(2);
 
 /// One server's actual exit, keyed back to the caller's ordering.
 #[derive(Debug, Clone, Serialize)]
@@ -58,15 +94,6 @@ pub struct Located {
     /// Two-letter country code, uppercase, as the list expects it.
     pub country: String,
     pub ip: String,
-}
-
-/// What `ipinfo.io/json` gives back. Everything else it returns is ignored.
-#[derive(Deserialize)]
-struct Lookup {
-    #[serde(default)]
-    ip: String,
-    #[serde(default)]
-    country: String,
 }
 
 /// Asks the OS for a free loopback port.
@@ -101,20 +128,87 @@ async fn wait_for_listeners(ports: &[u16]) -> bool {
     }
 }
 
-/// One lookup, through one local port.
+/// Asks one server what address it comes out of.
 ///
-/// Blocking: `ureq` is, so this runs on a blocking worker. A failure is not an error worth
-/// reporting upward — a server that cannot reach the endpoint simply keeps the country it had.
-fn lookup_through(port: u16) -> Option<Lookup> {
-    let proxy = ureq::Proxy::new(format!("http://127.0.0.1:{port}")).ok()?;
+/// Blocking: `ureq` is, so this runs on a blocking worker. Tries each endpoint in turn, because
+/// a server that cannot reach one may well reach the other, and a single unreachable endpoint
+/// should not be reported as a server with no country.
+fn exit_ip_through(port: u16) -> Result<String, String> {
+    let proxy = ureq::Proxy::new(format!("http://127.0.0.1:{port}"))
+        .map_err(|e| format!("bad proxy address: {e}"))?;
     let agent = ureq::AgentBuilder::new()
         .proxy(proxy)
         .timeout(REQUEST_TIMEOUT)
         .build();
 
-    let body = agent.get(LOOKUP_URL).call().ok()?.into_string().ok()?;
-    let parsed: Lookup = serde_json::from_str(&body).ok()?;
-    (!parsed.country.is_empty()).then_some(parsed)
+    let mut last = String::from("no endpoint was tried");
+    for url in EXIT_IP_URLS {
+        match agent.get(url).call() {
+            Ok(response) => match response.into_string() {
+                Ok(body) => {
+                    let candidate = body.trim();
+                    // Validated rather than trusted: a captive portal or an error page would
+                    // otherwise become an "address" and then a nonsense flag.
+                    if candidate.parse::<std::net::IpAddr>().is_ok() {
+                        return Ok(candidate.to_string());
+                    }
+                    last = format!("{url} did not return an address");
+                }
+                Err(e) => last = format!("could not read {url}: {e}"),
+            },
+            // A status is the endpoint answering; a transport error is the server failing. Both
+            // are worth trying the next endpoint for, but they mean different things in a log.
+            Err(ureq::Error::Status(status, _)) => last = format!("{url} returned {status}"),
+            Err(e) => last = format!("{url}: {e}"),
+        }
+    }
+    Err(last)
+}
+
+/// Pulls a two-letter country code out of whatever shape the endpoint answered in.
+///
+/// Plain text for one, JSON for another, so this looks for the code rather than parsing a schema
+/// per endpoint — there are only so many ways to write two letters.
+fn code_from(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+
+    let candidate = if trimmed.starts_with('{') {
+        let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+        value
+            .get("country")
+            .or_else(|| value.get("countryCode"))
+            .and_then(|v| v.as_str())?
+            .to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    let code = candidate.trim().to_ascii_uppercase();
+    (code.len() == 2 && code.chars().all(|c| c.is_ascii_alphabetic())).then_some(code)
+}
+
+/// Turns an address into a two-letter country code, from this machine's own connection.
+fn country_of(ip: &str) -> Result<String, String> {
+    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+
+    let mut last = String::from("no endpoint was tried");
+    for url in COUNTRY_URLS {
+        let target = url(ip);
+        match agent.get(&target).call() {
+            Ok(response) => match response.into_string() {
+                Ok(body) => match code_from(&body) {
+                    Some(code) => return Ok(code),
+                    None => last = format!("{target} named no country"),
+                },
+                Err(e) => last = format!("could not read {target}: {e}"),
+            },
+            // A 429 here means this endpoint's free tier is spent, which is exactly the case the
+            // chain exists for: move on rather than leave the server unplaced.
+            Err(ureq::Error::Status(status, _)) => last = format!("{target} returned {status}"),
+            Err(e) => last = format!("{target}: {e}"),
+        }
+    }
+    Err(last)
 }
 
 /// A scratch core, torn down however this function leaves.
@@ -220,8 +314,9 @@ pub async fn locate(core_path: &Path, profiles: &[Profile]) -> Result<Vec<Locate
         return Err("the probe core did not open its ports".into());
     }
 
-    let mut located: Vec<Located> = Vec::new();
-    // Indices still to ask about. Carried between attempts so a retry costs only the misses.
+    // ---------------------------------------------------------------- exits
+    // Through the proxies: what address does each server come out of?
+    let mut exits: Vec<Option<String>> = vec![None; ports.len()];
     let mut remaining: Vec<usize> = (0..ports.len()).collect();
 
     for attempt in 0..ATTEMPTS {
@@ -230,31 +325,32 @@ pub async fn locate(core_path: &Path, profiles: &[Profile]) -> Result<Vec<Locate
         }
         if attempt > 0 {
             log::info!("asking {} server(s) again", remaining.len());
+            tokio::time::sleep(BACKOFF).await;
         }
 
         let mut still_missing = Vec::new();
         for chunk in remaining.chunks(MAX_CONCURRENCY) {
             // Each task carries its own index, so a failure can never shift a later result onto
             // the wrong server — which would be worse than no flag at all.
-            let handles: Vec<_> = chunk
-                .iter()
-                .map(|&index| {
-                    let port = ports[index];
-                    (
-                        index,
-                        tokio::task::spawn_blocking(move || lookup_through(port)),
-                    )
-                })
-                .collect();
+            let mut handles = Vec::with_capacity(chunk.len());
+            for (position, &index) in chunk.iter().enumerate() {
+                if position > 0 {
+                    tokio::time::sleep(STAGGER).await;
+                }
+                let port = ports[index];
+                handles.push((
+                    index,
+                    tokio::task::spawn_blocking(move || exit_ip_through(port)),
+                ));
+            }
 
             for (index, handle) in handles {
                 match handle.await {
-                    Ok(Some(found)) => located.push(Located {
-                        index,
-                        country: found.country.to_ascii_uppercase(),
-                        ip: found.ip,
-                    }),
-                    Ok(None) => still_missing.push(index),
+                    Ok(Ok(ip)) => exits[index] = Some(ip),
+                    Ok(Err(why)) => {
+                        log::info!("no exit address for server {index}: {why}");
+                        still_missing.push(index);
+                    }
                     Err(e) => {
                         log::debug!("probe task for index {index} failed: {e}");
                         still_missing.push(index);
@@ -265,7 +361,59 @@ pub async fn locate(core_path: &Path, profiles: &[Profile]) -> Result<Vec<Locate
         remaining = still_missing;
     }
 
+    // The scratch core has done its part; the country lookups do not go through it.
     scratch.shut_down().await;
+
+    // ---------------------------------------------------------------- countries
+    // One lookup per distinct exit, from this machine. Servers sharing an address — which is
+    // the norm behind a CDN — share the one answer, which is what keeps this under the rate
+    // limit that the naive design kept tripping.
+    let mut countries: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let distinct: Vec<String> = {
+        let mut seen: Vec<String> = exits.iter().flatten().cloned().collect();
+        seen.sort();
+        seen.dedup();
+        seen
+    };
+    log::info!(
+        "{} distinct exit(s) across {} server(s)",
+        distinct.len(),
+        profiles.len()
+    );
+
+    for chunk in distinct.chunks(MAX_CONCURRENCY) {
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|ip| {
+                let ip = ip.clone();
+                (
+                    ip.clone(),
+                    tokio::task::spawn_blocking(move || country_of(&ip)),
+                )
+            })
+            .collect();
+
+        for (ip, handle) in handles {
+            match handle.await {
+                Ok(Ok(code)) => {
+                    countries.insert(ip, code);
+                }
+                Ok(Err(why)) => log::info!("could not place {ip}: {why}"),
+                Err(e) => log::debug!("country task for {ip} failed: {e}"),
+            }
+        }
+    }
+
+    let located: Vec<Located> = exits
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, exit)| {
+            let ip = exit?;
+            let country = countries.get(&ip)?.clone();
+            Some(Located { index, country, ip })
+        })
+        .collect();
+
     log::info!(
         "located {} of {} servers",
         located.len(),

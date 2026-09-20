@@ -182,6 +182,44 @@ protected" exists only for VPN — and in proxy mode the chips lead with the lis
 not pointed at the listener, which is most of the machine. Treat that copy as load-bearing, not
 decoration.
 
+### Locating servers (the flags)
+
+The flag beside a server used to be guessed from the share link's name — whatever the provider
+typed. `geo::locate` measures it instead, and `main.ts` runs it after a latency sweep for the
+servers that answered.
+
+**A measurement changes the flag and nothing else.** It writes `Server.exitCountry`, which the
+flag chip and the map pin read; the row's label keeps using `Server.country`, which is read off
+the name. The two disagree constantly — a provider's "Iran" routinely exits in the Netherlands —
+and overwriting the label would silently rename the user's servers, which is not what a latency
+sweep is for. `replaceSubscriptionServers` preserves `exitCountry` across a refresh.
+
+**The core cannot supply this.** `IPTest` and `SpeedTest` (with `only_country`) look up geo
+internally, against endpoints compiled in — `api.ip2location.io` and `speedtest.net` — both
+Cloudflare-fronted and therefore unreachable from a Cloudflare Workers proxy, which is the shape
+most free subscriptions take. Neither request message has a URL field. Measured against a real
+subscription, both answered for 2 servers out of 10.
+
+So the client asks itself, in **two steps**, and the split is the whole design:
+
+1. **Through each server**, ask only *what address am I coming out of* — `checkip.amazonaws.com`,
+   falling back to `ifconfig.me/ip`. This needs a proxy port per server, which is what
+   `config::build_probe` emits (one `mixed` inbound per profile, pinned by a route rule to that
+   profile's outbound) and what `geo::locate` runs in **its own short-lived core process** —
+   a second instance with its own socket, not a reconfiguration of the running core.
+2. **Directly, from the user's own connection**, turn each *distinct* address into a country.
+
+Doing it in one step is the obvious design and it fails. Servers share exits — four of ten in a
+real subscription came back on one Cloudflare address — so asking a geo service through every
+server puts the whole sweep on three or four client IPs and most requests come back `429`. That
+version located 2 of 10 while all 8 reachable servers could reach the endpoint perfectly well.
+Splitting it means the rate-limited half runs once per distinct exit, from an address the user
+owns. The two-step version locates 8 of 10, which is every server that is up.
+
+Both halves are endpoint *chains*, for the same reason: a free tier is exhaustible, and one day
+of testing exhausted `ipinfo.io` for this machine entirely. Expect the resolvers to disagree
+sometimes — a Cloudflare anycast address has no single physical location.
+
 ### Latency testing
 
 `test_servers` in [lib.rs](src-tauri/src/lib.rs) measures against `TEST_URLS` **in order**, retrying

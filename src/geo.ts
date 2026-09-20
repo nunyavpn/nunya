@@ -1,97 +1,124 @@
 /**
- * Country codes to map coordinates, and to the flag colours the list shows.
+ * Country codes to map coordinates, names and flags.
  *
- * Only what the map needs: a point to put a pin on. Deliberately not a geocoding dataset — a
- * server's city is whatever its name claims, and pinning the country is both honest about that
- * precision and enough for "roughly where does my traffic come out".
+ * Coordinates are only what the map needs: a point to put a pin on. Deliberately not a geocoding
+ * dataset — a server's city is whatever its name claims, and pinning the country is both honest
+ * about that precision and enough for "roughly where does my traffic come out".
+ *
+ * Names and flags are not table-driven, because since the exit country is measured rather than
+ * guessed a server can legitimately be anywhere, and a hand-kept list of two dozen countries
+ * means a blank chip for the rest. Names come from `Intl.DisplayNames`, which the platform
+ * already has, and flags from SVGs copied into `public/flags/` by `scripts/sync-flags.mjs`.
  */
 
 interface Place {
   lon: number;
   lat: number;
   name: string;
-  /** CSS background for the 26x19 flag chip. Approximate by design, not heraldry. */
+  /** CSS background for the 26x19 flag chip. */
   flag: string;
 }
 
-const stripes = (...colors: string[]): string => {
-  const step = 100 / colors.length;
-  const stops = colors
-    .map((c, i) => `${c} ${(i * step).toFixed(2)}% ${((i + 1) * step).toFixed(2)}%`)
-    .join(",");
-  return `linear-gradient(180deg,${stops})`;
-};
-
-const bars = (...colors: string[]): string => {
-  const step = 100 / colors.length;
-  const stops = colors
-    .map((c, i) => `${c} ${(i * step).toFixed(2)}% ${((i + 1) * step).toFixed(2)}%`)
-    .join(",");
-  return `linear-gradient(90deg,${stops})`;
-};
-
-/** A centred disc on a plain field, for flags that would otherwise render as a blank rectangle. */
-const disc = (mark: string, field: string): string =>
-  `radial-gradient(circle at 50% 50%, ${mark} 0 26%, ${field} 26%)`;
-
-const nordicCross = (field: string, cross: string): string =>
-  `linear-gradient(90deg,transparent 0 26%,${cross} 26% 45%,transparent 45%),` +
-  `linear-gradient(180deg,transparent 0 33%,${cross} 33% 62%,transparent 62%),${field}`;
-
-const PLACES: Record<string, Place> = {
-  DE: { lon: 10.4, lat: 51.2, name: "Germany", flag: stripes("#111", "#D7141A", "#FFCE00") },
-  NL: { lon: 5.3, lat: 52.1, name: "Netherlands", flag: stripes("#AE1C28", "#fff", "#21468B") },
-  FR: { lon: 2.2, lat: 46.6, name: "France", flag: bars("#002395", "#fff", "#ED2939") },
-  GB: { lon: -1.5, lat: 52.4, name: "United Kingdom", flag: "#00247D" },
-  FI: { lon: 25.7, lat: 61.9, name: "Finland", flag: nordicCross("#fff", "#003580") },
-  SE: { lon: 18.6, lat: 60.1, name: "Sweden", flag: nordicCross("#006AA7", "#FECC00") },
-  NO: { lon: 8.5, lat: 60.5, name: "Norway", flag: nordicCross("#BA0C2F", "#fff") },
-  CH: { lon: 8.2, lat: 46.8, name: "Switzerland", flag: "#D52B1E" },
-  AT: { lon: 14.6, lat: 47.5, name: "Austria", flag: stripes("#ED2939", "#fff", "#ED2939") },
-  PL: { lon: 19.1, lat: 51.9, name: "Poland", flag: stripes("#fff", "#DC143C") },
-  IT: { lon: 12.6, lat: 41.9, name: "Italy", flag: bars("#009246", "#fff", "#CE2B37") },
-  ES: { lon: -3.7, lat: 40.5, name: "Spain", flag: stripes("#AA151B", "#F1BF00", "#AA151B") },
-  RU: { lon: 37.6, lat: 55.8, name: "Russia", flag: stripes("#fff", "#0039A6", "#D52B1E") },
-  TR: { lon: 35.2, lat: 39.0, name: "Türkiye", flag: "#E30A17" },
-  AE: { lon: 54.4, lat: 24.0, name: "United Arab Emirates", flag: stripes("#00732F", "#fff", "#000") },
-  IR: { lon: 53.7, lat: 32.4, name: "Iran", flag: stripes("#239F40", "#fff", "#DA0000") },
-  US: { lon: -98.6, lat: 39.8, name: "United States", flag: stripes("#B22234", "#fff", "#B22234", "#fff", "#3C3B6E") },
-  CA: { lon: -106.3, lat: 56.1, name: "Canada", flag: bars("#D80621", "#fff", "#D80621") },
-  BR: { lon: -51.9, lat: -14.2, name: "Brazil", flag: "#009C3B" },
-  JP: { lon: 138.3, lat: 36.2, name: "Japan", flag: disc("#BC002D", "#fff") },
-  KR: { lon: 127.8, lat: 35.9, name: "South Korea", flag: disc("#CD2E3A", "#fff") },
-  SG: { lon: 103.8, lat: 1.35, name: "Singapore", flag: stripes("#ED2939", "#fff") },
-  HK: { lon: 114.1, lat: 22.4, name: "Hong Kong", flag: "#DE2910" },
-  TW: { lon: 121.0, lat: 23.7, name: "Taiwan", flag: "#FE0000" },
-  IN: { lon: 78.9, lat: 20.6, name: "India", flag: stripes("#FF9933", "#fff", "#138808") },
-  AU: { lon: 133.8, lat: -25.3, name: "Australia", flag: "#00247D" },
-  ZA: { lon: 22.9, lat: -30.6, name: "South Africa", flag: stripes("#007A4D", "#fff", "#DE3831") },
-};
-
-const UNKNOWN: Place = { lon: 0, lat: 0, name: "Unknown", flag: "var(--raised)" };
-
-export function place(code: string): Place {
-  return PLACES[code.toUpperCase()] ?? UNKNOWN;
-}
-
-export function isKnown(code: string): boolean {
-  return code.toUpperCase() in PLACES;
+/** Only the countries the map can place a pin for. */
+interface Coords {
+  lon: number;
+  lat: number;
 }
 
 /**
- * Best-effort country code from a server name.
+ * The platform's own country names, so every code gets one.
  *
- * Share links carry names like `DE-4 Frankfurt` or `🇳🇱 Amsterdam 02`, so this looks for a standalone
- * two-letter code first, then a country or city name. It is a guess, and a wrong guess only moves a
- * pin — it never changes what the tunnel does.
+ * Built once: constructing it per row is measurably slow, and the list rebuilds on every store
+ * change. Wrapped because a runtime without it should cost a name, not the whole list.
+ */
+const REGION_NAMES = (() => {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" });
+  } catch {
+    return null;
+  }
+})();
+
+/**
+ * The chip background for a country code.
+ *
+ * The plain field stays underneath the image, so a code with no flag on disk — or one that is not
+ * a country at all — degrades to the same grey chip an unknown server has always had, rather than
+ * a broken image.
+ */
+function flagFor(code: string): string {
+  const lower = code.trim().toLowerCase();
+  if (!/^[a-z]{2}$/.test(lower)) return "var(--raised)";
+  return `var(--raised) url("/flags/${lower}.svg") center / cover no-repeat`;
+}
+
+const COORDS: Record<string, Coords> = {
+  DE: { lon: 10.4, lat: 51.2 },
+  NL: { lon: 5.3, lat: 52.1 },
+  FR: { lon: 2.2, lat: 46.6 },
+  GB: { lon: -1.5, lat: 52.4 },
+  FI: { lon: 25.7, lat: 61.9 },
+  SE: { lon: 18.6, lat: 60.1 },
+  NO: { lon: 8.5, lat: 60.5 },
+  CH: { lon: 8.2, lat: 46.8 },
+  AT: { lon: 14.6, lat: 47.5 },
+  PL: { lon: 19.1, lat: 51.9 },
+  IT: { lon: 12.6, lat: 41.9 },
+  ES: { lon: -3.7, lat: 40.5 },
+  RU: { lon: 37.6, lat: 55.8 },
+  TR: { lon: 35.2, lat: 39.0 },
+  AE: { lon: 54.4, lat: 24.0 },
+  IR: { lon: 53.7, lat: 32.4 },
+  US: { lon: -98.6, lat: 39.8 },
+  CA: { lon: -106.3, lat: 56.1 },
+  BR: { lon: -51.9, lat: -14.2 },
+  JP: { lon: 138.3, lat: 36.2 },
+  KR: { lon: 127.8, lat: 35.9 },
+  SG: { lon: 103.8, lat: 1.35 },
+  HK: { lon: 114.1, lat: 22.4 },
+  TW: { lon: 121.0, lat: 23.7 },
+  IN: { lon: 78.9, lat: 20.6 },
+  AU: { lon: 133.8, lat: -25.3 },
+  ZA: { lon: 22.9, lat: -30.6 },
+};
+
+/** Mid-Atlantic, which is where a pin goes when there is nothing better. */
+const NOWHERE: Coords = { lon: 0, lat: 0 };
+
+export function place(code: string): Place {
+  const upper = code.trim().toUpperCase();
+  const coords = COORDS[upper] ?? NOWHERE;
+  const named = /^[A-Z]{2}$/.test(upper) ? REGION_NAMES?.of(upper) : undefined;
+
+  return {
+    ...coords,
+    // `of` returns the input back when it knows no such region, which is not a name.
+    name: named && named !== upper ? named : "Unknown",
+    flag: flagFor(upper),
+  };
+}
+
+/** Whether the map can place this one. A flag needs no coordinates, but a pin does. */
+export function isKnown(code: string): boolean {
+  return code.trim().toUpperCase() in COORDS;
+}
+
+/**
+ * Guesses a country from a server's name.
+ *
+ * A guess, and labelled as one: it reads whatever the provider typed. Where a sweep has measured
+ * the real exit, `Server.exitCountry` holds it and the flag comes from there instead.
  */
 export function guessCountry(name: string): string {
   const code = name.toUpperCase().match(/\b([A-Z]{2})\b/);
   if (code && isKnown(code[1])) return code[1];
 
   const lower = name.toLowerCase();
-  for (const [iso, p] of Object.entries(PLACES)) {
-    if (lower.includes(p.name.toLowerCase())) return iso;
+  // Only the countries with coordinates are matched by name: they are the ones worth a pin, and
+  // scanning every region on earth for a substring would match "Chad" inside "Chadwick".
+  for (const iso of Object.keys(COORDS)) {
+    const named = REGION_NAMES?.of(iso);
+    if (named && named !== iso && lower.includes(named.toLowerCase())) return iso;
   }
   for (const [city, iso] of Object.entries(CITIES)) {
     if (lower.includes(city)) return iso;
