@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod core_proc;
+pub mod geo;
 pub mod rpc;
 pub mod storage;
 pub mod subscription;
@@ -25,6 +26,8 @@ struct AppState {
     link: Arc<CoreLink>,
     core: Mutex<Option<CoreProcess>>,
     runtime_dir: PathBuf,
+    /// Where the core binary is, so a probe can start one of its own.
+    core_path: PathBuf,
     /// How the tunnel is actually carried. Chosen at startup; see `transport::select`.
     tunnel: Arc<dyn TunnelTransport>,
     tunnel_kind: transport::select::Kind,
@@ -44,6 +47,8 @@ fn or_err(resp: gen::ErrorResp) -> Result<(), String> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Readiness {
+    /// Which mode this answer is about, so a stale reply cannot be read as being about the other.
+    mode: &'static str,
     /// Which transport is carrying the tunnel, so the UI never has to guess.
     transport: &'static str,
     ready: bool,
@@ -61,14 +66,22 @@ async fn core_connected(state: State<'_, AppState>) -> Result<bool, String> {
 ///
 /// Asked before the user is offered a connect button, so an unprivileged core or an unapproved VPN
 /// profile is stated up front rather than discovered as a failure afterwards.
+///
+/// The mode is the caller's, because readiness is a different question for each: VPN mode needs
+/// privilege or a system approval, proxy mode needs a free port and nothing else.
 #[tauri::command]
-async fn tunnel_readiness(state: State<'_, AppState>) -> Result<Readiness, String> {
-    let (state_or_err, detail) = match state.tunnel.availability().await {
+async fn tunnel_readiness(
+    state: State<'_, AppState>,
+    mode: Option<config::Mode>,
+) -> Result<Readiness, String> {
+    let mode = mode.unwrap_or_default();
+    let (state_or_err, detail) = match state.tunnel.availability(mode).await {
         Ok(s) => (Some(s), None),
         Err(e) => (None, Some(e.to_string())),
     };
 
     Ok(Readiness {
+        mode: mode.as_str(),
         transport: state.tunnel_kind.as_str(),
         ready: matches!(state_or_err, Some(TunnelState::Disconnected)),
         state: state_or_err.unwrap_or(TunnelState::NeedsPermission),
@@ -140,15 +153,38 @@ struct LatencyResult {
     error: Option<String>,
 }
 
+/// Endpoints the latency test measures against, in order.
+///
+/// No single URL reaches every server, and the two failure modes are structural rather than
+/// flaky. A Cloudflare Workers proxy — which is what most free VLESS and Trojan subscriptions
+/// are — cannot make a subrequest to Cloudflare's own addresses, so it can never reach
+/// `cp.cloudflare.com`. A WARP endpoint egresses somewhere that often cannot reach Google, so
+/// `gstatic.com` fails for exactly the servers a Cloudflare endpoint would suit.
+///
+/// Measured against a real subscription: `cp.cloudflare.com` timed out for all eight Workers
+/// servers while both WARP endpoints answered, and `gstatic.com` was the precise inverse. A
+/// server is therefore retried against the next endpoint before it is called unreachable, and
+/// the first entry is the one that answered for every server tested.
+const TEST_URLS: [&str; 3] = [
+    "http://detectportal.firefox.com/success.txt",
+    "http://cp.cloudflare.com/",
+    "http://www.gstatic.com/generate_204",
+];
+
 /// Measures how long each server takes to reach a known URL.
 ///
 /// This is what Quick Connect ranks on, and what the bars and colours in the list mean. The test
 /// runs in its own short-lived core instance with no TUN, so it never disturbs a running tunnel or
 /// the system's routing.
+///
+/// Servers that fail are retried against the next endpoint in `TEST_URLS`, because a failure says
+/// as much about the endpoint as about the server. Only a server that fails all of them is
+/// reported unreachable. A caller that names its own `url` gets exactly that one: an explicit
+/// choice is not second-guessed.
 #[tauri::command]
 async fn test_servers(
     state: State<'_, AppState>,
-    profiles: Vec<config::VlessProfile>,
+    profiles: Vec<config::Profile>,
     url: Option<String>,
     timeout_ms: Option<i32>,
     concurrency: Option<i32>,
@@ -157,51 +193,100 @@ async fn test_servers(
         return Ok(Vec::new());
     }
 
-    let (cfg, tags) = config::build_test(&profiles);
-    let by_tag: std::collections::HashMap<String, usize> = tags
-        .iter()
-        .enumerate()
-        .map(|(i, tag)| (tag.clone(), i))
-        .collect();
+    let urls: Vec<String> = match url {
+        Some(u) => vec![u],
+        None => TEST_URLS.iter().map(|u| u.to_string()).collect(),
+    };
 
-    let resp: gen::TestResp = state
-        .link
-        .call(
-            method::TEST,
-            &gen::TestReq {
-                config: Some(cfg.to_string()),
-                outbound_tags: tags,
-                // A generic 204 endpoint: small, cacheable by nobody, and reachable from most
-                // networks without being a service anyone should have to trust.
-                url: Some(url.unwrap_or_else(|| "http://cp.cloudflare.com/".to_string())),
-                test_timeout_ms: Some(timeout_ms.unwrap_or(5000)),
-                max_concurrency: Some(concurrency.unwrap_or(10)),
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    // Indexed by the caller's ordering, so a result always finds its way back to the row that
+    // asked for it however many rounds it took.
+    let mut results: Vec<Option<LatencyResult>> = (0..profiles.len()).map(|_| None).collect();
+    let mut pending: Vec<usize> = (0..profiles.len()).collect();
 
-    let mut results = Vec::with_capacity(resp.results.len());
-    for item in resp.results {
-        let Some(&index) = item.outbound_tag.as_deref().and_then(|t| by_tag.get(t)) else {
-            // A tag we did not ask about; nothing sensible to attribute it to.
-            continue;
-        };
-        let error = item.error.filter(|e| !e.is_empty());
-        results.push(LatencyResult {
-            index,
-            // A failure reports 0ms, which would otherwise sort as the fastest server there is.
-            latency_ms: if error.is_some() {
-                -1
-            } else {
-                item.latency_ms.unwrap_or(0)
-            },
-            error,
-        });
+    for (round, endpoint) in urls.iter().enumerate() {
+        if pending.is_empty() {
+            break;
+        }
+        if round > 0 {
+            log::info!(
+                "retrying {} unreachable server(s) against {endpoint}",
+                pending.len()
+            );
+        }
+
+        let subset: Vec<config::Profile> = pending.iter().map(|&i| profiles[i].clone()).collect();
+        let (cfg, tags) = config::build_test(&subset);
+        // The subset is re-tagged from t0 each round, so the mapping back to the caller's
+        // indices has to be rebuilt with it.
+        let by_tag: std::collections::HashMap<String, usize> = tags
+            .iter()
+            .enumerate()
+            .map(|(k, tag)| (tag.clone(), pending[k]))
+            .collect();
+
+        let resp: gen::TestResp = state
+            .link
+            .call(
+                method::TEST,
+                &gen::TestReq {
+                    config: Some(cfg.to_string()),
+                    outbound_tags: tags,
+                    url: Some(endpoint.clone()),
+                    test_timeout_ms: Some(timeout_ms.unwrap_or(5000)),
+                    max_concurrency: Some(concurrency.unwrap_or(10)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for item in resp.results {
+            let Some(&index) = item.outbound_tag.as_deref().and_then(|t| by_tag.get(t)) else {
+                // A tag we did not ask about; nothing sensible to attribute it to.
+                continue;
+            };
+            let error = item.error.filter(|e| !e.is_empty());
+            results[index] = Some(LatencyResult {
+                index,
+                // A failure reports 0ms, which would otherwise sort as the fastest server there is.
+                latency_ms: if error.is_some() {
+                    -1
+                } else {
+                    item.latency_ms.unwrap_or(0)
+                },
+                error,
+            });
+        }
+
+        // Anything still without a successful measurement goes to the next endpoint, including
+        // a tag the core said nothing about at all.
+        pending.retain(|&i| !matches!(&results[i], Some(r) if r.error.is_none()));
     }
 
-    Ok(results)
+    Ok(results
+        .into_iter()
+        .enumerate()
+        .map(|(index, result)| {
+            result.unwrap_or(LatencyResult {
+                index,
+                latency_ms: -1,
+                error: Some("the core reported nothing for this server".to_string()),
+            })
+        })
+        .collect())
+}
+
+/// Finds out where each server actually exits.
+///
+/// Separate from `test_servers` because it costs a great deal more: it starts a second core to
+/// get a local port per server. The frontend runs it after a latency sweep, for the servers that
+/// answered, so the cost is paid only for servers there is a flag worth drawing for.
+#[tauri::command]
+async fn locate_servers(
+    state: State<'_, AppState>,
+    profiles: Vec<config::Profile>,
+) -> Result<Vec<geo::Located>, String> {
+    geo::locate(&state.core_path, &profiles).await
 }
 
 /// Where the data file lives, and where the socket directory is made.
@@ -322,6 +407,7 @@ pub fn run() {
 
             app.manage(AppState {
                 link,
+                core_path: core_path.clone(),
                 core: Mutex::new(Some(core)),
                 runtime_dir,
                 tunnel,
@@ -340,6 +426,7 @@ pub fn run() {
             query_stats,
             preview_config,
             test_servers,
+            locate_servers,
             fetch_subscription,
             load_data,
             save_data,
@@ -366,4 +453,28 @@ pub fn run() {
                 let _ = std::fs::remove_dir_all(&state.runtime_dir);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TEST_URLS;
+
+    /// The chain exists because one endpoint is never enough, and the order is load-bearing.
+    ///
+    /// A Cloudflare Workers proxy cannot reach Cloudflare, so leading with `cp.cloudflare.com`
+    /// reports every Workers-based server — most of a typical free subscription — as unreachable
+    /// while it is working perfectly. That was the original bug; this is the guard against
+    /// "simplifying" the list back to one entry or reordering it.
+    #[test]
+    fn the_fallback_chain_does_not_lead_with_cloudflare() {
+        assert!(
+            TEST_URLS.len() > 1,
+            "a single endpoint cannot measure both Workers proxies and WARP"
+        );
+        assert!(
+            !TEST_URLS[0].contains("cloudflare"),
+            "the first endpoint is the one most servers are measured against, and a Cloudflare \
+             Workers proxy can never reach Cloudflare"
+        );
+    }
 }

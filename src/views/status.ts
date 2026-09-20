@@ -12,14 +12,19 @@
 
 import { elapsed, rate } from "../format";
 import { h, render } from "../dom";
+import { describe } from "../share";
 import { place } from "../geo";
 import { icon } from "./icons";
-import type { Server } from "../store";
+import type { Mode, Server } from "../store";
 
 export type ConnectionState = "off" | "connecting" | "on";
 
 export interface StatusModel {
   state: ConnectionState;
+  /** Which mode is running, because it changes what the card may truthfully claim. */
+  mode: Mode;
+  /** Proxy mode: where the listener is, so the user can point something at it. */
+  proxyAddress: string | null;
   server: Server | undefined;
   connectedAt: number;
   uplink: number;
@@ -34,10 +39,26 @@ export interface StatusCallbacks {
   onToggle: () => void;
 }
 
-const HEADLINE: Record<ConnectionState, string> = {
-  on: "You're protected",
-  connecting: "Connecting…",
-  off: "Not connected",
+/**
+ * What the card may say, per mode.
+ *
+ * "You're protected" is a claim about the whole device, and only a TUN earns it. In proxy mode
+ * the same sentence would be false for everything not pointed at the listener — which is most of
+ * the machine — so the headline says what is actually true instead: the proxy is running. Getting
+ * this wrong is not a copy nit; it is the difference between a user believing their traffic is
+ * covered and it not being.
+ */
+const HEADLINE: Record<Mode, Record<ConnectionState, string>> = {
+  vpn: {
+    on: "You're protected",
+    connecting: "Connecting…",
+    off: "Not connected",
+  },
+  proxy: {
+    on: "Proxy running",
+    connecting: "Starting…",
+    off: "Proxy off",
+  },
 };
 
 export class StatusCard {
@@ -75,7 +96,7 @@ export class StatusCard {
       h(
         "span",
         { class: "st-text" },
-        h("span", { class: `s ${model.state}` }, HEADLINE[model.state]),
+        h("span", { class: `s ${model.state}` }, HEADLINE[model.mode][model.state]),
         h("span", { class: "m" }, subtitle),
       ),
       // Throughput is meaningless with the tunnel down, and an empty pair of zeroes reads as broken.
@@ -110,16 +131,27 @@ export class StatusCard {
 
   private chips(model: StatusModel) {
     const p = model.server?.profile;
-    const security = p?.tls.reality ? "Reality" : p?.tls.enabled ? "TLS" : "no TLS";
+    const proxy = model.mode === "proxy";
 
     return h(
       "div",
       { class: "st-more" },
+      // In proxy mode this is the first thing the user needs: nothing is covered until something
+      // is pointed at it, so the address comes before anything reassuring.
+      proxy && model.proxyAddress
+        ? h("span", { class: "tag strong" }, `SOCKS / HTTP  ${model.proxyAddress}`)
+        : null,
       // The exit IP answers the question every leak scare starts with.
       h("span", { class: "tag" }, model.exitIp ?? "checking exit IP…"),
-      h("span", { class: "tag" }, `VLESS · ${security}`),
-      h("span", { class: "tag", html: "DNS <b>no leak</b>" }),
-      model.tunnelDevice ? h("span", { class: "tag" }, model.tunnelDevice) : null,
+      p ? h("span", { class: "tag" }, describe(p)) : null,
+      // A TUN carries the system resolver, so "no leak" is a property of the mode. A local
+      // listener carries only what is handed to it: an app that resolves before connecting has
+      // already leaked the name, and claiming otherwise here would be the lie the headline
+      // avoids.
+      proxy
+        ? h("span", { class: "tag warn" }, "Only apps set to use it")
+        : h("span", { class: "tag", html: "DNS <b>no leak</b>" }),
+      !proxy && model.tunnelDevice ? h("span", { class: "tag" }, model.tunnelDevice) : null,
     );
   }
 

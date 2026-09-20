@@ -10,12 +10,16 @@
 import { ago, bars as barCount, latency as gradeLatency, size } from "../format";
 import { h, render } from "../dom";
 import { place } from "../geo";
-import { orderGroups, store, type Group, type Server } from "../store";
+import { describe } from "../share";
+import { MANUAL_GROUP_ID, orderGroups, store, type Group, type Server } from "../store";
 import { icon } from "./icons";
 
 export interface LocationsCallbacks {
   onSelect: (server: Server) => void;
   onRefresh: (group: Group) => void;
+  onEdit: (server: Server) => void;
+  onDelete: (server: Server) => void;
+  onRemoveGroup: (group: Group) => void;
   onAdd: () => void;
   onQuickConnect: () => void;
   onTestAll: () => void;
@@ -161,11 +165,17 @@ export class LocationsPanel {
   }
 
   private groupHeader(group: Group, count: number) {
+    const servers = `${count} server${count === 1 ? "" : "s"}`;
     const meta = group.lastError
-      ? `${count} server${count === 1 ? "" : "s"} · update failed ${ago(group.updatedAt)}`
+      ? // `updatedAt` is only set by a successful refresh, so a subscription that has never had
+        // one has no time to quote — and "update failed never" is not a sentence. This is the
+        // state a newly added subscription lands in when its very first fetch fails.
+        group.updatedAt
+        ? `${servers} · update failed ${ago(group.updatedAt)}`
+        : `${servers} · could not be updated`
       : group.kind === "manual"
-        ? `${count} server${count === 1 ? "" : "s"} · added by hand`
-        : `${count} server${count === 1 ? "" : "s"} · updated ${ago(group.updatedAt)}`;
+        ? `${servers} · added by hand`
+        : `${servers} · updated ${ago(group.updatedAt)}`;
 
     return h(
       "div",
@@ -184,7 +194,13 @@ export class LocationsPanel {
         "span",
         { class: "gname" },
         h("b", {}, group.name),
-        h("span", { class: `gmeta${group.lastError ? " bad" : ""}` }, meta),
+        // The row has no space for the reason, but a subscription that failed is useless
+        // without it, so it is carried as the hover text.
+        h(
+          "span",
+          { class: `gmeta${group.lastError ? " bad" : ""}`, title: group.lastError ?? undefined },
+          meta,
+        ),
       ),
       // Only a subscription has somewhere to refresh from.
       group.url
@@ -200,6 +216,20 @@ export class LocationsPanel {
             icon("refresh", 14),
           )
         : null,
+      // The hand-added group is not removable: it is where a pasted link goes when no
+      // subscription was chosen, so there would be nowhere to put the next one.
+      group.id === MANUAL_GROUP_ID
+        ? null
+        : h(
+            "button",
+            {
+              class: "gsync danger",
+              "aria-label": `Delete ${group.name}`,
+              title: group.url ? "Delete this subscription" : "Delete this group",
+              onclick: () => this.callbacks.onRemoveGroup(group),
+            },
+            icon("trash", 14),
+          ),
     );
   }
 
@@ -240,20 +270,65 @@ export class LocationsPanel {
 
     // City and how it is secured, not the raw share-link name — that name is usually the country and
     // city again, and repeating it wastes the only line there is.
-    const security = server.profile.tls.reality
-      ? "Reality"
-      : server.profile.tls.enabled
-        ? "TLS"
-        : "no TLS";
-    const subtitle = [server.city, `VLESS · ${security}`].filter(Boolean).join(" · ");
+    const subtitle = [server.city, describe(server.profile)].filter(Boolean).join(" · ");
 
+    // The row is a button, so the actions cannot live inside it: nested buttons are invalid and
+    // the inner click would also select the server. They sit beside it instead, in a wrapper the
+    // CSS lays them over, and they appear on hover or when focused by keyboard.
+    const actions = h(
+      "span",
+      { class: "loc-acts" },
+      h(
+        "button",
+        {
+          class: "locact",
+          "aria-label": `Edit ${server.profile.name}`,
+          title: "Edit",
+          onclick: () => this.callbacks.onEdit(server),
+        },
+        icon("pencil", 13),
+      ),
+      h(
+        "button",
+        {
+          class: "locact danger",
+          "aria-label": `Delete ${server.profile.name}`,
+          title: "Delete",
+          onclick: () => this.callbacks.onDelete(server),
+        },
+        icon("trash", 13),
+      ),
+    );
+
+    return h(
+      "div",
+      { class: "loc-wrap" },
+      this.selectRow(server, selected, country, subtitle, strength, grade, text),
+      actions,
+    );
+  }
+
+  private selectRow(
+    server: Server,
+    selected: boolean,
+    country: ReturnType<typeof place>,
+    subtitle: string,
+    strength: number,
+    grade: string,
+    text: string,
+  ) {
     return h(
       "button",
       {
         class: `loc${selected ? " active" : ""}${server.retired ? " retired" : ""}`,
         title: server.retired
           ? "This server is no longer in the subscription, and is kept only while it is connected."
-          : undefined,
+          : // A dash means either "never tested" or "the test failed", and the row has space for
+            // neither explanation. The reason is the difference between a dead server and one
+            // that is fine but could not reach the endpoint the test used.
+            server.latency !== null && server.latency < 0 && server.latencyError
+            ? `Last test failed: ${server.latencyError}`
+            : undefined,
         onclick: () => this.callbacks.onSelect(server),
       },
       h("span", { class: "flag", style: `background:${country.flag}` }),
@@ -263,7 +338,7 @@ export class LocationsPanel {
         h(
           "span",
           { class: "loc-name" },
-          country.name === "Unknown" ? server.profile.name : country.name,
+          country.name === "Unknown" || server.renamed ? server.profile.name : country.name,
         ),
         h("span", { class: "loc-sub" }, server.retired ? `${subtitle} · retired` : subtitle),
       ),

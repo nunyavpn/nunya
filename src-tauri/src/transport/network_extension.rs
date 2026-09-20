@@ -39,7 +39,7 @@ use async_trait::async_trait;
 use tokio::sync::oneshot;
 
 use super::{Throughput, TransportError, TunnelState, TunnelTransport};
-use crate::config::{self, BuildRequest};
+use crate::config::{self, BuildRequest, Mode};
 
 /// Generous for a preferences read, short enough that a wedged call is reported rather than hung.
 const CALL_TIMEOUT: Duration = Duration::from_secs(20);
@@ -186,7 +186,17 @@ impl NetworkExtensionTransport {
 
 #[async_trait]
 impl TunnelTransport for NetworkExtensionTransport {
-    async fn availability(&self) -> Result<TunnelState, TransportError> {
+    async fn availability(&self, mode: Mode) -> Result<TunnelState, TransportError> {
+        // The extension exists to own a utun. There is nothing for it to do in proxy mode, and
+        // claiming otherwise would put the user behind a system VPN prompt to open a local port.
+        if mode == Mode::Proxy {
+            return Err(TransportError::Unavailable(
+                "the packet tunnel extension has no proxy mode; run proxy mode on the subprocess \
+                 transport, which needs no privilege"
+                    .into(),
+            ));
+        }
+
         let (code, message) = call(|ctx, cb| unsafe { nunya_ne_state_now(ctx, cb) }).await?;
         if code == STATE_ERROR {
             return Err(TransportError::Unavailable(message));
@@ -217,7 +227,8 @@ impl TunnelTransport for NetworkExtensionTransport {
     }
 
     async fn state(&self) -> Result<TunnelState, TransportError> {
-        self.availability().await
+        // Only VPN mode ever reaches this transport, so asking about the other one is moot.
+        self.availability(Mode::Vpn).await
     }
 
     async fn throughput(&self) -> Result<Throughput, TransportError> {

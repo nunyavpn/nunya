@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 /// Above this, the callback never fired and we are looking at a deadlock rather than a slow call.
 const CALL_CEILING: Duration = Duration::from_secs(25);
 
+use nunya_lib::config::Mode;
 use nunya_lib::transport::network_extension::NetworkExtensionTransport;
 use nunya_lib::transport::{TunnelState, TunnelTransport};
 
@@ -31,7 +32,7 @@ fn transport() -> NetworkExtensionTransport {
 async fn reading_state_reaches_networkextension() {
     let t = transport();
     let started = Instant::now();
-    let result = t.availability().await;
+    let result = t.availability(Mode::Vpn).await;
     let took = started.elapsed();
 
     // Each call carries its own timeout. Anything at or above the ceiling means the completion
@@ -65,7 +66,7 @@ async fn state_can_be_read_repeatedly() {
     let t = transport();
     for i in 0..3 {
         let started = Instant::now();
-        let _ = t.availability().await;
+        let _ = t.availability(Mode::Vpn).await;
         assert!(
             started.elapsed() < CALL_CEILING,
             "call {i} stalled, so the shim is not re-entrant"
@@ -78,7 +79,7 @@ async fn state_can_be_read_repeatedly() {
 #[tokio::test]
 async fn state_and_availability_agree() {
     let t = transport();
-    let a = t.availability().await;
+    let a = t.availability(Mode::Vpn).await;
     let b = t.state().await;
     assert_eq!(a.is_ok(), b.is_ok());
     if let (Ok(x), Ok(y)) = (a, b) {

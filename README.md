@@ -34,6 +34,7 @@ rather than a relative path into a sibling checkout.
 .
 ├── core.lock             the nunya-core release this client builds against
 ├── src/                  frontend (TypeScript, no framework)
+├── design/               the style guide, rendered from src/ (dev only, never bundled)
 ├── src-tauri/
 │   ├── src/
 │   │   ├── main.rs           Tauri commands and startup sequence
@@ -44,10 +45,12 @@ rather than a relative path into a sibling checkout.
 │   └── build.rs          generates prost types from vendor/core/proto/nunya.proto
 ├── NunyaTunnel/          the macOS packet tunnel extension (Swift)
 ├── project.yml           XcodeGen spec for that extension
+├── docker/               a Linux box for exercising the tunnel in its own netns
 ├── scripts/
 │   ├── fetch-core.sh         install the pinned core (or build one from source)
 │   ├── build-app.sh          the full release build
 │   ├── build-extension.sh    the .appex, embedded into the bundle
+│   ├── dev-linux.sh          core + tunnel tests in a container, no root on the host
 │   └── dev-tunnel.sh         a tunnel that comes up without an Apple account
 └── vendor/core/          installed by fetch-core.sh, gitignored
 ```
@@ -83,6 +86,67 @@ For a release bundle with the packet tunnel extension:
 ```bash
 ./scripts/build-app.sh
 ```
+
+### Filling the UI with test data
+
+Every screen is a list of things a provider gave you, so an empty store shows almost nothing. A
+fixture in `src/mock.ts` stands in:
+
+```bash
+VITE_MOCK=1 npm run tauri dev   # the app, with the list full
+VITE_MOCK=1 npm run dev         # the same UI in a browser, no Rust side at all
+```
+
+It covers the states that are otherwise awkward to reach by clicking: every latency grade, an
+unreachable server, an untested one, a subscription whose last refresh failed, a quota past the
+amber threshold, a collapsed group, and a retired server — one a refresh dropped while the tunnel
+was running on it.
+
+Two things keep it out of the way of real data. Writes are discarded, so clicking through the
+fixture cannot overwrite the data file that holds your actual credentials; and `VITE_MOCK` is
+substituted at build time, so an ordinary `npm run build` drops the module entirely rather than
+shipping a list of plausible-looking servers. Every host in it is under `example.net`, which RFC
+2606 reserves so it can never be registered.
+
+### The style guide
+
+```bash
+npm run design
+```
+
+A page that renders the design system out of the app rather than describing it: the tokens are read
+from `src/styles.css` through the browser's own CSSOM, the icons are enumerated from
+`views/icons.ts`, and the status card is the real component mounted with a plain model. Both themes
+are shown side by side, because the app follows the system setting and has no switch of its own.
+
+It is dev-only — `vite build` takes just the root `index.html`, so nothing under `design/` is
+bundled. See [design/README.md](design/README.md).
+
+### Testing the tunnel without root
+
+```bash
+brew install colima docker && colima start --cpu 4 --memory 8   # once
+./scripts/dev-linux.sh
+```
+
+Bringing a TUN up on your own machine means `sudo`, and it means rewriting the routing table you are
+currently using in order to assert something about routing. A container avoids both: the tunnel gets
+its own network namespace, so the table it takes over is the container's and it disappears when the
+container does. The privilege budget is `CAP_NET_ADMIN` plus `/dev/net/tun` — not `--privileged`,
+not root on the host, and nothing that outlives the process.
+
+The boundary is deliberately placed so that **the core stays a child process of the Rust side**,
+both inside the container. That keeps the unix socket local and means `rpc/peer.rs` verification is
+exercised unchanged on every run. Splitting GUI-here/core-there would have broken it: peer identity
+is a pid over a unix socket, and nothing survives being forwarded across a VM boundary.
+
+`src-tauri/tests/tunnel_linux.rs` holds what this makes possible — that the tunnel takes the default
+route *and gives it back*, that a private range is not swallowed, that stopping a tunnel that never
+started leaves nothing behind. None of those can run on a developer's macOS machine without root.
+
+This does not run the UI. Tauri on Linux renders through WebKitGTK, and forwarding that to macOS
+over X11 is a worse loop than the browser one already available — work on the interface with
+`VITE_MOCK=1 npm run tauri dev` on the host.
 
 ### Working on the core at the same time
 
@@ -215,9 +279,15 @@ You do not need one to work on this. `TunnelTransport` has two implementations a
 environment variable:
 
 ```bash
-./scripts/dev-tunnel.sh                       # subprocess transport, tunnel actually comes up
+./scripts/dev-linux.sh                        # preferred: a real tunnel, no root on your machine
+./scripts/dev-tunnel.sh                       # last resort: runs the whole app under sudo
 NUNYA_TRANSPORT=networkextension npm run tauri dev   # once the extension can be signed
 ```
+
+Reach for `dev-linux.sh` first. `dev-tunnel.sh` elevates the *entire app* — WebKit webview,
+frontend and all — when only the core needs to create a utun, and because it uses `sudo -E` it
+inherits your `HOME`: the moment that root instance saves, `data.json` becomes root-owned and your
+normal unprivileged instance silently fails every write afterwards.
 
 `dev-tunnel.sh` builds a development core from `../nunya-core` (override with `NUNYA_CORE_SRC`),
 builds everything unprivileged and then runs the app under `sudo` for that one
@@ -263,13 +333,66 @@ The subprocess transport is implemented and tested; the NetworkExtension one is 
 ## Status
 
 Working and tested: the toolchain, the split core build and its checksum-pinned install, the IPC codec with peer verification, config
-generation, config validation against a real core, connect/disconnect, throughput polling, VLESS
-share-link parsing, the transport seam, and the core's Darwin TUN-descriptor support.
+generation, config validation against a real core, connect/disconnect, throughput polling, VLESS and
+VMess, Trojan and WireGuard parsing over every transport the core implements, subscriptions in
+both formats below, the transport seam, and the core's Darwin TUN-descriptor support.
 
 Written but not yet buildable: the Swift packet tunnel provider and the `.xcframework` build, both
 blocked on Xcode and an Apple Developer account.
 
 Not yet built: the Xcode target that produces and embeds the `.appex`, `NETunnelProviderManager`
-wiring, the server list and subscription groups, bypass rules in the UI, the menu-bar popover,
-protocols beyond VLESS, and bundled fonts (the CSP forbids remote font hosts, so Manrope has to ship
-with the bundle).
+wiring, bypass rules in the UI, the menu-bar popover,
+protocols beyond the four above, multi-hop chains, and bundled fonts (the CSP forbids remote font hosts, so Manrope
+has to ship with the bundle).
+
+### Subscriptions
+
+A subscription URL goes into the same box as share links; an `https://` line is taken as a
+subscription and gets its own group, which is then refreshable. Two body formats are in
+circulation and nothing in the headers tells them apart, so they are distinguished by content:
+
+| | |
+| --- | --- |
+| A list of share links | one per line, plain or base64-encoded. The common case. |
+| A JSON Xray configuration, or an array of them | what a BPB panel serves to `?app=xray`: each entry is a whole client config — inbounds, routing, DNS — wrapped around a single `proxy` outbound. |
+
+The second is rewritten back into share links in `subscription.rs`, so everything downstream is
+unchanged and rejections are still reported entry by entry.
+
+Two decisions inside that are easy to get wrong. A configuration with no outbound tagged `proxy`
+is a load balancer — BPB's "Best Ping" carries `proxy-1` through `proxy-8` behind a `leastPing`
+selector — and is skipped rather than flattened, because the servers behind it are already listed
+individually in the same array and flattening imports each of them twice. And protocols this build
+cannot run are emitted anyway, under their own scheme, so a Trojan entry comes back named rather
+than missing: a subscription that quietly returned four of its eight servers, with nothing to say
+why, would be worse than one that explains itself.
+
+That second rule covers protocols whose shape is unfamiliar too, not just unfamiliar names. A WARP
+subscription is entirely WireGuard, which keeps its endpoint under `peers` where every other
+protocol uses `servers` — so every entry falls through the address lookup. Emitting a marker link
+under the protocol's own scheme is what turns "the subscription returned nothing that looks like a
+server list" into "WireGuard is not supported yet".
+
+### Protocols and transports
+
+| | |
+| --- | --- |
+| Protocols | VLESS, VMess (both share-link forms, including the base64 blob), Trojan, WireGuard |
+| Transports | TCP, WebSocket, gRPC, HTTP/2, HTTPUpgrade, QUIC |
+| Security | none, TLS, Reality, with uTLS fingerprints and ALPN |
+| Rejected by name | mKCP, XHTTP, SplitHTTP, meek — the core has no implementation, and silently downgrading one to TCP would connect to the wrong thing |
+| Also rejected by name | multi-hop chains. One outbound dialling through another is a topology this client has no way to express, and reducing one to its last hop would connect somewhere the entry's own name contradicts |
+| Not yet | Shadowsocks, Hysteria2, TUIC — separate outbound types rather than another transport |
+
+WireGuard is the one that is not an outbound at all. sing-box moved it to `endpoints`, because it
+is an interface with its own addresses rather than a dialer, and the core rejects the old outbound
+form outright (*unknown field "local_address"*). `config::proxy_node` is where that fork lives, so
+the route table names a tag and does not care which of the two produced it. Cloudflare WARP works
+through this path, `reserved` client id included — a wrong `reserved` is dropped by the server
+without an error, so it is carried rather than treated as optional decoration.
+
+Each transport is validated against a real core in
+`src-tauri/tests/core_link.rs::every_transport_is_accepted_by_the_core`, because the shape this
+client emits and the shape sing-box accepts differ in ways unit tests here cannot see — `host` is a
+string for HTTPUpgrade and a list for HTTP/2, and plain TCP means *no* `transport` key rather than
+an empty one.

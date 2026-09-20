@@ -15,7 +15,7 @@
 
 use async_trait::async_trait;
 
-use crate::config::BuildRequest;
+use crate::config::{BuildRequest, Mode};
 
 pub mod select;
 pub mod subprocess;
@@ -63,7 +63,11 @@ pub enum TransportError {
 pub trait TunnelTransport: Send + Sync {
     /// Whether this transport can run at all — the extension is installed, the service exists, the
     /// capability is set. Checked before the user is offered a connect button.
-    async fn availability(&self) -> Result<TunnelState, TransportError>;
+    ///
+    /// Takes the mode because the answer depends on it: a TUN needs privilege or a system
+    /// approval, and a local listener needs neither. Asking without it would refuse proxy mode
+    /// for want of a permission it never uses.
+    async fn availability(&self, mode: Mode) -> Result<TunnelState, TransportError>;
 
     /// Asks the user for whatever consent the platform requires, once.
     ///

@@ -16,7 +16,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nunya_lib::config::{self, BuildRequest, Reality, TlsOptions, TunOptions, VlessProfile};
+use nunya_lib::config::{
+    self, BuildRequest, Profile, Protocol, Reality, TlsOptions, Transport, TransportKind,
+    TunOptions, WireguardOptions, Mode, ProxyOptions};
 use nunya_lib::core_proc::CoreProcess;
 use nunya_lib::rpc::{gen, method, CoreLink};
 
@@ -27,7 +29,9 @@ fn core_path() -> Option<PathBuf> {
 
 fn sample_request() -> BuildRequest {
     BuildRequest {
-        profile: VlessProfile {
+        mode: Mode::Vpn,
+        proxy: ProxyOptions::default(),
+        profile: Profile {
             name: "smoke".into(),
             server: "example.net".into(),
             port: 443,
@@ -44,6 +48,7 @@ fn sample_request() -> BuildRequest {
                 }),
                 ..Default::default()
             },
+            ..Default::default()
         },
         tun: TunOptions::default(),
         bypass: vec![],
@@ -98,6 +103,145 @@ async fn core_connects_and_answers() {
     proc.stop().await;
 }
 
+/// Every transport and both protocols, put in front of the core's own validator.
+///
+/// The unit tests in `config.rs` assert the shape this client emits; only the core can say whether
+/// that shape is one sing-box accepts. The two disagree in ways invisible from here — a `host` that
+/// is a string for one transport and a list for another, a `transport` key that must be absent
+/// rather than empty for TCP — and each of those produces a config that passes our own tests and
+/// then fails at Start.
+#[tokio::test]
+#[ignore = "needs a built core; set NUNYA_CORE_PATH"]
+async fn every_transport_is_accepted_by_the_core() {
+    let (link, proc, _dir) = connect_core().await;
+
+    let base = sample_request().profile;
+    let cases: Vec<(&str, Profile)> = vec![
+        ("vless tcp", base.clone()),
+        (
+            "vless ws",
+            Profile {
+                transport: Transport {
+                    kind: TransportKind::Ws,
+                    path: "/meeting".into(),
+                    host: "cdn.example.net".into(),
+                    max_early_data: 2048,
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "vless grpc",
+            Profile {
+                transport: Transport {
+                    kind: TransportKind::Grpc,
+                    service_name: "TunService".into(),
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "vless http",
+            Profile {
+                transport: Transport {
+                    kind: TransportKind::Http,
+                    host: "h.example.net".into(),
+                    path: "/p".into(),
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "vless httpupgrade",
+            Profile {
+                transport: Transport {
+                    kind: TransportKind::Httpupgrade,
+                    host: "h.example.net".into(),
+                    path: "/up".into(),
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "vmess ws",
+            Profile {
+                protocol: Protocol::Vmess,
+                // Vision is VLESS-only, and a CDN link is plain TLS rather than Reality.
+                flow: String::new(),
+                security: "auto".into(),
+                tls: TlsOptions {
+                    enabled: true,
+                    sni: "cdn.example.net".into(),
+                    ..Default::default()
+                },
+                transport: Transport {
+                    kind: TransportKind::Ws,
+                    path: "/vm".into(),
+                    host: "cdn.example.net".into(),
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "vmess tcp with a legacy alter_id",
+            Profile {
+                protocol: Protocol::Vmess,
+                flow: String::new(),
+                security: "aes-128-gcm".into(),
+                alter_id: 4,
+                tls: TlsOptions {
+                    enabled: true,
+                    sni: "cdn.example.net".into(),
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        ),
+    ];
+
+    let mut failures = Vec::new();
+
+    for (label, profile) in cases {
+        let mut req = sample_request();
+        req.profile = profile;
+        let cfg = config::build(&req);
+
+        let resp: gen::ErrorResp = link
+            .call(
+                method::CHECK_CONFIG,
+                &gen::LoadConfigReq {
+                    core_config: Some(cfg.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("CheckConfig round trip");
+
+        let err = resp.error.unwrap_or_default();
+        if err.is_empty() {
+            eprintln!("ok   {label}");
+        } else {
+            failures.push(format!(
+                "{label}: {err}\n{}",
+                serde_json::to_string_pretty(&cfg["outbounds"][0]).unwrap()
+            ));
+        }
+    }
+
+    proc.stop().await;
+
+    assert!(
+        failures.is_empty(),
+        "the core rejected:\n\n{}",
+        failures.join("\n\n")
+    );
+}
+
 #[tokio::test]
 #[ignore = "needs a built core; set NUNYA_CORE_PATH"]
 async fn generated_config_is_accepted_by_the_core() {
@@ -123,6 +267,152 @@ async fn generated_config_is_accepted_by_the_core() {
         "the core rejected our generated config:\n{err}\n\n{}",
         serde_json::to_string_pretty(&cfg).unwrap()
     );
+}
+
+/// Both protocols added after the first two, checked against the core rather than against our own
+/// idea of the schema.
+///
+/// The shapes differ from the originals in ways a unit test here cannot catch. Trojan carries a
+/// password where VLESS carries a UUID, and sending both is an unknown field the core refuses.
+/// WireGuard is not an outbound at all: sing-box moved it to `endpoints`, and the old form fails
+/// with *unknown field "local_address"* — at connect time, where it reads as a broken tunnel
+/// rather than a bad config.
+///
+/// The latency-test config is checked too, because it assembles the same nodes into a different
+/// document and an endpoint has to survive being tagged `t0` with no TUN inbound around it.
+#[tokio::test]
+#[ignore = "needs a built core; set NUNYA_CORE_PATH"]
+async fn wireguard_and_trojan_are_accepted_by_the_core() {
+    let (link, proc, _dir) = connect_core().await;
+
+    let trojan = Profile {
+        protocol: Protocol::Trojan,
+        name: "Trojan".into(),
+        server: "edge.example.net".into(),
+        port: 443,
+        password: "E1wy;,GYGPPhYEYXn".into(),
+        tls: TlsOptions {
+            enabled: true,
+            sni: "edge.example.net".into(),
+            alpn: vec!["http/1.1".into()],
+            fingerprint: "chrome".into(),
+            ..Default::default()
+        },
+        transport: Transport {
+            kind: TransportKind::Ws,
+            path: "/tr/x".into(),
+            host: "edge.example.net".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let wireguard = Profile {
+        protocol: Protocol::Wireguard,
+        name: "Warp".into(),
+        server: "engage.cloudflareclient.com".into(),
+        port: 2408,
+        wireguard: Some(WireguardOptions {
+            private_key: "f7m/C8NHWPWIkGAbxTBAMhYHlzu3Ya7lSCbOSqfGu68=".into(),
+            peer_public_key: "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=".into(),
+            local_address: vec![
+                "172.16.0.2/32".into(),
+                "2606:4700:110:8e2a:e673:f46d:6bee:e6e0/128".into(),
+            ],
+            // WARP's client id. Wrong values are dropped by the server without an error.
+            reserved: vec![216, 253, 3],
+            mtu: 1280,
+            keepalive: 5,
+        }),
+        ..Default::default()
+    };
+
+    let mut failures = Vec::new();
+
+    for profile in [trojan, wireguard] {
+        let label = format!("{:?}", profile.protocol);
+        let mut req = sample_request();
+        req.profile = profile.clone();
+
+        for (kind, cfg) in [
+            ("tunnel", config::build(&req)),
+            (
+                "latency test",
+                config::build_test(std::slice::from_ref(&profile)).0,
+            ),
+        ] {
+            let resp: gen::ErrorResp = link
+                .call(
+                    method::CHECK_CONFIG,
+                    &gen::LoadConfigReq {
+                        core_config: Some(cfg.to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("CheckConfig round trip");
+
+            if let Some(err) = resp.error.filter(|e| !e.is_empty()) {
+                failures.push(format!(
+                    "{label} / {kind} rejected: {err}\n{}",
+                    serde_json::to_string_pretty(&cfg).unwrap()
+                ));
+            }
+        }
+    }
+
+    proc.stop().await;
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// Proxy mode against the real core.
+///
+/// The two modes produce different documents — a `mixed` inbound instead of a `tun` one, and one
+/// fewer route rule — and the core is the only thing that can say whether the shape is right.
+/// This matters more than the VPN case today, because proxy mode is the default: it is the one
+/// that needs no privilege, and so the one a new user actually reaches.
+#[tokio::test]
+#[ignore = "needs a built core; set NUNYA_CORE_PATH"]
+async fn proxy_mode_is_accepted_by_the_core() {
+    let (link, proc, _dir) = connect_core().await;
+
+    let mut failures = Vec::new();
+    for (label, proxy) in [
+        ("loopback", ProxyOptions::default()),
+        (
+            "lan",
+            ProxyOptions {
+                port: 1080,
+                allow_lan: true,
+            },
+        ),
+    ] {
+        let mut req = sample_request();
+        req.mode = Mode::Proxy;
+        req.proxy = proxy;
+        let cfg = config::build(&req);
+
+        let resp: gen::ErrorResp = link
+            .call(
+                method::CHECK_CONFIG,
+                &gen::LoadConfigReq {
+                    core_config: Some(cfg.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("CheckConfig round trip");
+
+        if let Some(err) = resp.error.filter(|e| !e.is_empty()) {
+            failures.push(format!(
+                "{label} rejected: {err}\n{}",
+                serde_json::to_string_pretty(&cfg).unwrap()
+            ));
+        }
+    }
+
+    proc.stop().await;
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@
  */
 
 import { backend, DebouncedWriter } from "./persist";
-import type { VlessProfile } from "./share";
+import type { Profile } from "./share";
 
 /** Where a server came from. Hand-added servers live in their own group, which sorts first. */
 export type GroupKind = "manual" | "subscription";
@@ -15,15 +15,38 @@ export type GroupKind = "manual" | "subscription";
 export interface Server {
   id: string;
   groupId: string;
-  profile: VlessProfile;
+  profile: Profile;
   /** Two-letter country code for the row chip. */
   country: string;
   city: string;
   /** Milliseconds, `-1` for unreachable, `null` for never tested. */
   latency: number | null;
   testedAt: number | null;
+  /**
+   * Why the last measurement failed.
+   *
+   * Kept because the list has room for a number and nothing else: both "never tested" and
+   * "unreachable" render as a dash, and without the reason a user cannot tell a blocked server
+   * from a dead one, or from a test endpoint their proxy happens not to be able to reach.
+   */
+  latencyError?: string;
   /** A refresh dropped this server, but it is kept because the tunnel is running on it. */
   retired?: boolean;
+  /**
+   * The country came from asking the server where it exits, not from reading its name.
+   *
+   * Worth recording because the two are frequently different, and a provider's own label is the
+   * less trustworthy of them: once measured, a name-based guess must not overwrite it.
+   */
+  geoChecked?: boolean;
+  /**
+   * The user named this one themselves, so the row shows that name instead of the country.
+   *
+   * Recorded rather than guessed. A share link's own name is usually the country and city again,
+   * which is why the row prefers the country — but a name someone typed is the one thing that is
+   * certainly not redundant, and there is no way to tell the two apart after the fact.
+   */
+  renamed?: boolean;
 }
 
 /** Traffic allowance, as reported by a subscription's `subscription-userinfo` header. */
@@ -64,7 +87,22 @@ export interface BypassRule {
  * protocols this client does not have. These are the ones that genuinely change how the tunnel
  * behaves, and every default here is one a user should never need to touch.
  */
+/**
+ * How traffic reaches the core.
+ *
+ * Not a preference between two equivalent things. `vpn` puts a TUN in front of the whole device,
+ * so everything is carried whether or not it knows about the proxy. `proxy` opens a local
+ * SOCKS/HTTP port, which covers only what is configured to use it — and needs no privilege, which
+ * is why it works today on a machine where the TUN path does not.
+ */
+export type Mode = "vpn" | "proxy";
+
 export interface Settings {
+  mode: Mode;
+  /** Proxy mode: the local port the mixed SOCKS/HTTP listener binds. */
+  proxyPort: number;
+  /** Proxy mode: bind every interface rather than loopback, so other machines can use it. */
+  allowLan: boolean;
   /** "system" is faster; "gvisor" is the portable fallback for odd kernels. */
   stack: "system" | "gvisor";
   mtu: number;
@@ -78,6 +116,14 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  // Proxy, because it is the mode that works. A TUN needs privilege this build cannot obtain on
+  // macOS without a signed packet tunnel extension, so defaulting to VPN mode would hand a new
+  // user a Connect button that fails. Switching is one control in Advanced.
+  mode: "proxy",
+  // What the other clients in this family listen on, so an existing browser profile or shell
+  // alias pointed at one of them keeps working.
+  proxyPort: 2080,
+  allowLan: false,
   stack: "system",
   mtu: 1500,
   // Matches the Qt build's default, so an existing user's routing assumptions still hold.
@@ -276,7 +322,7 @@ class Store {
   ): { added: number; removed: number; retired: number; kept: number } {
     // Identity is the endpoint plus credentials, not the display name: providers rename servers
     // constantly, and a rename should not read as "removed and re-added".
-    const key = (s: { profile: VlessProfile }) =>
+    const key = (s: { profile: Profile }) =>
       `${s.profile.server}:${s.profile.port}:${s.profile.uuid}`;
 
     let added = 0;
@@ -304,6 +350,14 @@ class Store {
           groupId,
           latency: previous.latency,
           testedAt: previous.testedAt,
+          latencyError: previous.latencyError,
+          // A measured country outranks the name the provider gave this refresh. Letting the
+          // guess win here would undo the measurement every time the subscription updated,
+          // which is often enough that the flag would never settle.
+          country: previous.geoChecked ? previous.country : candidate.country,
+          city: previous.geoChecked ? previous.city : candidate.city,
+          geoChecked: previous.geoChecked,
+          renamed: previous.renamed,
           retired: false,
         };
       });
@@ -328,17 +382,61 @@ class Store {
     return { added, removed, retired, kept };
   }
 
+  /**
+   * Records where servers were found to actually exit.
+   *
+   * This overrides the guess taken from the server's name, and records that it did, so a later
+   * subscription refresh does not quietly put the guess back.
+   */
+  applyCountries(updates: { id: string; country: string }[]) {
+    const byId = new Map(updates.map((u) => [u.id, u.country]));
+    this.update((data) => {
+      for (const server of data.servers) {
+        const country = byId.get(server.id);
+        if (!country) continue;
+        server.country = country;
+        server.geoChecked = true;
+      }
+    });
+  }
+
   /** Records latency results from a test sweep. */
-  applyLatencies(updates: { id: string; latency: number }[]) {
-    const byId = new Map(updates.map((u) => [u.id, u.latency]));
+  applyLatencies(updates: { id: string; latency: number; error?: string | null }[]) {
+    const byId = new Map(updates.map((u) => [u.id, u]));
     this.update((data) => {
       const now = Date.now();
       for (const server of data.servers) {
-        const latency = byId.get(server.id);
-        if (latency === undefined) continue;
+        const update = byId.get(server.id);
+        if (update === undefined) continue;
+        const latency = update.latency;
+        server.latencyError = update.error ?? undefined;
         server.latency = latency;
         server.testedAt = now;
       }
+    });
+  }
+
+  /**
+   * Replaces a server's profile after an edit.
+   *
+   * The latency is cleared because it was measured against the old address, and a stale number
+   * beside a changed server is worse than no number: it is the one thing Quick Connect ranks on.
+   * The country and city are re-derived by the caller, which is where the guessing lives.
+   */
+  updateServer(
+    id: string,
+    profile: Profile,
+    place: { country: string; city: string; renamed: boolean },
+  ) {
+    this.update((data) => {
+      const server = data.servers.find((s) => s.id === id);
+      if (!server) return;
+      server.profile = profile;
+      server.country = place.country;
+      server.city = place.city;
+      server.renamed = place.renamed || undefined;
+      server.latency = null;
+      server.testedAt = null;
     });
   }
 

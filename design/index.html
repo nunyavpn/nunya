@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nunya — style guide</title>
+
+    <!-- The app's real stylesheet, the same file and the same path index.html uses. Everything on
+         this page is drawn with those tokens and those component classes, so the guide cannot
+         describe a design the app does not have. -->
+    <link rel="stylesheet" href="/src/styles.css" />
+    <!-- Layout for the guide itself. Scoped to .sg-* so it can never reach the app's classes. -->
+    <link rel="stylesheet" href="/design/styleguide.css" />
+  </head>
+  <body class="sg-body">
+    <main class="sg-page" id="guide"></main>
+    <script type="module" src="/design/styleguide.ts"></script>
+  </body>
+</html>

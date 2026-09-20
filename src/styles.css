@@ -421,6 +421,130 @@ button:disabled {
   width: 100%;
 }
 
+/* The row's own actions sit beside it rather than inside: the row is a button, and a button
+   inside a button is invalid and would also select the server on its way through. */
+.loc-wrap {
+  position: relative;
+  display: flex;
+}
+
+.loc-acts {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+/* Keyboard reachable, not only hoverable: focus-within is what keeps these usable without a
+   mouse, since opacity alone would leave a focused button invisible.
+
+   Deliberately not `pointer-events: none` while hidden. That reads as the safer choice and is
+   the opposite: the buttons sit inside the row, so a cursor can only reach them by being over
+   the row, which is exactly when they are visible. Gating clicks on `:hover` instead makes them
+   unreachable to anything that hit-tests before it moves — every automation tool, and the
+   accessibility layer — for no gain a real cursor would ever notice. */
+.loc-wrap:hover .loc-acts,
+.loc-wrap:focus-within .loc-acts {
+  opacity: 1;
+}
+
+.locact {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-pop);
+}
+
+.locact:hover {
+  color: var(--ink);
+  border-color: var(--line-2);
+}
+
+.locact.danger:hover,
+.gsync.danger:hover {
+  color: var(--off);
+  border-color: var(--off);
+}
+
+.gsync.danger {
+  color: var(--off);
+  background: var(--off-soft);
+}
+
+/* The actions overlay the latency reading, which is the least useful thing on the row at the
+   moment you are reaching for delete. */
+.loc-wrap:hover .loc-right,
+.loc-wrap:focus-within .loc-right {
+  opacity: 0.12;
+}
+
+.loc-right {
+  transition: opacity 0.12s ease;
+}
+
+.confirm-body {
+  padding: 16px 18px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.confirm-body p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.confirm-body p:first-child {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.btn.danger {
+  background: var(--off-fill);
+  box-shadow: 0 5px 16px -7px var(--off-glow);
+}
+
+.flabel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 18px 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.field {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 11px;
+}
+
+.field:focus-visible {
+  outline: 2px solid var(--brand-fill);
+  outline-offset: -1px;
+}
+
 .loc:hover {
   background: var(--raised);
 }
@@ -454,6 +578,13 @@ button:disabled {
   border-color: var(--line);
 }
 
+/* A subscription has no country, so its row carries a glyph where a flag would sit. */
+.flag.glyph {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
 .loc-main {
   flex: 1;
   min-width: 0;
@@ -482,6 +613,16 @@ button:disabled {
   align-items: center;
   gap: 9px;
   flex: none;
+}
+
+/* Proxy mode's listen address: the one chip that is an instruction rather than a reassurance,
+   so it reads as the primary thing on the row. */
+.tag.strong {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--brand-soft);
+  border-color: var(--brand-fill);
 }
 
 .ping {
@@ -818,6 +959,12 @@ button:disabled {
   display: flex;
   flex-direction: column;
   max-height: 100%;
+}
+
+/* The editor is a form, not a paragraph and two buttons: it needs the height to show a section
+   without the user scrolling for every field. */
+.sheet.editor {
+  height: min(760px, 100%);
 }
 
 .sheet {
@@ -1500,6 +1647,43 @@ button:disabled {
 
 .srow.stack {
   align-items: stretch;
+}
+
+/* In a stacked row the control owns its own line, so the auto margin that right-aligns it
+   beside a label is wrong. */
+.srow.stack .seg {
+  margin-left: 0;
+}
+
+/* Protocols, transports and fingerprints are more choices than fit one line at this width. */
+.seg.wrap {
+  flex-wrap: wrap;
+}
+
+.seg.wrap button {
+  flex: 1 0 auto;
+}
+
+.fnote {
+  margin: 2px 0 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* The generated link: full width and wrapping, unlike the single-line values above it. */
+.val.linkout {
+  width: 100%;
+  text-align: left;
+  resize: none;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+/* The footer doubles as the validity line, so it has to be able to say something is wrong. */
+.gpick.bad {
+  color: var(--off);
+  font-weight: 600;
 }
 
 .srow.stack .slab {

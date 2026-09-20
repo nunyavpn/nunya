@@ -43,6 +43,15 @@ const ICONS: Record<string, Icon> = {
   check: { paths: ["M5 12.5 9.5 17 19 7"] },
   network: { paths: ["M6.6 7.8h.01M6.6 16.3h.01"] },
   lock: { paths: ["M8.2 10.5V7.6a3.8 3.8 0 0 1 7.6 0v2.9"] },
+  pencil: { paths: ["M4 20h4L19 9a2.5 2.5 0 0 0-3.5-3.5L4.5 16.5 4 20Z", "M14.5 6.5 17.5 9.5"] },
+  trash: {
+    paths: [
+      "M4.5 6.5h15",
+      "M9 6.5V4.8h6v1.7",
+      "M6.5 6.5 7.4 20h9.2l.9-13.5",
+      "M10.3 10v6M13.7 10v6",
+    ],
+  },
 };
 
 /** Icons whose shape is a rectangle rather than a path. */
@@ -57,6 +66,14 @@ const RECTS: Record<string, [number, number, number, number, number][]> = {
   ],
   lock: [[4.5, 10.5, 15, 9.5, 2.5]],
 };
+
+/**
+ * Every icon this app has, in declaration order.
+ *
+ * Exported for the style guide in `design/`, which renders the set from this list rather than from
+ * a list of its own — so an icon added above appears there without anyone remembering to add it.
+ */
+export const ICON_NAMES: readonly string[] = Object.keys(ICONS);
 
 export function icon(name: string, size = 16): SVGElement {
   const spec = ICONS[name];

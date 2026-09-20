@@ -34,35 +34,49 @@ export class SettingsPanel {
 
   private groups(s: Settings): Node[] {
     return [
-      this.group("Tunnel", [
+      this.group("Mode", [
         this.segmented(
-          "Network stack",
-          "gvisor is slower but more portable",
+          "Carry traffic with",
+          s.mode === "vpn"
+            ? "a TUN interface: everything on this device"
+            : "a local port: only apps set to use it",
           [
-            ["system", "system"],
-            ["gvisor", "gvisor"],
+            ["proxy", "Proxy"],
+            ["vpn", "VPN"],
           ],
-          s.stack,
-          (v) => store.updateSettings({ stack: v as Settings["stack"] }),
+          s.mode,
+          (v) => store.updateSettings({ mode: v as Settings["mode"] }),
         ),
-        this.number("MTU", null, s.mtu, 576, 9000, (v) => store.updateSettings({ mtu: v })),
-        this.text("Interface address", null, s.ipv4Cidr, (v) =>
-          store.updateSettings({ ipv4Cidr: v }),
-        ),
-        this.toggle(
-          "Strict route",
-          "blocks anything trying to leave the tunnel",
-          s.strictRoute,
-          (v) => store.updateSettings({ strictRoute: v }),
-        ),
-        this.toggle("Carry IPv6", "off leaves v6 on the physical link", s.ipv6, (v) =>
-          store.updateSettings({ ipv6: v }),
-        ),
+        // Only proxy mode has a listener to configure, and showing a port that nothing binds
+        // would suggest VPN mode has one too.
+        ...(s.mode === "proxy"
+          ? [
+              this.number("Port", "SOCKS and HTTP on one port", s.proxyPort, 1, 65535, (v) =>
+                store.updateSettings({ proxyPort: v }),
+              ),
+              this.toggle(
+                "Allow LAN",
+                "lets other machines on the network use it too",
+                s.allowLan,
+                (v) => store.updateSettings({ allowLan: v }),
+              ),
+            ]
+          : []),
       ]),
 
+      // Only VPN mode builds a TUN, so its settings are noise the rest of the time.
+      ...(s.mode === "vpn" ? [this.tunnelGroup(s)] : []),
+
       this.group("DNS", [
-        this.text("Resolver", "queries resolve inside the tunnel", s.dns, (v) =>
-          store.updateSettings({ dns: v }),
+        this.text(
+          "Resolver",
+          // Where the query travels differs by mode, and "inside the tunnel" is only true of one
+          // of them. In proxy mode a name an app resolved before connecting was never seen here.
+          s.mode === "vpn"
+            ? "queries resolve inside the tunnel"
+            : "used for names the proxy resolves itself",
+          s.dns,
+          (v) => store.updateSettings({ dns: v }),
         ),
       ]),
 
@@ -93,6 +107,34 @@ export class SettingsPanel {
         ),
       ),
     ];
+  }
+
+  private tunnelGroup(s: Settings) {
+    return this.group("Tunnel", [
+        this.segmented(
+          "Network stack",
+          "gvisor is slower but more portable",
+          [
+            ["system", "system"],
+            ["gvisor", "gvisor"],
+          ],
+          s.stack,
+          (v) => store.updateSettings({ stack: v as Settings["stack"] }),
+        ),
+        this.number("MTU", null, s.mtu, 576, 9000, (v) => store.updateSettings({ mtu: v })),
+        this.text("Interface address", null, s.ipv4Cidr, (v) =>
+          store.updateSettings({ ipv4Cidr: v }),
+        ),
+        this.toggle(
+          "Strict route",
+          "blocks anything trying to leave the tunnel",
+          s.strictRoute,
+          (v) => store.updateSettings({ strictRoute: v }),
+        ),
+        this.toggle("Carry IPv6", "off leaves v6 on the physical link", s.ipv6, (v) =>
+          store.updateSettings({ ipv6: v }),
+        ),
+    ]);
   }
 
   private group(title: string, rows: Node[]) {

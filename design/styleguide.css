@@ -1,0 +1,249 @@
+/* Layout for the style guide page itself.
+
+   Every selector is prefixed `sg-`, and nothing here redefines an app class or an app token. The
+   page has to be able to show a component looking exactly as it does in the product — a rule here
+   that nudged .loc or --brand would make the guide quietly wrong, which is worse than not having
+   one. Colours below are drawn from the app's own tokens for the same reason: the guide follows the
+   theme it is documenting. */
+
+body {
+  overflow: auto;
+}
+
+.sg-body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.sg-page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 40px 16px 96px;
+}
+
+.sg-head h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.sg-head p {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.sg-head code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--sunk);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.sg-section {
+  margin-top: 44px;
+}
+
+.sg-section > h2 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+}
+
+.sg-section > p {
+  margin: 0 0 16px;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.sg-group {
+  margin-top: 20px;
+}
+
+.sg-group > h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------------------ tokens */
+
+.sg-tokens {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: 8px;
+}
+
+.sg-token {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+}
+
+/* Both themes at once. The app follows the system setting, so without this you could only ever see
+   half the palette without going to System Settings and back. */
+.sg-chips {
+  display: flex;
+  flex: none;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+}
+
+.sg-chip {
+  width: 23px;
+  height: 40px;
+}
+
+.sg-token-text {
+  min-width: 0;
+}
+
+.sg-token-name {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sg-token-val {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sg-shadow {
+  height: 54px;
+  background: var(--surface);
+  border-radius: 10px;
+  margin: 8px 12px 14px;
+}
+
+.sg-type-sample {
+  margin: 0 0 2px;
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------------ icons */
+
+.sg-icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.sg-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 6px 10px;
+  color: var(--ink-2);
+}
+
+.sg-icon span {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--faint);
+  text-align: center;
+  word-break: break-all;
+}
+
+/* ------------------------------------------------------------------ specimens */
+
+.sg-specimens {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+/* The status card is laid out for the map pane, which is never narrow: badge, headline, a
+   throughput pair and the connect button all sit on one row. Below about 520px that row overruns
+   and the card stops being a fair likeness of itself, so its specimens get their own wider grid. */
+.sg-specimens.sg-wide {
+  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+}
+
+.sg-specimen {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.sg-specimen > figcaption {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.sg-specimen-body {
+  padding: 12px;
+}
+
+/* .loc and the group rows are written for a 296px rail, so they are shown in one. */
+.sg-rail {
+  padding: 8px 0;
+}
+
+/* The status card is position:absolute over the map, so it needs a positioned box to sit in. */
+.sg-stage {
+  position: relative;
+  /* Tall enough for the connected card, which is the tallest variant: it gains a throughput pair
+     and a row of chips. Shorter than this and it rides up over its own caption. */
+  height: 168px;
+  background: var(--stage);
+}
+
+.sg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.sg-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.sg-missing {
+  background: var(--off-soft);
+  border: 1px solid var(--off);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 12.5px;
+  color: var(--off);
+}

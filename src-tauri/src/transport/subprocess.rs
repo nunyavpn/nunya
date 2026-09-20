@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 
 use super::{Throughput, TransportError, TunnelState, TunnelTransport};
-use crate::config::{self, BuildRequest};
+use crate::config::{self, BuildRequest, Mode};
 use crate::rpc::{gen, method, CoreLink, LinkError};
 
 impl From<LinkError> for TransportError {
@@ -42,9 +42,16 @@ impl SubprocessTransport {
 
 #[async_trait]
 impl TunnelTransport for SubprocessTransport {
-    async fn availability(&self) -> Result<TunnelState, TransportError> {
+    async fn availability(&self, mode: Mode) -> Result<TunnelState, TransportError> {
         if !self.link.is_connected().await {
             return Err(TransportError::Unavailable("the core is not running".into()));
+        }
+
+        // A local listener binds an unprivileged port and creates no interface, so the privilege
+        // question below simply does not arise. This is the whole reason proxy mode works today
+        // on a machine where the TUN path does not.
+        if mode == Mode::Proxy {
+            return Ok(TunnelState::Disconnected);
         }
 
         let resp: gen::IsPrivilegedResponse = self
@@ -80,6 +87,17 @@ impl TunnelTransport for SubprocessTransport {
                     core_config: Some(cfg.to_string()),
                     disable_stats: Some(false),
                     tun_ipv4_cidr: Some(request.tun.ipv4_cidr.clone()),
+                    // Both are sent explicitly because the core's Start dereferences them without
+                    // a nil check (`*in.NeedExtraProcess` and `*in.NeedXray` in its
+                    // internal/rpc/lifecycle.go), so leaving either unset panics the core rather
+                    // than returning an error. Its CheckConfig reads the same fields through the
+                    // generated nil-safe getters, which is why a config can validate cleanly and
+                    // then bring the whole core down at Start.
+                    //
+                    // Neither feature is one this client uses: there is no extra process, and Xray
+                    // is not wired up.
+                    need_extra_process: Some(false),
+                    need_xray: Some(false),
                     ..Default::default()
                 },
             )

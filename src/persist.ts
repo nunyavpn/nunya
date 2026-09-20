@@ -1,15 +1,16 @@
 /**
  * Where the app's data is kept.
  *
- * Two backends behind one interface. In the app it is a file the Rust side owns, written with
+ * Three backends behind one interface. In the app it is a file the Rust side owns, written with
  * owner-only permissions and replaced atomically, because the payload contains every server
  * credential the user has. In a browser — the frontend preview — there is no backend, so
- * `localStorage` stands in.
+ * `localStorage` stands in. Under `VITE_MOCK=1` a fixture stands in for both.
  *
  * The store does not know which is in use.
  */
 
 import { inTauri, invoke } from "./bridge";
+import { MOCK_ENABLED, mockData } from "./mock";
 
 export interface Backend {
   load(): Promise<string | null>;
@@ -45,7 +46,29 @@ const fileBackend: Backend = {
   save: (json) => invoke<void>("save_data", { json }),
 };
 
-export const backend: Backend = inTauri ? fileBackend : browserBackend;
+/**
+ * Serves the fixture and throws every write away.
+ *
+ * Discarding saves is the whole point, not a shortcut. The fixture is meant to be clicked through —
+ * selecting servers, collapsing groups, adding bypass rules — and each of those is a store mutation
+ * that would otherwise be written straight over the real data file. The session stays live in
+ * memory; nothing survives the window closing.
+ */
+const mockBackend: Backend = {
+  name: "mock fixture (changes are not saved)",
+  async load() {
+    return JSON.stringify(mockData());
+  },
+  async save() {
+    // Deliberately nothing.
+  },
+};
+
+export const backend: Backend = MOCK_ENABLED
+  ? mockBackend
+  : inTauri
+    ? fileBackend
+    : browserBackend;
 
 /**
  * Wraps a backend so bursts of changes become one write.

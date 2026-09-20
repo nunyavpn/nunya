@@ -20,7 +20,12 @@ const SOL_LOCAL: libc::c_int = 0;
 #[cfg(target_os = "macos")]
 const LOCAL_PEERPID: libc::c_int = 0x002;
 
-/// Effective uid and gid of the peer process.
+/// Effective uid of the peer process.
+///
+/// `getpeereid` is a BSD interface. Linux has no such call and answers all three questions — pid,
+/// uid and gid — from a single `SO_PEERCRED` option instead, which is why the two platforms split
+/// here rather than sharing one implementation.
+#[cfg(not(target_os = "linux"))]
 pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
@@ -30,6 +35,36 @@ pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
         return Err(io::Error::last_os_error());
     }
     Ok(uid)
+}
+
+/// The peer's credentials, as the kernel recorded them when the socket was connected.
+#[cfg(target_os = "linux")]
+fn peer_cred(fd: RawFd) -> io::Result<libc::ucred> {
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: fd is live; `cred` and `len` are valid out-params sized for the option.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(cred)
+}
+
+#[cfg(target_os = "linux")]
+pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
+    Ok(peer_cred(fd)?.uid)
 }
 
 /// Pid of the peer process.
@@ -53,29 +88,10 @@ pub fn peer_pid(fd: RawFd) -> io::Result<u32> {
     Ok(pid as u32)
 }
 
-/// Pid of the peer process, via `SO_PEERCRED`.
+/// Pid of the peer process, from the same `SO_PEERCRED` block as the uid.
 #[cfg(target_os = "linux")]
 pub fn peer_pid(fd: RawFd) -> io::Result<u32> {
-    let mut cred = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: fd is live; `cred` and `len` are valid out-params sized for the option.
-    let rc = unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            &mut cred as *mut _ as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    if rc != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(cred.pid as u32)
+    Ok(peer_cred(fd)?.pid as u32)
 }
 
 /// Rejects a connection that is not the core process we spawned.
