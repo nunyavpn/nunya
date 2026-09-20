@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # build.rs generates the RPC bindings from the pinned core's proto, so nothing compiles until
+      # the core is on disk. Checksums are verified against core.lock inside the script.
+      - name: Fetch the pinned core
+        run: ./scripts/fetch-core.sh
+
+      - name: Typecheck the frontend
+        run: npm run build
+
+      # No `cargo fmt --check` gate: the tree is not rustfmt-clean today, and formatting it is a
+      # separate decision from splitting the repositories.
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      # The integration tests that need a live core are #[ignore]d; this runs the rest.
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml

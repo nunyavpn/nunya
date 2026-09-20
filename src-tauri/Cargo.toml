@@ -1,0 +1,50 @@
+[package]
+name = "nunya"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "A TUN-only client for the Nunya core"
+default-run = "nunya"
+
+[lib]
+name = "nunya_lib"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+prost-build = "0.13"
+
+# Compiles macos/tunnel_manager.m into the binary, so the NETunnelProviderManager control plane
+# needs no separate Xcode project on the app side.
+[target.'cfg(target_os = "macos")'.build-dependencies]
+cc = "1"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "process",
+    "sync",
+    "time",
+] }
+prost = "0.13"
+async-trait = "0.1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+libc = "0.2"
+ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+
+[profile.release]
+# A VPN client is a trust artifact: smaller and stripped means less to audit and a smaller
+# attack surface, and panic=abort removes unwinding paths entirely.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

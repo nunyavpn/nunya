@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nunya</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="window">
+      <!-- macOS draws no title bar (titleBarStyle: Transparent), so the rail doubles as the drag
+           handle and has to clear the traffic lights at the top left. -->
+      <nav class="rail" data-tauri-drag-region>
+        <span class="logo" aria-hidden="true"></span>
+        <button class="rail-btn on" id="nav-vpn" title="VPN" aria-label="VPN"></button>
+        <button class="rail-btn" id="nav-rules" title="Bypass rules" aria-label="Bypass rules"></button>
+        <button class="rail-btn" id="nav-settings" title="Settings" aria-label="Settings"></button>
+        <span class="rail-spacer"></span>
+        <button class="rail-btn small" id="nav-diagnostics" title="Diagnostics" aria-label="Diagnostics"></button>
+      </nav>
+
+      <aside class="locs" id="locations"></aside>
+
+      <!-- Panels replace the locations list rather than stacking over it: at this width there is
+           only room for one, and a modal would hide the map the status card sits on. -->
+      <aside class="panel" id="panel" hidden></aside>
+
+      <main class="mappane">
+        <canvas class="mapcanvas" id="worldmap"></canvas>
+        <div id="pins"></div>
+        <section class="status" id="status"></section>
+      </main>
+    </div>
+
+    <!-- Sheets render into here so they sit above the window without the layout reflowing. -->
+    <div class="scrim" id="scrim" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

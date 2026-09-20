@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>Nunya Tunnel</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.nunyavpn.app.NunyaTunnel</string>
+  <key>CFBundleName</key>
+  <string>NunyaTunnel</string>
+  <key>CFBundlePackageType</key>
+  <string>XPC!</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <!-- Tells the system this bundle is a NetworkExtension provider and which class to instantiate.
+       NEProviderClasses is what makes startVPNTunnel launch PacketTunnelProvider rather than
+       failing with "no provider found". -->
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionPointIdentifier</key>
+    <string>com.apple.networkextension.packet-tunnel</string>
+    <key>NSExtensionPrincipalClass</key>
+    <string>$(PRODUCT_MODULE_NAME).PacketTunnelProvider</string>
+  </dict>
+</dict>
+</plist>

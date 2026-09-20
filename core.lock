@@ -1,0 +1,11 @@
+# The nunya-core release this client builds against.
+#
+# sha256_sums pins the SHA256SUMS file from that release, and SHA256SUMS in turn covers every
+# asset — so pinning this one digest makes the whole artefact set tamper-evident. A release
+# re-cut under the same tag, or a single swapped binary, fails the check rather than being
+# silently installed.
+#
+# Bump both fields together: scripts/fetch-core.sh --update <tag> rewrites them.
+
+tag = v0.0.0-unreleased
+sha256_sums = 0000000000000000000000000000000000000000000000000000000000000000
