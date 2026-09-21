@@ -2149,7 +2149,13 @@ function openShareServer(server: Server) {
             : [h("p", { class: "fnote warn" }, refusal ?? "")]
           : [
               h("div", { class: "share-qr" }, qrCode(link)),
-              h("p", { class: "fnote" }, "Scan with a phone client such as v2rayNG, Hiddify or Streisand."),
+              // Nunya first: it is the client this link is written for. It has no phone app, so a
+              // phone is pointed at the kind of client rather than at another product by name.
+              h(
+                "p",
+                { class: "fnote" },
+                "Import it in Nunya on another device, or scan it on a phone with a client that reads share links.",
+              ),
               textBox(link, "Share link", 4),
               h(
                 "p",
