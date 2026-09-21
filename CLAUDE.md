@@ -10,8 +10,10 @@ Both repos are GPL-3.0 forks of [Throne](https://github.com/throneproj/Throne).
 
 The single-transport constraint is the product thesis, not a limitation to route around: with no
 proxy mode there is no partial coverage, so "the device is in the tunnel" is a claim the UI can make
-honestly. Do not add a proxy/mixed inbound. Deliberately out of scope: system proxy, OTP, global
-hotkeys, speed tests, WARP registration, the dashboard installer, diagnostics capture.
+honestly. Proxy mode (a `mixed` inbound, optionally set as the system proxy) has since been added
+for machines where a TUN cannot be had; see **Modes** for what that costs the UI's claims.
+Deliberately out of scope: OTP, global hotkeys, speed tests, WARP registration, the dashboard
+installer, diagnostics capture.
 
 `README.md` is the long-form rationale and is unusually complete — read it before any substantial
 change, and keep it current when you change behaviour it describes.
@@ -201,17 +203,110 @@ protected" exists only for VPN — and in proxy mode the chips lead with the lis
 not pointed at the listener, which is most of the machine. Treat that copy as load-bearing, not
 decoration.
 
+### The system proxy
+
+`Settings.systemProxy` (proxy mode, off by default) points every proxy slot the desktop has —
+HTTP, HTTPS, FTP and SOCKS — at `127.0.0.1:<port>` after connect, and puts them back on disconnect.
+One port serves all of them because the listener is a `mixed` inbound; an empty slot is a class of
+app that silently goes around the tunnel. On GNOME the legacy `http.enabled` key is set too, since
+older readers treat HTTP as off without it. [sysproxy.rs](src-tauri/src/sysproxy.rs)
+shells out to the desktop's own tool — `gsettings` (GNOME family), `kwriteconfig6/5` (KDE),
+`networksetup` (macOS) — and refuses any other desktop by name.
+
+**Restoring is the load-bearing half.** A system proxy left pointing at a dead port breaks every
+browser on the machine. So the previous settings are captured *before* anything changes, written to
+`system-proxy.json` in the data directory, and replayed (not merely switched off — a user's own
+proxy comes back) on disconnect, in `stop_tunnel`, on quit, when the core dies, and at the next
+launch if the app crashed holding them. Capture happens once per application of ours, so
+re-applying never records our own settings as "the user's".
+
+A failure to set it does not fail the connection; the status card shows "System proxy not set".
+With it set, the card still says "Apps that ignore it are not covered" — a system proxy is not the
+whole machine, and only VPN mode may claim that.
+
+`the_gnome_proxy_is_set_and_then_put_back_exactly` runs the real cycle, but only against a throwaway
+keyfile backend (`GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME=$(mktemp -d)`); it refuses otherwise.
+
+### Settings are locked while connected
+
+Settings are read when the tunnel starts, so the Advanced panel is disabled (a `<fieldset disabled>`)
+while connected or connecting, with a banner and a Disconnect button. Change them after
+disconnecting.
+
+The Rules, Advanced and Diagnostics panels share one container, `#panel`. Each has an `active` flag
+set by `show()` in `main.ts` and renders only while active — before that, whichever re-rendered last
+on a store change painted itself over the panel the user was looking at.
+
 ### Locating servers (the flags)
 
 The flag beside a server used to be guessed from the share link's name — whatever the provider
-typed. `geo::locate` measures it instead, and `main.ts` runs it after a latency sweep for the
-servers that answered.
+typed. Now every server carries **two measured locations**, both in the data file as `geo::Spot`
+(ip, country, city, coordinates, `checkedAt`):
 
-**A measurement changes the flag and nothing else.** It writes `Server.exitCountry`, which the
-flag chip and the map pin read; the row's label keeps using `Server.country`, which is read off
-the name. The two disagree constantly — a provider's "Iran" routinely exits in the Netherlands —
-and overwriting the label would silently rename the user's servers, which is not what a latency
-sweep is for. `replaceSubscriptionServers` preserves `exitCountry` across a refresh.
+- **`entry`** — where its *address* is: the host name resolved (`geo::entry_ip`) and placed. Needs
+  DNS only, so it is known seconds after a server is added, and works for a server that is down.
+- **`exit`** — where its traffic *leaves*: a real request through the server, end to end, and the
+  public address it came out of, placed. Needs the server to be up.
+
+They differ whenever the server relays — a Cloudflare Workers proxy, a domestic server tunnelled on
+to a foreign one — and `isRelayed` says so. The row's flag shows the **exit** (what a website
+sees); a relay also gets a small entry flag on the corner and "via XX" in its subtitle; the map
+dot sits at the exit city; and a connected route to a relay goes you → entry → exit.
+
+`checkServers` in `main.ts` is the one path that measures a server: entry first (fast), then the
+end-to-end test (latency and exit together, per server) — a server that fails keeps its last exit. It
+runs from Test all, from each row's **Check**, on servers just added (link, QR or manual), and
+after every subscription reload. `locate_servers` takes `entries`/`exits` flags so the two passes
+do not look the same addresses up twice. Old data with `exitCountry`/`exitAt` is migrated to
+`exit` on load.
+
+Two guards exist because an exit was once recorded as **the user's own address**. The probe
+config's catch-all is a `block` outbound, not `direct`, so nothing can leave from this machine;
+and `geo::whereabouts` rejects an answer about any address other than the one it asked about
+(`answers_for`), because a service that ignores the path describes the caller. The frontend also
+drops any exit equal to `home.ip`, and `store.forgetExitsAt` clears ones saved before this.
+
+**Which address is a Worker's exit.** Each server is asked through twice: a plain endpoint not on
+Cloudflare, and Cloudflare's `/cdn-cgi/trace`. `geo::prefer_trace` saves the trace answer as the
+exit when the plain one is on Cloudflare's network (AS13335) and the trace one is not — BPB's proxy
+IP, a fixed machine, over the Worker's shared egress, which geo databases scatter across Europe.
+The network comes from the geo services (`Whereabouts.asn`); unknown means no switch.
+
+**The status card shows where the selected config is**, connected or not: an **Exit** chip (city,
+country, data center, AS number) and an **Entry** chip when the address is elsewhere — labelled
+**Address** before any test. The data center is `Spot.org` / `Whereabouts.org`, read from each geo
+service's network field. Connected, the live measurement from `locate_exit` is shown *and saved*
+as the config's exit, so the row's flag and the card agree.
+
+**CDN-fronted configs.** `geo::cdn_of` marks an address as Cloudflare or Fastly by its network, or
+by the providers' published ranges when no network was reported, and stores it as `Spot.cdn`. On
+the **entry** that means the config connects to a CDN edge; `cdnOf()` in `store.ts` reads it, the
+row shows a **CDN · CF / Fastly** tag beside the name, and it is there for a future edge-address
+optimisation. Add a provider in `cdn_of` and `Cdn`/`CDN_NAMES` together.
+
+**A BPB / Cloudflare Workers server has two real exits.** A Worker cannot connect to Cloudflare's
+own addresses, so BPB sends requests for Cloudflare-hosted sites through its *proxy IP* (a relay
+outside Cloudflare), and everything else straight from the Worker (a Cloudflare address). A
+"what is my IP" page hosted on Cloudflare therefore shows the proxy IP, while the probe — which
+deliberately asks endpoints *not* on Cloudflare — shows the Worker's egress. Both are true.
+
+Once connected, `geo::exit_addresses` asks one IPv4-only and one IPv6-only endpoint through the
+tunnel, concurrently, and the status card shows an **IPv4** and an **IPv6** chip for whichever
+answered — a relay can leave from different places per family. It also reads Cloudflare's
+`/cdn-cgi/trace` through the tunnel (`geo::CloudflareExit`), which is what Cloudflare-hosted sites
+see; the card adds a **Cloudflare sites** chip only when that address differs from both, i.e. when
+the server splits its traffic the way BPB does.
+
+**Where a server is comes from its addresses, never its name.** `located()` in `store.ts` is the
+one rule every view uses — the row's label, city and flag, search, the map dot, the status card and
+the tray: the **exit** once a full test has placed it, else the **entry** (the config's address, a
+domain resolved first — so a Cloudflare-fronted config shows as a Cloudflare node until tested),
+else `Server.country`/`city` guessed from the name, which is only a placeholder for the seconds
+before the address is looked up. **The row's title is always the config's own name** — location is
+the flag and the subtitle. Titling rows by country made measured configs look renamed, and gave
+every config exiting in one country the same title.
+Editing a server's address or port clears both locations and re-checks it.
+`replaceSubscriptionServers` preserves `entry` and `exit` across a refresh.
 
 **The core cannot supply this.** `IPTest` and `SpeedTest` (with `only_country`) look up geo
 internally, against endpoints compiled in — `api.ip2location.io` and `speedtest.net` — both
@@ -226,7 +321,10 @@ So the client asks itself, in **two steps**, and the split is the whole design:
    `config::build_probe` emits (one `mixed` inbound per profile, pinned by a route rule to that
    profile's outbound) and what `geo::locate` runs in **its own short-lived core process** —
    a second instance with its own socket, not a reconfiguration of the running core.
-2. **Directly, from the user's own connection**, turn each *distinct* address into a country.
+2. **Directly, from the user's own connection**, turn each *distinct* address — entries and exits
+   together — into a place —
+   coordinates and city from `geo::whereabouts`, falling back to the country alone from the
+   `COUNTRY_URLS` chain so a spent coordinate quota never costs the flag.
 
 Doing it in one step is the obvious design and it fails. Servers share exits — four of ten in a
 real subscription came back on one Cloudflare address — so asking a geo service through every
@@ -238,6 +336,41 @@ owns. The two-step version locates 8 of 10, which is every server that is up.
 Both halves are endpoint *chains*, for the same reason: a free tier is exhaustible, and one day
 of testing exhausted `ipinfo.io` for this machine entirely. Expect the resolvers to disagree
 sometimes — a Cloudflare anycast address has no single physical location.
+
+### Where the user is (the map's route)
+
+The map starts from the user's own dot and, once connected, draws the route from it to the exit.
+`locate_me` places this machine's public address and `locate_exit` places the tunnel's, both
+through `geo::whereabouts`, which returns coordinates rather than a country (a country's centroid
+puts everyone in Russia in Siberia) from a chain of endpoints, like the country lookup.
+
+`locate_me` asks directly, so it is only ever asked **with the tunnel down**: in VPN mode a direct
+request goes through the TUN and would put the user at their exit. `tunnelEpoch` in `main.ts` is
+bumped on every connect and disconnect so an answer that was in flight across one is discarded.
+`locate_exit` takes the same two steps as `geo::locate` in proxy mode — the address through the
+listener, the place from the user's own connection — to keep the rate-limited half off a shared
+exit.
+
+`WorldMap.setPins` takes the route as a list of hops and draws one arc per leg. Today it is
+`[home, exit]`; a proxy chain puts its servers in between and the map needs no change.
+
+**The map is countries, not tiles.** Natural Earth borders from `world-atlas` (1:110m bundled,
+1:50m loaded from the app's own assets past `DETAIL_ZOOM`), decoded from TopoJSON in `map.ts` into
+one `Path2D` in degree space and drawn under the view transform — never fetched from a map server,
+which would tell a third party every user's address whenever they looked at the map. Wheel/drag/
+double-click are taken on the whole pane (pins sit above the canvas); rings crossing the antimeridian
+are unwrapped and drawn twice, then clipped to the band. Route legs carry arrows (mid and end) so
+the path reads you → hops → exit. While a route is drawn its nodes are bold (`Pin.hop` for the
+ones between, the pulsing exit, the heavier ring of the user) and every other dot fades until
+hovered. The user's own pin is an ink ring, never a brand-blue dot, and
+opens a details card (public IP, ISP, city) from `home`.
+
+Server dots are **selectable**. `groupPlaces` in `main.ts` puts every server exiting in the same
+place (coordinates rounded to ~50 km, or the country for unmeasured ones) behind one dot; a dot
+with one server selects it, a dot with several opens `MapPicker` ([views/mappick.ts](src/views/mappick.ts)):
+the city, a Fastest button, and each server with its latency. `WorldMap` itself knows nothing
+about servers — a pin carries a `key` and the map hands it back through `onPick`. Selecting from
+the map and from the list go through the same `selectServer`, which reconnects if the tunnel is up.
 
 ### Latency testing
 
@@ -255,6 +388,24 @@ while both WARP endpoints answered, and `gstatic.com` was the precise inverse. I
 so a working subscription reported every server unreachable. Do not reduce the list to one entry or
 put a Cloudflare endpoint first; a unit test guards both.
 
+Test all **streams, end to end**: the `check_servers` command starts one scratch core for the run
+(`geo::ProbeSession`, a local port per server) and tests six servers at a time. Each server gets
+its latency, then a real request *through* it for the public address it comes out of, then that
+address placed (`geo::PlaceCache`, one lookup per distinct address). The result is emitted as a
+`server-checked` event the moment that server is done, so rows fill in one by one and the button
+counts "Testing 7/18". **A server works only if traffic comes out of it**: a dial that succeeds
+and then carries nothing is reported failed, and so is one whose traffic came out of the user's
+own address. A geo service that could not place the exit does not fail the server. The list keeps
+its scroll position and the search box its focus across every re-render (`LocationsPanel.render`).
+
+**Lists run to tens of thousands.** Public subscriptions on GitHub are plain-text files of 20,000+
+links (4.7 MB); one crashed the client by being treated like a provider's list of twenty. So:
+the list renders `ROW_PAGE` (100) rows per group behind a "Show more" button, always including
+the selected server; servers are auto-checked on add or update only up to `AUTO_CHECK_MAX` (100);
+Test all runs in `CHECK_BATCH` (50) batches, each its own probe core, and its button becomes Stop;
+and `geo::ProbeSession::start` refuses more than `MAX_PROBE` servers so a caller that forgets to
+batch fails with a reason instead of exhausting file descriptors.
+
 A caller that passes its own `url` gets that one endpoint and no fallback — an explicit choice is
 not second-guessed.
 
@@ -271,9 +422,10 @@ its contents, not its plumbing.
 Editing a server is a **form over the profile**, in [views/editor.ts](src/views/editor.ts) — never
 a share link in a text box. A link is a serialization: changing a port by finding it between an `@`
 and a `?` makes the user the parser, and a typo there does not fail, it produces a different
-server. The profile is already structured data on disk, so `ProfileEditor` edits that. The
-generated link is shown read-only at the bottom of the sheet as an export path, which is also what
-makes the form's effect legible.
+server. The profile is already structured data on disk, so `ProfileEditor` edits that. The sheet
+shows no share link: the core runs the JSON config built from the profile, and a link is generated
+from it only when one is exported, so a live link beside the form would be a second view of the
+same data to keep in step.
 
 `ProfileEditor` keeps a deep-copied draft, so Cancel costs nothing, and **rebuilds** rather than
 diffs when a structural choice changes — the protocol, the transport, the security layer — because
@@ -283,22 +435,24 @@ the config builder and the link writer emit them only where they apply, so carry
 control to look. Its controls reuse the Advanced panel's classes (`set-group`, `srow`, `slab`,
 `val`, `seg`) so the two read as one app.
 
-`toShareLink` in [share.ts](src/share.ts) is the inverse of `parseShareLink`, used for that export
-line and for moving a server to another client. Round-tripping is the contract:
+`toShareLink` in [share.ts](src/share.ts) is the inverse of `parseShareLink`, for moving a server
+to another client. Round-tripping is the contract:
 `parseShareLink(toShareLink(p))` must equal `p`, which is why the WebSocket `?ed=N` parameter is
 written back into the path it was lifted out of.
 
-The name is a separate field, and an explicit rename sets `Server.renamed`. The list normally shows
-a row's *country* rather than its profile name, because a share link's name is usually the country
-and city restated — but a name someone typed is the one thing that is certainly not redundant, and
-nothing distinguishes the two after the fact except recording it.
+The name is a separate field, and an explicit rename sets `Server.renamed`. The list, the tray and
+Quick Connect show the config's name; the location is shown beside it, never instead of it.
 
 Deletion always confirms, and the sheet states what is lost rather than asking "are you sure?":
 whether the server returns on the next subscription update or is gone for good, that a subscription
 URL is a credential with no other copy, and whether the tunnel is currently running on the target
 (in which case it disconnects).
 
-One CSS trap worth not repeating: row action buttons are revealed with `opacity` on
+A row has one action button, **⋯**, which opens a menu: Check, Share, Edit, then Delete… alone
+below a divider, in red. It used to be three buttons side by side, and Delete sat a misclick away
+from Edit. The menu is fixed to the viewport (the list clips its overflow) and closes on scroll.
+
+One CSS trap worth not repeating: the row action button is revealed with `opacity` on
 `:hover`/`:focus-within`, and are **not** gated with `pointer-events: none`. That reads as the safer
 choice and is the opposite — the buttons sit inside the row, so a cursor can only reach them when
 they are already visible, while gating on `:hover` makes them unreachable to anything that
@@ -348,6 +502,9 @@ A subscription URL is pasted into the same "Add servers" box as share links; `cl
 [main.ts](src/main.ts) sorts each pasted line into a server, a subscription, or a rejection.
 An `https://` line is taken as a subscription — which means a pasted `https://` *proxy* link is no
 longer reachable, an acceptable trade in a TUN-only client that does not run HTTP proxies anyway.
+An update fetches and parses the new list first, leaving the old servers usable meanwhile; if the
+tunnel runs on one of the group's servers it is disconnected right before the swap, rather than the
+old server being kept alive as "retired".
 The group is created before the first fetch, so a dead endpoint shows up as a row carrying an error
 rather than a dialog that hangs, and re-pasting a known URL refreshes it instead of duplicating it.
 

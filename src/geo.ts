@@ -107,7 +107,7 @@ export function isKnown(code: string): boolean {
  * Guesses a country from a server's name.
  *
  * A guess, and labelled as one: it reads whatever the provider typed. Where a sweep has measured
- * the real exit, `Server.exitCountry` holds it and the flag comes from there instead.
+ * the real exit, `Server.exit` holds it and the flag comes from there instead.
  */
 export function guessCountry(name: string): string {
   const code = name.toUpperCase().match(/\b([A-Z]{2})\b/);

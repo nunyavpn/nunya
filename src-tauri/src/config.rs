@@ -17,6 +17,7 @@ use serde_json::{json, Map, Value};
 pub mod tags {
     pub const PROXY: &str = "proxy";
     pub const DIRECT: &str = "direct";
+    pub const BLOCK: &str = "block";
     pub const TUN_IN: &str = "tun-in";
     pub const MIXED_IN: &str = "mixed-in";
     pub const DNS_REMOTE: &str = "dns-remote";
@@ -720,7 +721,10 @@ pub fn build_probe(profiles: &[Profile], ports: &[u16]) -> Value {
         rules.push(json!({ "inbound": [inbound_tag], "outbound": outbound_tag }));
     }
 
-    outbounds.push(json!({ "type": "direct", "tag": tags::DIRECT }));
+    // Not `direct`. A request that slips past the rules above would otherwise leave from this
+    // machine, and the probe would report the user's own address as the server's exit — which it
+    // once did. Refusing it makes that server's measurement fail, which is the truth.
+    outbounds.push(json!({ "type": "block", "tag": tags::BLOCK }));
 
     let mut config = json!({
         "log": { "level": "error" },
@@ -731,8 +735,7 @@ pub fn build_probe(profiles: &[Profile], ports: &[u16]) -> Value {
         },
         "inbounds": inbounds,
         "outbounds": outbounds,
-        // Anything not matched by a rule goes direct, which for this config means nothing does.
-        "route": { "rules": rules, "final": tags::DIRECT },
+        "route": { "rules": rules, "final": tags::BLOCK },
     });
 
     if !endpoints.is_empty() {

@@ -120,7 +120,38 @@ interface Spec {
    * a completed test against live servers.
    */
   exitCountry?: string;
+  /** The measured exit city, when it is not the labelled one. Defaults to `city`. */
+  exitCity?: string;
+  /** Its address is a CDN edge, so the row carries a CDN tag. */
+  cdn?: "cloudflare" | "fastly";
 }
+
+/**
+ * Coordinates a sweep would have measured, so the map shows city dots rather than country centres.
+ *
+ * Only servers that answered a latency test get them, because only those are located: an
+ * untested or unreachable server stays at its country's centre, which is the other state to see.
+ */
+const CITY_AT: Record<string, [number, number]> = {
+  Frankfurt: [50.11, 8.68],
+  Amsterdam: [52.37, 4.9],
+  Tehran: [35.69, 51.42],
+  Sydney: [-33.87, 151.21],
+  Dubai: [25.2, 55.27],
+  Toronto: [43.65, -79.38],
+  Ashburn: [39.04, -77.49],
+  Helsinki: [60.17, 24.94],
+  Stockholm: [59.33, 18.07],
+  London: [51.51, -0.13],
+  Paris: [48.86, 2.35],
+  Zurich: [47.37, 8.54],
+  "New York": [40.71, -74.01],
+  "Los Angeles": [34.05, -118.24],
+  Tokyo: [35.68, 139.69],
+  Singapore: [1.35, 103.82],
+  "Hong Kong": [22.32, 114.17],
+  Istanbul: [41.01, 28.98],
+};
 
 let uuidCounter = 0;
 
@@ -144,8 +175,40 @@ function serverFrom(groupId: string, spec: Spec): Server {
     wireguard: null,
   };
 
+  // Every server has an entry — it needs only DNS — while only one that answered a test has an
+  // exit. Addresses are from RFC 5737's documentation ranges, so none of them is anyone's.
+  // Hosting names are placeholders; the CDN ones are the real networks, since what a CDN entry
+  // looks like on the card is the thing worth seeing.
+  const spot = (ip: string, country: string, city: string, org = "Example Hosting", asn = 64500) => {
+    const at = CITY_AT[city];
+    return {
+      ip,
+      country,
+      city,
+      lat: at?.[0] ?? null,
+      lon: at?.[1] ?? null,
+      org,
+      asn,
+      checkedAt: Date.now() - 6 * MINUTE,
+    };
+  };
+  const cdnNetwork: Record<"cloudflare" | "fastly", [string, number]> = {
+    cloudflare: ["Cloudflare, Inc.", 13335],
+    fastly: ["Fastly, Inc.", 54113],
+  };
+  // Entry and exit on different documentation ranges (RFC 5737), because they are different
+  // machines whenever a server relays — the case the card has to show.
+  const entryIp = `192.0.2.${uuidCounter}`;
+  const exitIp = spec.exitCountry || spec.cdn ? `198.51.100.${uuidCounter}` : entryIp;
+  const answered = spec.latency !== null && spec.latency > 0;
+
   return {
-    exitCountry: spec.exitCountry,
+    entry: spec.cdn
+      ? { ...spot(entryIp, spec.country, spec.city, ...cdnNetwork[spec.cdn]), cdn: spec.cdn }
+      : spot(entryIp, spec.country, spec.city),
+    exit: answered
+      ? spot(exitIp, spec.exitCountry ?? spec.country, spec.exitCity ?? spec.city)
+      : undefined,
     // Readable rather than random: a fixture is easier to reason about when the ids mean something.
     id: `${groupId}-${spec.host}`,
     groupId,
@@ -171,7 +234,7 @@ const MANUAL: Spec[] = [
   { country: "DE", city: "Frankfurt", name: "DE-1 Frankfurt", host: "fra-01", latency: 24, security: "reality" },
   // Labelled Amsterdam, measured exiting in the United States — the ordinary case with a
   // Cloudflare-fronted provider, and the one that proves a sweep changes the flag and not the name.
-  { country: "NL", city: "Amsterdam", name: "NL-2 Amsterdam", host: "ams-02", latency: 138, security: "tls", transport: "ws", exitCountry: "US" },
+  { country: "NL", city: "Amsterdam", name: "NL-2 Amsterdam", host: "ams-02", latency: 138, security: "tls", transport: "ws", exitCountry: "US", exitCity: "Ashburn", cdn: "cloudflare" },
   { country: "IR", city: "Tehran", name: "IR-1 Tehran", host: "thr-01", latency: null, security: "none", port: 8080 },
 ];
 
@@ -185,11 +248,13 @@ const MANUAL: Spec[] = [
 const AURORA: Spec[] = [
   { country: "FI", city: "Helsinki", name: "FI-1 Helsinki", host: "hel-01", latency: 31, security: "reality" },
   { country: "SE", city: "Stockholm", name: "SE-1 Stockholm", host: "sto-01", latency: 44, security: "reality" },
-  { country: "GB", city: "London", name: "GB-3 London", host: "lon-03", latency: 71, security: "tls", transport: "ws" },
+  { country: "GB", city: "London", name: "GB-3 London", host: "lon-03", latency: 71, security: "tls", transport: "ws", cdn: "cloudflare" },
   { country: "FR", city: "Paris", name: "FR-2 Paris", host: "par-02", latency: 96, security: "tls", transport: "grpc", protocol: "vmess" },
   { country: "CH", city: "Zurich", name: "CH-1 Zurich", host: "zrh-01", latency: 112, security: "reality" },
   { country: "US", city: "New York", name: "US-5 New York", host: "nyc-05", latency: 184, security: "reality" },
-  { country: "US", city: "Los Angeles", name: "US-9 Los Angeles", host: "lax-09", latency: 212, security: "tls", transport: "httpupgrade", protocol: "vmess" },
+  // A second New York exit, so a map dot holds more than one server and opens the picker.
+  { country: "US", city: "New York", name: "US-6 New York", host: "nyc-06", latency: 142, security: "tls", transport: "ws" },
+  { country: "US", city: "Los Angeles", name: "US-9 Los Angeles", host: "lax-09", latency: 212, security: "tls", transport: "httpupgrade", protocol: "vmess", cdn: "fastly" },
   { country: "JP", city: "Tokyo", name: "JP-2 Tokyo", host: "nrt-02", latency: 288, security: "reality" },
   { country: "SG", city: "Singapore", name: "SG-1 Singapore", host: "sin-01", latency: 341, security: "reality" },
   { country: "AU", city: "Sydney", name: "AU-1 Sydney", host: "syd-01", latency: -1, security: "reality" },

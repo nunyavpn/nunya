@@ -12,9 +12,31 @@
 import { DEFAULT_SETTINGS, store, type Settings } from "../store";
 import { h, render } from "../dom";
 
+export interface SettingsCallbacks {
+  onDisconnect: () => void;
+}
+
 export class SettingsPanel {
-  constructor(private root: HTMLElement) {
-    store.subscribe(() => this.render());
+  /** Whether this is the panel on screen; see `BypassPanel.active`. */
+  active = false;
+  private locked = false;
+
+  constructor(
+    private root: HTMLElement,
+    private callbacks: SettingsCallbacks,
+  ) {
+    store.subscribe(() => this.active && this.render());
+  }
+
+  /**
+   * Settings are read when the tunnel starts, so changing one while it runs would change nothing
+   * until the next connect — or, worse, look applied when it is not. So they are locked while
+   * connected (or connecting), and the panel says why and offers the way out.
+   */
+  setLocked(locked: boolean) {
+    if (locked === this.locked) return;
+    this.locked = locked;
+    if (this.active) this.render();
   }
 
   render() {
@@ -28,7 +50,21 @@ export class SettingsPanel {
         h("span", { class: "t" }, "Advanced"),
         h("span", { class: "warn-pill" }, "Defaults are fine"),
       ),
-      h("div", { class: "set-scroll" }, ...this.groups(s)),
+      this.locked
+        ? h(
+            "div",
+            { class: "lockbar" },
+            h("span", {}, "Disconnect to change settings."),
+            h("button", { class: "ghost", onclick: () => this.callbacks.onDisconnect() }, "Disconnect"),
+          )
+        : null,
+      h(
+        "div",
+        { class: "set-scroll" },
+        // A disabled fieldset disables every control inside it natively — keyboard included —
+        // rather than each control having to be told.
+        h("fieldset", { class: "set-lock", disabled: this.locked }, ...this.groups(s)),
+      ),
     );
   }
 
@@ -59,6 +95,12 @@ export class SettingsPanel {
                 "lets other machines on the network use it too",
                 s.allowLan,
                 (v) => store.updateSettings({ allowLan: v }),
+              ),
+              this.toggle(
+                "Set system proxy",
+                "points this desktop's proxy setting here while connected, and puts it back after",
+                s.systemProxy,
+                (v) => store.updateSettings({ systemProxy: v }),
               ),
             ]
           : []),

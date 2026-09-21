@@ -15,9 +15,17 @@ import { h, render } from "../dom";
 import { describe } from "../share";
 import { place } from "../geo";
 import { icon } from "./icons";
-import type { Mode, Server } from "../store";
+import { CDN_NAMES, cdnOf, located, type Mode, type Server } from "../store";
 
 export type ConnectionState = "off" | "connecting" | "on";
+
+/** A measured place, as the card shows it: city, country, and who runs the data center. */
+export interface PlaceLine {
+  city: string | null;
+  country: string;
+  org?: string | null;
+  asn?: number | null;
+}
 
 export interface StatusModel {
   state: ConnectionState;
@@ -29,14 +37,30 @@ export interface StatusModel {
   connectedAt: number;
   uplink: number;
   downlink: number;
-  exitIp: string | null;
+  /** The tunnel's public addresses per family, or null while they are being checked. */
+  exitIps: {
+    ipv4: string | null;
+    ipv6: string | null;
+    failed?: string;
+    cloudflare: { ip: string; country: string | null } | null;
+  } | null;
   tunnelDevice: string | null;
   /** Why the tunnel cannot start, when it cannot. */
   blockedReason: string | null;
+  /** Where the selected config's traffic leaves, once measured. */
+  exitAt?: PlaceLine | null;
+  /** Where its address is, when that is not where it exits — a CDN edge, a relay's front. */
+  entryAt?: PlaceLine | null;
+  /** Proxy mode: the desktop's system proxy points at the listener. */
+  systemProxy?: boolean;
+  /** Proxy mode: the user asked for the system proxy and setting it failed. */
+  systemProxyError?: string | null;
 }
 
 export interface StatusCallbacks {
   onToggle: () => void;
+  /** Share the selected server as a link and QR code. */
+  onShare: () => void;
 }
 
 /**
@@ -71,18 +95,23 @@ export class StatusCard {
     render(
       this.root,
       h("div", { class: "st-top" }, ...this.top(model)),
-      model.state === "on" ? this.chips(model) : this.hint(model),
+      model.state === "on" ? this.chips(model) : this.idle(model),
     );
   }
 
   private top(model: StatusModel): Node[] {
     const [down, downUnit] = rate(model.downlink);
     const [up, upUnit] = rate(model.uplink);
-    const country = model.server ? place(model.server.country) : null;
+    // Connected, the live measurement is the truth; the saved one is from the last test.
+    const at =
+      model.state === "on" && model.exitAt
+        ? { country: model.exitAt.country, city: model.exitAt.city ?? "" }
+        : model.server
+          ? located(model.server)
+          : null;
+    const country = at ? place(at.country) : null;
 
-    const where = model.server
-      ? [country?.name, model.server.city].filter(Boolean).join(" · ")
-      : "No server selected";
+    const where = at ? [country?.name, at.city].filter(Boolean).join(" · ") : "No server selected";
 
     const subtitle =
       model.state === "on" ? `${where} · ${elapsed(model.connectedAt)}` : where;
@@ -108,6 +137,17 @@ export class StatusCard {
             this.flow("Up", up, upUnit),
           )
         : (null as unknown as Node),
+      h(
+        "button",
+        {
+          class: "st-share",
+          "aria-label": "Share this server",
+          title: "Share this server",
+          disabled: !model.server,
+          onclick: () => this.callbacks.onShare(),
+        },
+        icon("share", 17),
+      ),
       h(
         "button",
         {
@@ -141,22 +181,99 @@ export class StatusCard {
       proxy && model.proxyAddress
         ? h("span", { class: "tag strong" }, `SOCKS / HTTP  ${model.proxyAddress}`)
         : null,
-      // The exit IP answers the question every leak scare starts with.
-      h("span", { class: "tag" }, model.exitIp ?? "checking exit IP…"),
+      ...this.places(model),
+      // The public addresses answer the question every leak scare starts with. Both families,
+      // each only when it exists: through a relay they can leave from different places, and a
+      // "what is my IP" page shows both, so a single address here would look like a discrepancy.
+      ...(model.exitIps?.failed
+        ? [
+            h(
+              "span",
+              { class: "tag warn", title: model.exitIps.failed },
+              "No public IP — traffic is not coming out of this server",
+            ),
+          ]
+        : model.exitIps
+        ? [
+            model.exitIps.ipv4 ? h("span", { class: "tag ip" }, h("b", {}, "IPv4"), model.exitIps.ipv4) : null,
+            model.exitIps.ipv6 ? h("span", { class: "tag ip" }, h("b", {}, "IPv6"), model.exitIps.ipv6) : null,
+            // Only when it differs: then the server splits its traffic — a Workers proxy relaying
+            // Cloudflare-hosted sites through its provider's proxy IP — and a "what is my IP" page
+            // on Cloudflare will show this address, not the ones above. When it matches, it is
+            // one of the chips already shown and says nothing new.
+            this.cloudflareChip(model.exitIps),
+          ]
+        : [h("span", { class: "tag" }, "checking public IP…")]),
       p ? h("span", { class: "tag" }, describe(p)) : null,
+      model.server && cdnOf(model.server)
+        ? h("span", { class: "tag" }, `CDN · ${CDN_NAMES[cdnOf(model.server)!]}`)
+        : null,
       // A TUN carries the system resolver, so "no leak" is a property of the mode. A local
       // listener carries only what is handed to it: an app that resolves before connecting has
       // already leaked the name, and claiming otherwise here would be the lie the headline
       // avoids.
+      // With the system proxy set, most desktop apps follow it — but not all of them, which is
+      // why the chip still says who is left out rather than claiming the machine.
+      proxy && model.systemProxy ? h("span", { class: "tag" }, "System proxy set") : null,
+      proxy && model.systemProxyError
+        ? h("span", { class: "tag warn", title: model.systemProxyError }, "System proxy not set")
+        : null,
       proxy
-        ? h("span", { class: "tag warn" }, "Only apps set to use it")
+        ? h(
+            "span",
+            { class: "tag warn" },
+            model.systemProxy ? "Apps that ignore it are not covered" : "Only apps set to use it",
+          )
         : h("span", { class: "tag", html: "DNS <b>no leak</b>" }),
       !proxy && model.tunnelDevice ? h("span", { class: "tag" }, model.tunnelDevice) : null,
     );
   }
 
-  private hint(model: StatusModel) {
-    if (!model.blockedReason) return null as unknown as Node;
-    return h("div", { class: "st-more" }, h("span", { class: "tag warn" }, model.blockedReason));
+  private cloudflareChip(ips: NonNullable<StatusModel["exitIps"]>) {
+    const cf = ips.cloudflare;
+    if (!cf || cf.ip === ips.ipv4 || cf.ip === ips.ipv6) return null;
+    return h(
+      "span",
+      { class: "tag ip" },
+      h("b", {}, "Cloudflare sites"),
+      cf.country ? `${cf.ip} · ${cf.country}` : cf.ip,
+    );
+  }
+
+  /** Disconnected: where the selected config is, and anything stopping Connect. */
+  private idle(model: StatusModel) {
+    const places = this.places(model);
+    if (!places.length && !model.blockedReason) return null as unknown as Node;
+    return h(
+      "div",
+      { class: "st-more" },
+      ...places,
+      model.blockedReason ? h("span", { class: "tag warn" }, model.blockedReason) : null,
+    );
+  }
+
+  /**
+   * "Exit  Frankfurt am Main, DE · GTHost · AS63023", and "Entry …" when the address is elsewhere.
+   *
+   * The data center is what tells a Cloudflare edge from a rented server in the same city, which
+   * is the difference between a CDN-fronted config and a direct one — the city alone cannot.
+   * Before a config has been tested there is no exit, and its address is labelled as such.
+   */
+  private places(model: StatusModel): Node[] {
+    const line = (label: string, p: PlaceLine) => {
+      const where = [p.city, p.country].filter(Boolean).join(", ");
+      const network = [p.org, p.asn ? `AS${p.asn}` : null].filter(Boolean).join(" · ");
+      return h(
+        "span",
+        { class: "tag ip place" },
+        h("span", { class: "flag mini", style: `background:${place(p.country).flag}` }),
+        h("b", {}, label),
+        network ? `${where} · ${network}` : where,
+      );
+    };
+    const out: Node[] = [];
+    if (model.exitAt) out.push(line("Exit", model.exitAt));
+    if (model.entryAt) out.push(line(model.exitAt ? "Entry" : "Address", model.entryAt));
+    return out;
   }
 }

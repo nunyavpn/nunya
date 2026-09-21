@@ -16,7 +16,10 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "flag-icons": "^7.5.0"
+    "flag-icons": "^7.5.0",
+    "jsqr": "1.4.0",
+    "uqr": "0.1.3",
+    "world-atlas": "2.0.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

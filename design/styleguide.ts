@@ -129,7 +129,7 @@ const COLOUR_GROUPS: Group[] = [
   {
     title: "Map",
     note: "The dotted land mass and the arc drawn to the active exit.",
-    names: ["--map-dot", "--map-line"],
+    names: ["--map-land", "--map-border", "--map-label", "--map-line"],
   },
 ];
 
@@ -374,7 +374,7 @@ function statusSpecimen(caption: string, state: ConnectionState, extra: Partial<
   const root = h("section", { class: "status" });
   stage.appendChild(root);
 
-  new StatusCard(root, { onToggle: () => {} }).render({
+  new StatusCard(root, { onToggle: () => {}, onShare: () => {} }).render({
     state,
     // The specimens show VPN mode unless one overrides it; proxy mode gets its own row below,
     // because the two say materially different things.
@@ -384,7 +384,7 @@ function statusSpecimen(caption: string, state: ConnectionState, extra: Partial<
     connectedAt: Date.now() - 3 * 60_000 - 12_000,
     uplink: 184_000,
     downlink: 2_400_000,
-    exitIp: "203.0.113.42",
+    exitIps: { ipv4: "203.0.113.42", ipv6: "2001:db8::42", cloudflare: { ip: "198.51.100.42", country: "DE" } },
     tunnelDevice: "utun4",
     blockedReason: null,
     ...extra,

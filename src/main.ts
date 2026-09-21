@@ -2,16 +2,26 @@ import { inTauri, invoke, listen } from "./bridge";
 
 import { h, qs, render } from "./dom";
 import { guessCity, guessCountry, place } from "./geo";
-import { MANUAL_GROUP_ID, store, type Group, type Server } from "./store";
-import { describe, parseShareLink, type Profile } from "./share";
+import {
+  isRelayed,
+  located,
+  MANUAL_GROUP_ID,
+  store,
+  type Group,
+  type Server,
+  type Spot,
+} from "./store";
+import { describe, parseShareLink, toShareLink, type Profile } from "./share";
 import { icon } from "./views/icons";
 import { BypassPanel } from "./views/bypass";
 import { DiagnosticsPanel } from "./views/diagnostics";
 import { LocationsPanel } from "./views/locations";
-import { WorldMap, type Pin } from "./views/map";
+import { WorldMap, type Hop, type Pin, type PickPoint } from "./views/map";
+import { MapPicker } from "./views/mappick";
 import { SettingsPanel } from "./views/settings";
-import { StatusCard, type ConnectionState } from "./views/status";
+import { StatusCard, type ConnectionState, type PlaceLine } from "./views/status";
 import { ProfileEditor } from "./views/editor";
+import { qrCode, readQrCode } from "./views/qr";
 
 /** Mirrors the Rust `Readiness` struct. */
 interface Readiness {
@@ -33,7 +43,12 @@ let connection: ConnectionState = "off";
 let connectedAt = 0;
 let readiness: Readiness | null = null;
 let coreReady = false;
-let exitIp: string | null = null;
+/** The running tunnel's public addresses, per family, once measured; null while checking. */
+let exitIps: ExitIps | null = null;
+/** Where this machine is, looked up with the tunnel down. */
+let home: Whereabouts | null = null;
+/** Where the running tunnel comes out, once measured. */
+let exitPlace: Whereabouts | null = null;
 let tunnelDevice: string | null = null;
 
 /** Cumulative counters from the previous poll, so the UI can show a rate rather than a total. */
@@ -45,12 +60,23 @@ const MAX_LOG_LINES = 500;
 
 // ---------------------------------------------------------------- views
 
-const status = new StatusCard(qs("#status"), { onToggle: () => void toggleConnection() });
-const map = new WorldMap(qs<HTMLCanvasElement>("#worldmap"), qs("#pins"));
+const status = new StatusCard(qs("#status"), {
+  onToggle: () => void toggleConnection(),
+  onShare: () => {
+    const server = store.selected();
+    if (server) openShareServer(server);
+  },
+});
+const map = new WorldMap(qs<HTMLCanvasElement>("#worldmap"), qs("#pins"), (key, at) =>
+  pickFromMap(key, at),
+);
+const picker = new MapPicker(qs(".mappane"), (server) => selectServer(server));
+// A card placed beside a dot is wrong the moment the dot moves.
+map.onViewChange = () => picker.close();
 
 const panelHost = qs<HTMLElement>("#panel");
 const bypass = new BypassPanel(panelHost);
-const settings = new SettingsPanel(panelHost);
+const settings = new SettingsPanel(panelHost, { onDisconnect: () => void disconnect() });
 const diagnostics = new DiagnosticsPanel(panelHost, {
   onClear: () => {
     logLines.length = 0;
@@ -82,18 +108,20 @@ function show(next: Screen) {
   qs<HTMLElement>("#locations").hidden = !locationsVisible;
   panelHost.hidden = locationsVisible;
 
+  bypass.active = screen === "rules";
+  settings.active = screen === "settings";
+  diagnostics.active = screen === "diagnostics";
+
   if (screen === "rules") bypass.render();
   else if (screen === "settings") settings.render();
   else if (screen === "diagnostics") diagnostics.render();
 }
 
 const locations = new LocationsPanel(qs("#locations"), {
-  onSelect: (server) => {
-    store.select(server.id);
-    // Switching server while connected would silently leave you on the old one.
-    if (connection === "on") void reconnect();
-  },
+  onSelect: (server) => selectServer(server),
   onRefresh: (group) => void refreshSubscription(group),
+  onCheck: (server) => void checkOne(server),
+  onShare: (server) => openShareServer(server),
   onEdit: (server) => openEditServer(server),
   onDelete: (server) => confirmDeleteServer(server),
   onRemoveGroup: (group) => confirmDeleteGroup(group),
@@ -106,78 +134,200 @@ const locations = new LocationsPanel(qs("#locations"), {
     }
   },
   onTestAll: () => void testAll(),
+  onStopTest: () => {
+    stopRequested = true;
+    log("[ui] stopping the test after the current batch");
+  },
 });
 
-interface LatencyResult {
-  index: number;
-  latencyMs: number;
-  error: string | null;
-}
-
 /**
- * Measures every server.
+ * Measures every server, showing each result as it lands.
  *
- * Runs in its own short-lived core instance with no TUN, so it never disturbs a running tunnel.
- * That is why it is safe to offer while connected.
+ * Runs in short-lived core work with no TUN, so it never disturbs a running tunnel. That is why
+ * it is safe to offer while connected.
  */
 async function testAll() {
-  // Snapshotted: the results come back by index, and a list that changed underneath would attribute
-  // measurements to the wrong servers.
   const servers = [...store.get().servers];
-  if (!servers.length || !coreReady) return;
-
-  locations.setTesting(true);
-  log(`[ui] testing ${servers.length} servers`);
-
+  if (!servers.length) return;
+  stopRequested = false;
   try {
-    const results = await invoke<LatencyResult[]>("test_servers", {
-      profiles: servers.map((s) => s.profile),
-    });
-
-    store.applyLatencies(
-      results
-        .filter((r) => r.index >= 0 && r.index < servers.length)
-        .map((r) => ({ id: servers[r.index].id, latency: r.latencyMs, error: r.error })),
-    );
-
-    const reachable = results.filter((r) => r.latencyMs >= 0).length;
-    log(`[ui] ${reachable} of ${results.length} servers answered`);
-
-    // Only servers that answered, and only after the latencies are on screen: locating them
-    // starts a second core and makes a request through each one, which is far slower than the
-    // measurement and worth nothing for a server that is down.
-    const live = results.filter((r) => r.latencyMs >= 0).map((r) => servers[r.index]);
-    if (live.length) await locateServers(live);
-  } catch (e) {
-    log(`[ui] test failed: ${String(e)}`);
+    await checkServers(servers, (p) => locations.setProgress(p), () => stopRequested);
   } finally {
-    locations.setTesting(false);
+    locations.setProgress(null);
   }
 }
 
+/** Set by the Test all button while a run is going; the run stops after its current batch. */
+let stopRequested = false;
+
 /**
- * Replaces guessed flags with measured ones.
- *
- * The flag beside a server was inferred from its name, which is whatever the provider typed —
- * often the country they want you to believe rather than the one the traffic leaves from. This
- * asks each server where it actually exits.
- *
- * Failures are silent by design: a server that cannot reach the lookup keeps the guess, which is
- * no worse than before the sweep.
+ * Servers checked automatically — on add and after a subscription update — at most. A public list
+ * of twenty thousand is not something to start testing unasked: it would run for hours and spend
+ * every geo lookup the free tiers allow. Larger additions wait for Test all or a row's Check.
  */
-async function locateServers(servers: Server[]) {
+const AUTO_CHECK_MAX = 100;
+
+function autoCheck(servers: Server[]) {
+  if (servers.length <= AUTO_CHECK_MAX) {
+    void checkServers(servers);
+  } else {
+    log(`[ui] ${servers.length.toLocaleString()} servers added; not testing them all unasked — use Test all or a row's Check`);
+  }
+}
+
+/** The ⋯ menu's Check: the same as Test all, for one server. */
+async function checkOne(server: Server) {
+  await checkServers([server]);
+}
+
+/** Mirrors `geo::Located`. */
+interface Located {
+  index: number;
+  entry: Omit<Spot, "checkedAt"> | null;
+  exit: Omit<Spot, "checkedAt"> | null;
+}
+
+/** Mirrors the Rust `Checked`: one server's full result, sent the moment it is known. */
+interface Checked {
+  run: number;
+  index: number;
+  latencyMs: number;
+  error: string | null;
+  exitIp: string | null;
+  exit: Omit<Spot, "checkedAt"> | null;
+}
+
+/** Runs in flight, by id, so each `server-checked` event reaches the call that asked for it. */
+const checkRuns = new Map<number, (checked: Checked) => void>();
+let lastRun = 0;
+void listen<Checked>("server-checked", (checked) => checkRuns.get(checked.run)?.(checked));
+
+/**
+ * Everything a server can be asked, in the order the answers become useful.
+ *
+ * 1. **Entry**, from DNS alone — seconds, and it works for a server that is down, so a freshly
+ *    added row shows where its address is before anything else has answered.
+ * 2. **The test itself**, end to end and per server: latency, then a real request *through* the
+ *    server to see which public address it comes out of, then where that is. A server whose
+ *    traffic never comes out does not work, whatever its latency said. Each row updates the
+ *    moment its own result lands; `check_servers` runs a few at a time on one scratch core.
+ *
+ * Used by Test all, by each row's Check, on servers just added, and after a subscription reload,
+ * so a server's two locations are refreshed whenever it is measured at all.
+ */
+/**
+ * Servers per `check_servers` call. Each call runs its own small probe core with a port per
+ * server, so a batch bounds the ports, the listeners and the lookups in flight however long the
+ * list is — and gives Stop a place to take effect.
+ */
+const CHECK_BATCH = 50;
+
+async function checkServers(
+  snapshot: Server[],
+  onProgress?: (p: { done: number; total: number }) => void,
+  shouldStop?: () => boolean,
+) {
+  const all = [...snapshot];
+  let done = 0;
+  onProgress?.({ done, total: all.length });
+  for (let start = 0; start < all.length; start += CHECK_BATCH) {
+    if (shouldStop?.()) {
+      log(`[ui] test stopped after ${done.toLocaleString()} of ${all.length.toLocaleString()} servers`);
+      return;
+    }
+    await checkBatch(all.slice(start, start + CHECK_BATCH), () => {
+      done += 1;
+      onProgress?.({ done, total: all.length });
+    });
+  }
+}
+
+/** One batch of `checkServers`: entries, then the end-to-end test, streamed per server. */
+async function checkBatch(snapshot: Server[], onOne: () => void) {
+  // Snapshotted: results come back by position, and a list that changed underneath would pin
+  // measurements on the wrong servers.
+  const servers = [...snapshot];
+  if (!servers.length || !inTauri) return;
+  const ids = servers.map((s) => s.id);
+  let done = 0;
+  locations.setChecking(ids, true);
+
   try {
-    const located = await invoke<{ index: number; country: string; ip: string }[]>(
-      "locate_servers",
-      { profiles: servers.map((s) => s.profile) },
-    );
+    await locate(servers, { entries: true, exits: false });
+
+    if (!coreReady) {
+      log("[ui] the core is not running, so only entries were checked");
+      return;
+    }
+
+    log(`[ui] testing ${servers.length} server${servers.length === 1 ? "" : "s"}`);
+    const run = ++lastRun;
+    let working = 0;
+    let allIn: () => void = () => {};
+    const finished = new Promise<void>((resolve) => (allIn = resolve));
+
+    checkRuns.set(run, (c) => {
+      const server = servers[c.index];
+      if (!server) return;
+      let { latencyMs, error } = c;
+      // Out of this machine's own address means the request never went through the server.
+      if (c.exitIp && home && c.exitIp === home.ip) {
+        latencyMs = -1;
+        error = "traffic came out of this machine's own address, not through the server";
+      }
+      store.applyLatencies([{ id: server.id, latency: latencyMs, error }]);
+      if (latencyMs >= 0 && c.exit) {
+        store.applyLocations([{ id: server.id, exit: { ...c.exit, checkedAt: Date.now() } }]);
+      }
+      if (latencyMs >= 0) working += 1;
+      done += 1;
+      locations.setChecking([server.id], false);
+      onOne();
+      if (done === servers.length) allIn();
+    });
+
+    try {
+      await invoke("check_servers", { run, profiles: servers.map((s) => s.profile) });
+      // Events can trail the call's own reply; give the last of them a moment to land.
+      await Promise.race([finished, new Promise((r) => setTimeout(r, 2000))]);
+    } catch (e) {
+      log(`[ui] test failed: ${String(e)}`);
+    } finally {
+      checkRuns.delete(run);
+    }
+    if (working < servers.length) log(`[ui] ${working} of ${servers.length} servers in this batch work`);
+  } finally {
+    locations.setChecking(ids, false);
+  }
+}
+
+async function locate(servers: Server[], want: { entries: boolean; exits: boolean }) {
+  try {
+    const located = await invoke<Located[]>("locate_servers", {
+      profiles: servers.map((s) => s.profile),
+      entries: want.entries,
+      exits: want.exits,
+    });
+    const now = Date.now();
+    const stamp = (spot: Omit<Spot, "checkedAt"> | null): Spot | undefined =>
+      spot ? { ...spot, checkedAt: now } : undefined;
+    // A server cannot exit from the user's own address. If a probe says it does, the request
+    // never went through the server, and filing it would put the user's location on the flag.
+    for (const l of located) {
+      if (l.exit && home && l.exit.ip === home.ip) {
+        log(`[ui] discarded an exit for ${servers[l.index]?.profile.name}: it was this machine's own address`);
+        l.exit = null;
+      }
+    }
 
     const updates = located
-      .filter((l) => l.index >= 0 && l.index < servers.length && l.country)
-      .map((l) => ({ id: servers[l.index].id, country: l.country }));
+      .filter((l) => l.index >= 0 && l.index < servers.length)
+      .map((l) => ({ id: servers[l.index].id, entry: stamp(l.entry), exit: stamp(l.exit) }));
+    if (updates.length) store.applyLocations(updates);
 
-    if (updates.length) store.applyCountries(updates);
-    log(`[ui] located ${updates.length} of ${servers.length} servers`);
+    const what = want.exits ? "exits" : "entries";
+    const found = updates.filter((u) => (want.exits ? u.exit : u.entry)).length;
+    log(`[ui] placed ${found} of ${servers.length} ${what}`);
   } catch (e) {
     log(`[ui] could not locate servers: ${String(e)}`);
   }
@@ -203,8 +353,19 @@ function syncDiagnostics() {
 
 // ---------------------------------------------------------------- rendering
 
+/** Whether this app currently has the system proxy pointed at its listener. */
+let systemProxyOn = false;
+/** Why setting it failed, when it did; shown on the status card until the next connect. */
+let systemProxyError: string | null = null;
+
+/** Settings are locked while the tunnel is up or coming up; see `SettingsPanel.setLocked`. */
+function lockSettings() {
+  settings.setLocked(connection !== "off");
+}
+
 function refresh() {
   syncDiagnostics();
+  lockSettings();
   const server = store.selected();
 
   const settings = store.settings();
@@ -220,12 +381,68 @@ function refresh() {
     connectedAt,
     uplink: shownRate.uplink,
     downlink: shownRate.downlink,
-    exitIp,
+    exitIps,
     tunnelDevice,
+    systemProxy: systemProxyOn,
+    systemProxyError,
+    ...placeLines(server),
     blockedReason: blockedReason(),
   });
 
-  map.setPins(buildPins(server));
+  const { pins, route } = buildMap(server);
+  map.setPins(pins, route);
+  syncTray(server, blockedReason() === null);
+}
+
+/** What was last sent to the tray, so the once-a-second uptime refresh does not resend it. */
+let trayShown = "";
+
+/**
+ * Mirrors the connection into the Linux top-bar menu (`tray.rs`), which owns no state of its own.
+ *
+ * The same honesty rule as the status card applies: proxy mode carries only what is pointed at
+ * the listener, so its line names the listener instead of claiming the machine is connected.
+ */
+function syncTray(server: Server | undefined, canConnect: boolean) {
+  const settings = store.settings();
+  const detail =
+    connection === "on" && settings.mode === "proxy"
+      ? `proxy on ${settings.allowLan ? "0.0.0.0" : "127.0.0.1"}:${settings.proxyPort}`
+      : null;
+  const args = {
+    state: connection,
+    server: server ? serverName(server) : null,
+    detail,
+    canConnect,
+  };
+
+  const key = JSON.stringify(args);
+  if (key === trayShown) return;
+  trayShown = key;
+  invoke("set_tray_status", args).catch(() => {
+    // Outside Tauri, or not on Linux: there is no tray to update.
+  });
+}
+
+/** The name the server list shows for a row: the config's own; see `LocationsPanel`. */
+function serverName(server: Server): string {
+  return server.profile.name;
+}
+
+/**
+ * Where the selected config is, for the status card: its exit — measured live through the running
+ * tunnel when connected, else the one saved by its last test — and its entry when that is
+ * somewhere else (a CDN edge, a relay's front). Before any test, the entry is all there is.
+ */
+function placeLines(server: Server | undefined): { exitAt: PlaceLine | null; entryAt: PlaceLine | null } {
+  if (!server) return { exitAt: null, entryAt: null };
+  const exit: (PlaceLine & { ip: string }) | null =
+    connection === "on" && exitPlace ? exitPlace : (server.exit ?? null);
+  const entry = server.entry ?? null;
+  return {
+    exitAt: exit,
+    entryAt: entry && (!exit || entry.ip !== exit.ip) ? entry : null,
+  };
 }
 
 /** Why Connect will not work, phrased for someone who did not write the app. */
@@ -240,29 +457,278 @@ function blockedReason(): string | null {
   return null;
 }
 
-function buildPins(selected: Server | undefined): Pin[] {
-  const pins: Pin[] = [];
-  const seen = new Set<string>();
+/**
+ * The map's dots and the path between them.
+ *
+ * With the tunnel down, the user's own dot is the one that matters — it is where their traffic
+ * comes from — so it is the prominent one, labelled. With it up, the route is drawn from that dot
+ * to the exit: measured coordinates when the exit has been looked up, the country's centre until
+ * then. A proxy chain's servers will go between the two; the map already draws any number of legs.
+ */
+/** A spot's coordinates, when the lookup that placed it knew them. */
+function spotCoords(spot: Spot | undefined): { lat: number; lon: number; city: string | null } | null {
+  return spot && spot.lat !== null && spot.lon !== null
+    ? { lat: spot.lat, lon: spot.lon, city: spot.city }
+    : null;
+}
 
+/** One dot on the map: every server that exits in the same place. */
+interface MapPlace {
+  lat: number;
+  lon: number;
+  /** City when measured, else the country's name. */
+  title: string;
+  country: string;
+  servers: Server[];
+}
+
+/** The dots as last drawn, by key, so a click can find the servers behind the dot it hit. */
+let mapPlaces = new Map<string, MapPlace>();
+
+/**
+ * Groups servers into the dots the map draws.
+ *
+ * Keyed on coordinates rounded to about 50 km, so two lookups that put one city a few streets
+ * apart are one dot, and on the country for servers not yet measured — those stand at the
+ * country's centre until a sweep places them.
+ */
+function groupPlaces(): Map<string, MapPlace> {
+  const places = new Map<string, MapPlace>();
   for (const server of store.get().servers) {
-    // The map answers "where does my traffic come out", so it follows the measured exit wherever
-    // there is one and falls back to the guess from the name. This is the same rule the flag
-    // uses, and for the same reason: it is about location, not about what the server is called.
-    const code = server.exitCountry ?? server.country;
-    if (!code || seen.has(code)) continue;
-    seen.add(code);
+    // The same rule as the flag and the label (`located`): the exit once tested, the address
+    // until then, the name only before the address has been looked up. The dot follows whichever
+    // of those the row is showing, so a row and its dot never disagree.
+    const where0 = located(server);
+    const country = where0.country;
+    const at = spotCoords(where0.source === "exit" ? server.exit : where0.source === "entry" ? server.entry : undefined);
+    if (!at && !country) continue;
+    const where = at ?? place(country);
+    const key = at
+      ? `${Math.round(where.lat * 2)},${Math.round(where.lon * 2)}`
+      : `country:${country}`;
 
-    const where = place(code);
-    const active =
-      connection === "on" && (selected?.exitCountry ?? selected?.country) === code;
-    pins.push({
+    const existing = places.get(key);
+    if (existing) {
+      existing.servers.push(server);
+    } else {
+      places.set(key, {
+        lat: where.lat,
+        lon: where.lon,
+        title: where0.city || place(country).name,
+        country,
+        servers: [server],
+      });
+    }
+  }
+  return places;
+}
+
+function buildMap(selected: Server | undefined): { pins: Pin[]; route: Hop[] } {
+  const on = connection === "on";
+  const pins: Pin[] = [];
+  mapPlaces = groupPlaces();
+
+  // The dot the selected server belongs to, so the exit pin can stand in for it — and stay
+  // clickable, since it is still that city's dot.
+  const selectedKey = selected
+    ? [...mapPlaces].find(([, p]) => p.servers.some((s) => s.id === selected.id))?.[0]
+    : undefined;
+
+  // The exit: measured through the running tunnel if that has answered, else where the last
+  // sweep placed this server, else the centre of the country its name suggests.
+  let exit: Pin | null = null;
+  if (on && selected) {
+    const at = exitPlace ?? spotCoords(selected.exit) ?? spotCoords(selected.entry);
+    const country = exitPlace?.country ?? located(selected).country;
+    const where = at ?? place(country);
+    exit = {
       lon: where.lon,
       lat: where.lat,
-      label: active ? where.name : undefined,
-      active,
+      label: at?.city ?? place(country).name,
+      active: true,
+      key: selectedKey,
+      name: selectedKey ? placeName(mapPlaces.get(selectedKey)!) : undefined,
+    };
+  }
+
+  for (const [key, where] of mapPlaces) {
+    if (exit && key === selectedKey) continue;
+    pins.push({ lon: where.lon, lat: where.lat, key, name: placeName(where) });
+  }
+
+  if (home) {
+    pins.push({
+      lon: home.lon,
+      lat: home.lat,
+      home: true,
+      here: !on,
+      label: on ? undefined : `You · ${home.city ?? place(home.country).name}`,
+      // Clickable, for the details: public address, provider, place.
+      key: HOME_KEY,
+      name: "Your location",
     });
   }
-  return pins;
+  if (exit) pins.push(exit);
+
+  // A relayed server enters somewhere else first; the route shows the detour, which is the whole
+  // reason to know the entry. Chains will add their hops the same way.
+  const entry = on && selected && isRelayed(selected) ? spotCoords(selected.entry) : null;
+  if (entry) pins.push({ lon: entry.lon, lat: entry.lat, label: `via ${entry.city ?? place(selected!.entry!.country).name}`, labelBelow: true, hop: true });
+  const route: Hop[] = home && exit ? [home, ...(entry ? [entry] : []), exit] : [];
+
+  return { pins, route };
+}
+
+function placeName(p: MapPlace): string {
+  return p.servers.length > 1 ? `${p.title} · ${p.servers.length} servers` : p.title;
+}
+
+/**
+ * A dot was clicked. One server there is simply selected; several open the picker, because
+ * choosing among them by clicking the dot would be a coin toss.
+ */
+/** The map key of the user's own pin; no server place can have it (see `groupPlaces`). */
+const HOME_KEY = "home:you";
+
+function pickFromMap(key: string, at: PickPoint) {
+  if (key === HOME_KEY) {
+    if (!home) return;
+    const network = [home.org, home.asn ? `AS${home.asn}` : null].filter(Boolean).join(" · ");
+    picker.openDetails({
+      title: "Your location",
+      subtitle: [home.city, place(home.country).name].filter(Boolean).join(", "),
+      country: home.country,
+      rows: [
+        ["Public IP", home.ip],
+        ["ISP", network || "unknown"],
+        ["City", home.city ?? "unknown"],
+        ["Country", `${place(home.country).name} (${home.country})`],
+      ],
+      // Measured with the tunnel down, and kept while it is up: this is who the user is *without*
+      // the tunnel — the thing it hides — not what websites see now.
+      note:
+        connection === "on"
+          ? "Measured before connecting. While connected, websites see the exit instead."
+          : "What websites see while you are not connected.",
+      at,
+    });
+    return;
+  }
+  const where = mapPlaces.get(key);
+  if (!where) return;
+  if (where.servers.length === 1) {
+    picker.close();
+    selectServer(where.servers[0]);
+    return;
+  }
+  picker.open({
+    title: where.title,
+    country: where.country,
+    servers: where.servers,
+    selectedId: store.get().selectedServerId,
+    at,
+  });
+}
+
+/** Selecting from the list and from the map are the same act, so they share one path. */
+function selectServer(server: Server) {
+  store.select(server.id);
+  // Switching server while connected would silently leave you on the old one.
+  if (connection === "on") void reconnect();
+}
+
+/** Mirrors `geo::Exit` without its place: what the status card shows. */
+interface ExitIps {
+  ipv4: string | null;
+  ipv6: string | null;
+  /** Set when every attempt failed: why no public address could be found through the tunnel. */
+  failed?: string;
+  /** What Cloudflare-hosted sites see; see `geo::CloudflareExit`. */
+  cloudflare: { ip: string; country: string | null } | null;
+}
+
+/** Mirrors `geo::Whereabouts`. */
+interface Whereabouts {
+  ip: string;
+  country: string;
+  city: string | null;
+  lat: number;
+  lon: number;
+  asn: number | null;
+  org: string | null;
+}
+
+/**
+ * Bumped on every connect and disconnect, so a lookup that was in flight across one can tell its
+ * answer is about a network that no longer exists. Without it, a "where am I" asked just before
+ * connecting in VPN mode could come back through the tunnel and put the user at their exit.
+ */
+let tunnelEpoch = 0;
+
+/**
+ * Finds the user's own public address and where it is, for the map's first dot.
+ *
+ * Only with the tunnel down: in VPN mode a direct request goes through the tunnel, and the answer
+ * would be the exit dressed up as the user.
+ */
+async function locateHome() {
+  if (!inTauri || connection !== "off") return;
+  const epoch = tunnelEpoch;
+  try {
+    const found = await invoke<Whereabouts>("locate_me");
+    if (epoch !== tunnelEpoch || connection !== "off") return;
+    home = found;
+    log(`[ui] this machine is in ${found.city ?? found.country}`);
+    store.forgetExitsAt(found.ip);
+    refresh();
+  } catch (e) {
+    log(`[ui] could not find this machine's location: ${String(e)}`);
+  }
+}
+
+/**
+ * Finds where the running tunnel comes out, for the exit chip and the end of the route.
+ *
+ * Asked a moment after connecting, because the first request through a fresh tunnel pays for its
+ * handshake, and once more if that fails — a single slow start should not leave the chip saying
+ * "checking" for the whole session.
+ */
+async function locateExit() {
+  const epoch = tunnelEpoch;
+  const settings = store.settings();
+  const proxyPort = settings.mode === "proxy" ? settings.proxyPort : null;
+
+  let lastError = "";
+  for (const delay of [600, 3000, 8000]) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (epoch !== tunnelEpoch || connection !== "on") return;
+    try {
+      const found = await invoke<ExitIps & { place: Whereabouts | null }>("locate_exit", {
+        proxyPort,
+      });
+      if (epoch !== tunnelEpoch || connection !== "on") return;
+      exitPlace = found.place;
+      exitIps = { ipv4: found.ipv4, ipv6: found.ipv6, cloudflare: found.cloudflare };
+      // A live end-to-end measurement is the freshest exit this config will have, so it is saved
+      // as the config's exit — the row's flag and the card then agree.
+      const server = store.selected();
+      if (found.place && server && !(home && found.place.ip === home.ip)) {
+        store.applyLocations([{ id: server.id, exit: { ...found.place, checkedAt: Date.now() } }]);
+      }
+      const where = found.place ? ` in ${found.place.city ?? found.place.country}` : "";
+      log(`[ui] exiting from ${[found.ipv4, found.ipv6].filter(Boolean).join(" and ")}${where}`);
+      refresh();
+      return;
+    } catch (e) {
+      lastError = String(e);
+      log(`[ui] could not find the exit yet: ${lastError}`);
+    }
+  }
+  // Every attempt failed: nothing came out through the server. Said on the card, rather than
+  // leaving "checking public IP…" up for the rest of the session as if an answer were coming.
+  if (epoch !== tunnelEpoch || connection !== "on") return;
+  exitIps = { ipv4: null, ipv6: null, cloudflare: null, failed: lastError || "no answer" };
+  refresh();
 }
 
 // ---------------------------------------------------------------- tunnel
@@ -306,6 +772,9 @@ async function connect() {
   }
 
   connection = "connecting";
+  tunnelEpoch++;
+  exitPlace = null;
+  exitIps = null;
   refresh();
 
   try {
@@ -314,6 +783,8 @@ async function connect() {
     lastCounters = { uplink: 0, downlink: 0, at: 0 };
     connection = "on";
     log("[ui] tunnel started");
+    void locateExit();
+    await applySystemProxy();
   } catch (e) {
     connection = "off";
     log(`[ui] start failed: ${String(e)}`);
@@ -323,17 +794,46 @@ async function connect() {
   refresh();
 }
 
+/**
+ * Points the system proxy at the listener, when proxy mode is running and the user asked for it.
+ *
+ * A failure does not fail the connection: the listener is up and anything pointed at it by hand
+ * works. It is reported on the status card instead, because a user who asked for the system proxy
+ * and silently did not get it would assume their browser is covered.
+ */
+async function applySystemProxy() {
+  systemProxyOn = false;
+  systemProxyError = null;
+  const current = store.settings();
+  if (current.mode !== "proxy" || !current.systemProxy) return;
+  try {
+    await invoke("set_system_proxy", { port: current.proxyPort });
+    systemProxyOn = true;
+    log(`[ui] system proxy set to 127.0.0.1:${current.proxyPort}`);
+  } catch (e) {
+    systemProxyError = String(e);
+    log(`[ui] could not set the system proxy: ${systemProxyError}`);
+  }
+}
+
 async function disconnect() {
   try {
+    // Restores the system proxy too, on the Rust side, so it cannot outlive the listener.
     await invoke("stop_tunnel");
     log("[ui] tunnel stopped");
   } catch (e) {
     log(`[ui] stop failed: ${String(e)}`);
   }
+  systemProxyOn = false;
+  systemProxyError = null;
   connection = "off";
-  exitIp = null;
+  tunnelEpoch++;
+  exitIps = null;
+  exitPlace = null;
   shownRate = { uplink: 0, downlink: 0 };
   refresh();
+  // Asked again rather than remembered: the tunnel may have been up across a change of network.
+  void locateHome();
 }
 
 async function reconnect() {
@@ -443,6 +943,15 @@ async function refreshSubscription(group: Group) {
       );
     }
 
+    // The new list is fetched and parsed before anything changes, so the old servers stay usable
+    // for as long as the fetch takes. If the tunnel runs on one of them it is disconnected now,
+    // right before the swap: the server it runs on may not survive the update, and keeping a
+    // stale entry alive to protect it would leave the list out of step with the provider.
+    const live = connectedServerId();
+    if (live && store.serversIn(group.id).some((s) => s.id === live)) {
+      log(`[ui] disconnecting to update ${group.name}, which the tunnel is running on`);
+      await disconnect();
+    }
     const summary = store.replaceSubscriptionServers(group.id, parsed, connectedServerId());
     store.update((data) => {
       const g = data.groups.find((x) => x.id === group.id);
@@ -462,6 +971,9 @@ async function refreshSubscription(group: Group) {
     ].filter(Boolean);
 
     log(`[ui] ${group.name}: ${changes.length ? changes.join(", ") : "no changes"}`);
+    // A reload is a new list from the provider; where each server is and whether it works are
+    // measured again rather than trusted from last time.
+    autoCheck(store.serversIn(group.id));
   } catch (e) {
     // The previous servers stay exactly as they were; only the header says something went wrong.
     store.update((data) => {
@@ -584,162 +1096,415 @@ function openAddServers() {
   openSheet((close) => buildAddServers(close));
 }
 
+/** The paste shortcut's modifier as this platform spells it. */
+const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl ";
+
+/** The three ways in. A link is the common case, so it is where the sheet opens. */
+type AddTab = "link" | "qr" | "manual";
+
+const ADD_TABS: [AddTab, string][] = [
+  ["link", "Link"],
+  ["qr", "QR code"],
+  ["manual", "Manual"],
+];
+
+/**
+ * The Add servers sheet: paste a link, read a QR code, or fill in a form.
+ *
+ * All three end up in the same place. A QR code is only a link in another form, so reading one
+ * hands its text to the Link tab, where it is parsed, previewed and rejected by name exactly like
+ * a paste — there is no second import path to keep honest. Manual entry is the editor's form over
+ * an empty profile, for a server someone was given as a list of settings rather than a link.
+ *
+ * What was pasted survives switching tabs, so looking at the QR tab does not cost a paste.
+ */
 function buildAddServers(close: () => void) {
-  let servers: Omit<Server, "id" | "groupId">[] = [];
-  let subscriptions: { url: string; name: string }[] = [];
-  let rejected: string[] = [];
+  let tab: AddTab = "link";
+  let pasted = "";
 
-  const preview = h("div", { class: "parsed" });
-  const footNote = h("span", { class: "gpick" });
+  const sheet = h("div", { class: "app sheet add", role: "dialog", "aria-label": "Add servers" });
 
-  const addButton = h(
-    "button",
-    {
-      class: "btn brand",
-      disabled: true,
-      onclick: () => {
-        for (const sub of subscriptions) addSubscription(sub.url, sub.name);
-        // MANUAL_GROUP_ID rather than groups[0]: the hand-added group is first only by insertion
-        // order, and subscriptions append to the same array.
-        if (servers.length) store.addServers(MANUAL_GROUP_ID, servers);
-        close();
-      },
-    },
-    "Add servers",
-  );
-
-  const input = h("textarea", {
-    class: "paste",
-    spellcheck: false,
-    placeholder: "vless://uuid@host:443?security=reality&sni=…&pbk=…#Name\nhttps://example.com/sub",
-    oninput: (e: Event) => reparse((e.target as HTMLTextAreaElement).value),
-  }) as HTMLTextAreaElement;
-
-  function reparse(raw: string) {
-    servers = [];
-    subscriptions = [];
-    rejected = [];
-
-    for (const line of raw.split(/\s+/).filter(Boolean)) {
-      const item = classify(line);
-      if (item.kind === "server") servers.push(item.server);
-      else if (item.kind === "subscription") subscriptions.push({ url: item.url, name: item.name });
-      else rejected.push(item.reason);
-    }
-
-    const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-
-    const found = [
-      subscriptions.length ? plural(subscriptions.length, "subscription") : null,
-      servers.length ? plural(servers.length, "server") : null,
-      rejected.length ? `${rejected.length} unsupported` : null,
-    ].filter(Boolean);
-
-    const willAdd = [
-      subscriptions.length ? plural(subscriptions.length, "subscription") : null,
-      servers.length ? plural(servers.length, "server") : null,
-    ].filter(Boolean);
-
-    addButton.disabled = willAdd.length === 0;
-    addButton.textContent = willAdd.length ? `Add ${willAdd.join(" and ")}` : "Add servers";
-
-    // Only a subscription-only paste needs the destination explained; anything with servers in it
-    // still lands in the hand-added group.
+  function show(next: AddTab) {
+    tab = next;
+    // The form needs the editor's height; a paste box and a drop zone do not.
+    sheet.classList.toggle("editor", tab === "manual");
+    const pane =
+      tab === "link" ? linkPane() : tab === "qr" ? qrPane() : manualPane();
     render(
-      footNote,
-      ...(subscriptions.length && !servers.length
-        ? ["Each subscription brings its own group"]
-        : ["Add to ", h("span", { class: "g" }, manualGroupName())]),
+      sheet,
+      sheetHead("Add servers", close),
+      h(
+        "div",
+        { class: "addtabs" },
+        h(
+          "span",
+          { class: "seg", role: "tablist", "aria-label": "How to add" },
+          ...ADD_TABS.map(([key, text]) =>
+            h(
+              "button",
+              {
+                type: "button",
+                role: "tab",
+                class: key === tab ? "on" : "",
+                "aria-selected": String(key === tab),
+                onclick: () => key !== tab && show(key),
+              },
+              text,
+            ),
+          ),
+        ),
+      ),
+      ...pane,
     );
-
-    render(
-      preview,
-      ...(found.length
-        ? [
-            h("p", { class: "plabel" }, "Found", h("span", {}, found.join(" · "))),
-            // A subscription is listed before its servers exist, because they only arrive with the
-            // first fetch. All it can promise at this point is a name and a URL.
-            ...subscriptions.map((sub) =>
-              h(
-                "div",
-                { class: "prow" },
-                h("span", { class: "pmark ok" }, icon("check", 11)),
-                h("span", { class: "flag dim glyph" }, icon("globe", 11)),
-                h(
-                  "span",
-                  { class: "pmain" },
-                  h("b", {}, sub.name),
-                  h("span", {}, "Subscription · servers arrive on the first update"),
-                ),
-              ),
-            ),
-            ...servers.map((server) =>
-              h(
-                "div",
-                { class: "prow" },
-                h("span", { class: "pmark ok" }, icon("check", 11)),
-                h("span", { class: "flag", style: `background:${place(server.country).flag}` }),
-                h(
-                  "span",
-                  { class: "pmain" },
-                  h("b", {}, server.profile.name),
-                  h("span", {}, `${server.profile.server}:${server.profile.port}`),
-                ),
-              ),
-            ),
-            // Rejected links are named, never silently dropped: this build runs six protocols, so
-            // users will paste things it cannot.
-            ...rejected.map((reason) =>
-              h(
-                "div",
-                { class: "prow" },
-                h("span", { class: "pmark no" }, icon("close", 11)),
-                h("span", { class: "flag dim" }),
-                h("span", { class: "pmain dim" }, h("b", {}, "Not supported"), h("span", {}, reason)),
-              ),
-            ),
-          ]
-        : []),
-    );
+    sheet.querySelector<HTMLElement>("[data-autofocus]")?.focus();
   }
 
-  const sheet = h(
-    "div",
-    { class: "app sheet", role: "dialog", "aria-label": "Add servers" },
-    sheetHead("Add servers", close),
-    h(
+  // ------------------------------------------------------------ link
+
+  function linkPane(): Node[] {
+    let servers: Omit<Server, "id" | "groupId">[] = [];
+    let subscriptions: { url: string; name: string }[] = [];
+    let rejected: string[] = [];
+
+    const preview = h("div", { class: "parsed" });
+    const footNote = h("span", { class: "gpick" });
+
+    const addButton = h(
       "button",
       {
-        class: "clipbar",
-        onclick: async () => {
-          try {
-            const text = await navigator.clipboard.readText();
-            input.value = text;
-            reparse(text);
-          } catch {
-            log("[ui] clipboard read was refused");
-          }
+        class: "btn brand",
+        disabled: true,
+        onclick: () => {
+          for (const sub of subscriptions) addSubscription(sub.url, sub.name);
+          // MANUAL_GROUP_ID rather than groups[0]: the hand-added group is first only by insertion
+          // order, and subscriptions append to the same array.
+          if (servers.length) autoCheck(store.addServers(MANUAL_GROUP_ID, servers));
+          close();
         },
       },
-      icon("clipboard", 16),
-      h("span", { class: "ct" }, "Paste from clipboard"),
-      h("span", { class: "kbd" }, "⌘V"),
-    ),
-    input,
-    preview,
-    h(
+      "Add servers",
+    );
+
+    const input = h("textarea", {
+      class: "paste",
+      spellcheck: false,
+      "data-autofocus": true,
+      placeholder: "vless://uuid@host:443?security=reality&sni=…&pbk=…#Name\nhttps://example.com/sub",
+      oninput: (e: Event) => reparse((e.target as HTMLTextAreaElement).value),
+    }) as HTMLTextAreaElement;
+    input.value = pasted;
+
+    function reparse(raw: string) {
+      pasted = raw;
+      servers = [];
+      subscriptions = [];
+      rejected = [];
+
+      for (const line of raw.split(/\s+/).filter(Boolean)) {
+        const item = classify(line);
+        if (item.kind === "server") servers.push(item.server);
+        else if (item.kind === "subscription") subscriptions.push({ url: item.url, name: item.name });
+        else rejected.push(item.reason);
+      }
+
+      const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+      const found = [
+        subscriptions.length ? plural(subscriptions.length, "subscription") : null,
+        servers.length ? plural(servers.length, "server") : null,
+        rejected.length ? `${rejected.length} unsupported` : null,
+      ].filter(Boolean);
+
+      const willAdd = [
+        subscriptions.length ? plural(subscriptions.length, "subscription") : null,
+        servers.length ? plural(servers.length, "server") : null,
+      ].filter(Boolean);
+
+      addButton.disabled = willAdd.length === 0;
+      addButton.textContent = willAdd.length ? `Add ${willAdd.join(" and ")}` : "Add servers";
+
+      // Only a subscription-only paste needs the destination explained; anything with servers in
+      // it still lands in the hand-added group.
+      render(
+        footNote,
+        ...(subscriptions.length && !servers.length
+          ? ["Each subscription brings its own group"]
+          : ["Add to ", h("span", { class: "g" }, manualGroupName())]),
+      );
+
+      render(
+        preview,
+        ...(found.length
+          ? [
+              h("p", { class: "plabel" }, "Found", h("span", {}, found.join(" · "))),
+              // A subscription is listed before its servers exist, because they only arrive with
+              // the first fetch. All it can promise at this point is a name and a URL.
+              ...subscriptions.map((sub) =>
+                h(
+                  "div",
+                  { class: "prow" },
+                  h("span", { class: "pmark ok" }, icon("check", 11)),
+                  h("span", { class: "flag dim glyph" }, icon("globe", 11)),
+                  h(
+                    "span",
+                    { class: "pmain" },
+                    h("b", {}, sub.name),
+                    h("span", {}, "Subscription · servers arrive on the first update"),
+                  ),
+                ),
+              ),
+              ...servers.map((server) =>
+                h(
+                  "div",
+                  { class: "prow" },
+                  h("span", { class: "pmark ok" }, icon("check", 11)),
+                  h("span", { class: "flag", style: `background:${place(server.country).flag}` }),
+                  h(
+                    "span",
+                    { class: "pmain" },
+                    h("b", {}, server.profile.name),
+                    h("span", {}, `${server.profile.server}:${server.profile.port}`),
+                  ),
+                ),
+              ),
+              // Rejected links are named, never silently dropped: this build runs six protocols,
+              // so users will paste things it cannot.
+              ...rejected.map((reason) =>
+                h(
+                  "div",
+                  { class: "prow" },
+                  h("span", { class: "pmark no" }, icon("close", 11)),
+                  h("span", { class: "flag dim" }),
+                  h("span", { class: "pmain dim" }, h("b", {}, "Not supported"), h("span", {}, reason)),
+                ),
+              ),
+            ]
+          : []),
+      );
+    }
+
+    // Fills the footer and the preview before anything is typed, including after a tab switch.
+    reparse(pasted);
+
+    return [
+      h(
+        "button",
+        {
+          class: "clipbar",
+          onclick: async () => {
+            try {
+              const text = await navigator.clipboard.readText();
+              input.value = text;
+              reparse(text);
+            } catch {
+              log("[ui] clipboard read was refused");
+            }
+          },
+        },
+        icon("clipboard", 16),
+        h("span", { class: "ct" }, "Paste from clipboard"),
+        h("span", { class: "kbd" }, `${MOD_KEY}V`),
+      ),
+      input,
+      preview,
+      h(
+        "div",
+        { class: "sheet-foot" },
+        footNote,
+        h("button", { class: "ghost", onclick: close }, "Cancel"),
+        addButton,
+      ),
+    ];
+  }
+
+  // ------------------------------------------------------------ QR code
+
+  function qrPane(): Node[] {
+    const note = h("p", { class: "fnote qrnote" });
+    const picker = h("input", {
+      type: "file",
+      accept: "image/*",
+      hidden: true,
+      onchange: () => {
+        const file = picker.files?.[0];
+        if (file) void read(file);
+      },
+    }) as HTMLInputElement;
+
+    async function read(image: Blob) {
+      render(note, "Reading…");
+      note.classList.remove("bad");
+      let text: string | null = null;
+      try {
+        text = await readQrCode(image);
+      } catch (e) {
+        log(`[ui] could not read that image: ${String(e)}`);
+      }
+      if (!text) {
+        render(note, "No QR code found in that image. Try a sharper or larger one.");
+        note.classList.add("bad");
+        return;
+      }
+      // Appended rather than replacing, so a code can be read on top of links already pasted.
+      pasted = pasted.trim() ? `${pasted.trim()}\n${text}` : text;
+      show("link");
+    }
+
+    const zone = h(
       "div",
-      { class: "sheet-foot" },
-      footNote,
-      h("button", { class: "ghost", onclick: close }, "Cancel"),
-      addButton,
-    ),
-  );
+      {
+        class: "dropzone",
+        tabindex: 0,
+        role: "button",
+        "data-autofocus": true,
+        "aria-label": "Choose an image with a QR code",
+        onclick: () => picker.click(),
+        onkeydown: (e: Event) => {
+          const key = (e as KeyboardEvent).key;
+          if (key === "Enter" || key === " ") {
+            e.preventDefault();
+            picker.click();
+          }
+        },
+        // A screenshot on the clipboard is the usual source, so Ctrl+V works here directly.
+        onpaste: (e: Event) => {
+          const file = [...((e as ClipboardEvent).clipboardData?.files ?? [])].find((f) =>
+            f.type.startsWith("image/"),
+          );
+          if (!file) return;
+          e.preventDefault();
+          void read(file);
+        },
+        ondragover: (e: Event) => {
+          e.preventDefault();
+          zone.classList.add("over");
+        },
+        ondragleave: () => zone.classList.remove("over"),
+        ondrop: (e: Event) => {
+          e.preventDefault();
+          zone.classList.remove("over");
+          const file = (e as DragEvent).dataTransfer?.files?.[0];
+          if (file) void read(file);
+        },
+      },
+      icon("scan", 30),
+      h("span", { class: "dz-t" }, "Drop an image with a QR code"),
+      h("span", { class: "dz-d" }, `or click to choose one · ${MOD_KEY}V pastes a screenshot`),
+    );
 
-  // Fills the footer before anything is typed, which is where the destination is stated.
-  reparse("");
+    render(note, "The code is read on this machine; the image is not kept or sent anywhere.");
 
+    return [
+      zone,
+      picker,
+      note,
+      h(
+        "div",
+        { class: "sheet-foot" },
+        h("span", { class: "gpick" }),
+        h("button", { class: "ghost", onclick: close }, "Cancel"),
+      ),
+    ];
+  }
+
+  // ------------------------------------------------------------ manual
+
+  function manualPane(): Node[] {
+    const body = h("div", { class: "set-scroll" });
+    const problemLine = h("span", { class: "gpick" });
+
+    const nameInput = h("input", {
+      class: "field",
+      type: "text",
+      spellcheck: false,
+      "aria-label": "Name",
+      placeholder: "Name — optional",
+      "data-autofocus": true,
+    }) as HTMLInputElement;
+
+    const addButton = h("button", { class: "btn brand" }, "Add server") as HTMLButtonElement;
+
+    // The first problem only, as in the editor; with none left, the line says where it goes.
+    const showProblems = (problems: { message: string }[]) => {
+      addButton.disabled = problems.length > 0;
+      problemLine.classList.toggle("bad", problems.length > 0);
+      if (problems.length) render(problemLine, problems[0].message);
+      else render(problemLine, "Add to ", h("span", { class: "g" }, manualGroupName()));
+    };
+
+    const editor = new ProfileEditor(body, blankProfile(), showProblems);
+
+    addButton.onclick = () => {
+      if (editor.problems().length) return;
+      const profile = editor.value();
+      const typed = nameInput.value.trim();
+      // Something has to be in the list; the address is the one thing certain to be filled in.
+      const name = typed || profile.server;
+      const added = store.addServers(MANUAL_GROUP_ID, [
+        {
+          profile: { ...profile, name },
+          country: guessCountry(name),
+          city: guessCity(name),
+          latency: null,
+          testedAt: null,
+          // A typed name is the user's, and the row should show it rather than a country guess.
+          renamed: typed ? true : undefined,
+        },
+      ]);
+      log(`[ui] added ${name} by hand`);
+      void checkServers(added);
+      close();
+    };
+
+    editor.render();
+    // Shown from the start: an empty form is not yet addable, and saying why beats a disabled
+    // button with no explanation.
+    showProblems(editor.problems());
+
+    return [
+      h("label", { class: "flabel" }, "Name", nameInput),
+      body,
+      h(
+        "div",
+        { class: "sheet-foot" },
+        problemLine,
+        h("button", { class: "ghost", onclick: close }, "Cancel"),
+        addButton,
+      ),
+    ];
+  }
+
+  show(tab);
   return sheet;
+}
+
+/**
+ * What manual entry starts from: VLESS over TLS on 443, which is what most servers handed out as a
+ * list of settings are. Everything else is empty, so nothing plausible-looking is invented.
+ */
+function blankProfile(): Profile {
+  return {
+    protocol: "vless",
+    name: "",
+    server: "",
+    port: 443,
+    uuid: "",
+    flow: "",
+    security: "",
+    alterId: 0,
+    password: "",
+    tls: { enabled: true, sni: "", insecure: false, alpn: [], fingerprint: "", reality: null },
+    transport: {
+      kind: "tcp",
+      path: "",
+      host: "",
+      serviceName: "",
+      method: "",
+      maxEarlyData: 0,
+      earlyDataHeader: "",
+    },
+    wireguard: null,
+  };
 }
 
 // ---------------------------------------------------------------- sheets
@@ -890,8 +1655,8 @@ function confirmDeleteGroup(group: Group) {
  *
  * Not a share link in a text box: a link is a serialisation, and changing a port by finding it
  * between an `@` and a `?` makes the user the parser. A typo there does not fail — it produces a
- * different server. The profile is already structured data on disk, so the form edits that and
- * the link, shown at the bottom of the sheet, becomes an export rather than the interface.
+ * different server. The profile is already structured data on disk, so the form edits that; a link
+ * is generated from it only when the server is shared, by `openShareServer`.
  *
  * The name is separate from the rest because it is the one field that is not part of the
  * connection, and because renaming is the edit people make most often.
@@ -936,6 +1701,14 @@ function openEditServer(server: Server) {
         renamed: server.renamed === true || name !== server.profile.name,
       });
       log(`[ui] edited ${name}`);
+      // A new address is a different place: the old entry and exit described the old one, so
+      // they go, and the server is measured again — showing the new address's country at once
+      // and the new exit after the test.
+      if (profile.server !== server.profile.server || profile.port !== server.profile.port) {
+        store.clearLocations(server.id);
+        const updated = store.get().servers.find((s) => s.id === server.id);
+        if (updated) void checkOne(updated);
+      }
       // The tunnel is still running against the old settings, so it has to be rebuilt.
       if (live) void reconnect();
       close();
@@ -960,6 +1733,96 @@ function openEditServer(server: Server) {
   });
 }
 
+/**
+ * Shows a server as a share link and a QR code, for a phone to scan or another client to import.
+ *
+ * The link is generated here, from the profile, rather than kept from whatever was pasted: the
+ * profile is what the app actually connects with, so an edit made since import is what gets
+ * shared. The standard `vless://` / `vmess://` / `trojan://` form is what v2rayNG, Hiddify and
+ * Streisand all scan.
+ *
+ * The sheet says plainly that the link is the credential. A QR code on screen looks like a harmless
+ * picture, and anyone who photographs it can use the server exactly as the user does.
+ */
+function openShareServer(server: Server) {
+  let link: string;
+  try {
+    link = toShareLink(server.profile);
+  } catch (e) {
+    log(`[ui] could not write a share link for ${server.profile.name}: ${String(e)}`);
+    return;
+  }
+
+  openSheet((close) => {
+    const copyButton = h("button", { class: "btn brand" }, "Copy link") as HTMLButtonElement;
+    let reset = 0;
+    copyButton.onclick = async () => {
+      const copied = await copyText(link);
+      copyButton.textContent = copied ? "Copied" : "Copy failed";
+      window.clearTimeout(reset);
+      reset = window.setTimeout(() => (copyButton.textContent = "Copy link"), 1600);
+    };
+
+    const linkBox = h("textarea", {
+      class: "val sharelink",
+      readonly: true,
+      rows: 4,
+      spellcheck: false,
+      "aria-label": "Share link",
+      onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
+    }) as HTMLTextAreaElement;
+    linkBox.value = link;
+
+    return h(
+      "div",
+      { class: "app sheet share", role: "dialog", "aria-label": "Share server" },
+      sheetHead("Share server", close),
+      h(
+        "div",
+        { class: "share-body" },
+        h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`),
+        h("div", { class: "share-qr" }, qrCode(link)),
+        h("p", { class: "fnote" }, "Scan with a phone client such as v2rayNG, Hiddify or Streisand."),
+        linkBox,
+        h(
+          "p",
+          { class: "fnote warn" },
+          "The link contains this server's credentials. Anyone who has it can use the server.",
+        ),
+      ),
+      h(
+        "div",
+        { class: "sheet-foot" },
+        h("span", { class: "gpick" }),
+        h("button", { class: "ghost", onclick: close }, "Done"),
+        copyButton,
+      ),
+    );
+  });
+}
+
+/**
+ * Puts text on the clipboard, and says whether it got there.
+ *
+ * The async Clipboard API is the right one, but WebKitGTK builds that predate it — or refuse it for
+ * the app's origin — reject, so the old selection-and-`execCommand` route is kept as a fallback
+ * rather than reporting a copy that did not happen.
+ */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const scratch = h("textarea", { class: "offscreen", readonly: true }) as HTMLTextAreaElement;
+    scratch.value = text;
+    document.body.append(scratch);
+    scratch.select();
+    const ok = document.execCommand("copy");
+    scratch.remove();
+    return ok;
+  }
+}
+
 // ---------------------------------------------------------------- rail icons
 
 function paintRail() {
@@ -982,6 +1845,12 @@ function paintRail() {
 
 paintRail();
 
+// The status card, the map and the tray all render from the store but, unlike the list, are not
+// views that subscribe themselves. Without this they only caught up with a change — a server
+// picked from the list or the map — on the next connect or the next once-a-second tick, and the
+// tick only runs while connected, so a disconnected selection never reached the status card.
+store.subscribe(() => refresh());
+
 void (async () => {
   // Rendering before the data arrives would flash an empty list on every launch.
   await store.load();
@@ -999,6 +1868,9 @@ void listen<string>("core-log", (line) => {
   }
 });
 
+// The Linux top-bar menu's Connect/Disconnect; it runs exactly what the status card's button does.
+void listen<null>("tray-toggle", () => void toggleConnection());
+
 void listen<boolean>("core-connection", async (connected) => {
   coreReady = connected;
   log(`[ui] core ${coreReady ? "connected" : "disconnected"}`);
@@ -1006,9 +1878,16 @@ void listen<boolean>("core-connection", async (connected) => {
   if (coreReady) {
     await refreshReadiness();
   } else if (connection !== "off") {
-    // The core went away with the tunnel up, so the TUN went with it.
+    // The core went away with the tunnel up, so the TUN went with it — and the listener the
+    // system proxy points at, which has to be put back now rather than at the next disconnect.
     connection = "off";
+    tunnelEpoch++;
+    if (systemProxyOn) void invoke("clear_system_proxy").catch(() => {});
+    systemProxyOn = false;
+    exitIps = null;
+    exitPlace = null;
     refresh();
+    void locateHome();
   }
   refresh();
 });
@@ -1020,6 +1899,8 @@ void (async () => {
     refresh();
     return;
   }
+  // Independent of the core: it is a direct request from the Rust side.
+  void locateHome();
   coreReady = await invoke<boolean>("core_connected").catch(() => false);
   if (coreReady) await refreshReadiness();
   refresh();

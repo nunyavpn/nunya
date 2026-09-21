@@ -25,9 +25,14 @@ const ALWAYS_DIRECT = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254
 
 export class BypassPanel {
   private draft = "";
+  /**
+   * Whether this is the panel on screen. The panels share one container, so one that re-rendered
+   * on every store change regardless would paint itself over whichever panel the user is on.
+   */
+  active = false;
 
   constructor(private root: HTMLElement) {
-    store.subscribe(() => this.render());
+    store.subscribe(() => this.active && this.render());
   }
 
   private get kind(): BypassKind | null {

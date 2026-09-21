@@ -635,6 +635,20 @@ fn assemble(
 mod tests {
     use super::*;
 
+    /// Public lists are plain text, unencoded, and enormous — one on GitHub carries over twenty
+    /// thousand links in 4.7 MB. Every line has to come through, and quickly.
+    #[test]
+    fn a_public_list_of_tens_of_thousands_of_plain_links_is_read_whole() {
+        let body: String = (0..25_000)
+            .map(|i| format!("vless://00000000-0000-4000-8000-{i:012}@h{i}.example.net:443?type=ws&security=tls#By list 🧬 {i}\n"))
+            .collect();
+        assert!(body.len() < MAX_BODY);
+        let started = std::time::Instant::now();
+        let fetched = assemble(None, None, &body).unwrap();
+        assert_eq!(fetched.links.len(), 25_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
     #[test]
     fn plain_http_is_refused_because_it_leaks_credentials() {
         let err = check_url("http://example.net/sub").unwrap_err();

@@ -4,7 +4,9 @@
  * A share link is a serialisation, not an interface. Asking someone to change a port by finding it
  * between an `@` and a `?` in a 300-character string is asking them to be a parser, and one typo
  * silently produces a different server rather than an error. The profile is already stored as
- * structured data, so the editor edits that directly and the link becomes an export format.
+ * structured data, so the editor edits that directly. The config the core runs is built from that
+ * profile as JSON, and a share link is generated from it only when one is asked for, so the form
+ * does not carry a live link alongside it.
  *
  * The form is rebuilt rather than diffed whenever a *structural* choice changes — the protocol, the
  * transport, the security layer — because those decide which fields exist at all. Everything else
@@ -16,7 +18,6 @@
 
 import { h, render } from "../dom";
 import {
-  toShareLink,
   type Profile,
   type Protocol,
   type TransportKind,
@@ -47,6 +48,12 @@ const TRANSPORTS: [TransportKind, string][] = [
 
 /** The ciphers sing-box accepts for VMess. `auto` is right unless a panel says otherwise. */
 const VMESS_CIPHERS = ["auto", "aes-128-gcm", "chacha20-poly1305", "none"];
+
+/**
+ * ALPN protocols offered as tags. Order is preference order in the ClientHello, so the picker
+ * lets the selected ones be rearranged rather than only toggled.
+ */
+const ALPNS = ["h2", "http/1.1", "h3"];
 
 /**
  * uTLS fingerprints the core implements.
@@ -140,20 +147,9 @@ export class ProfileEditor {
     return found;
   }
 
-  /** Re-reads validity and refreshes the derived link, without rebuilding the controls. */
+  /** Re-reads validity, without rebuilding the controls. */
   private touched() {
     this.onChange(this.problems());
-    const out = this.root.querySelector<HTMLTextAreaElement>(".linkout");
-    if (out) out.value = this.safeLink();
-  }
-
-  /** The draft as a share link, or a note when it is too incomplete to write one. */
-  private safeLink(): string {
-    try {
-      return toShareLink(this.draft);
-    } catch {
-      return "";
-    }
   }
 
   /** A structural change: which fields exist has changed, so the form is built again. */
@@ -184,26 +180,7 @@ export class ProfileEditor {
       ...this.credentials(),
       ...(p.protocol === "wireguard" ? [] : this.transport()),
       ...(p.protocol === "wireguard" ? [] : this.security()),
-
-      this.group("Share link", [
-        h(
-          "p",
-          { class: "fnote" },
-          "Generated from the fields above. Copy it to move this server to another client.",
-        ),
-        h("textarea", {
-          class: "val linkout",
-          readonly: true,
-          rows: 3,
-          spellcheck: false,
-          "aria-label": "Share link",
-          onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
-        }),
-      ]),
     );
-
-    const out = this.root.querySelector<HTMLTextAreaElement>(".linkout");
-    if (out) out.value = this.safeLink();
   }
 
   // ---------------------------------------------------------------- sections
@@ -405,7 +382,12 @@ export class ProfileEditor {
         this.seg(
           "Fingerprint",
           "which client the handshake imitates",
-          FINGERPRINTS.map((f) => [f, f || "none"] as [string, string]),
+          // A link can carry a fingerprint this list does not name ("randomized", "qq"). It is
+          // shown rather than left with nothing highlighted, which would read as "none".
+          (FINGERPRINTS.includes(p.tls.fingerprint)
+            ? FINGERPRINTS
+            : [...FINGERPRINTS, p.tls.fingerprint]
+          ).map((f) => [f, f || "none"] as [string, string]),
           p.tls.fingerprint,
           (v) => {
             p.tls.fingerprint = v;
@@ -417,12 +399,7 @@ export class ProfileEditor {
 
     if (kind === "tls") {
       rows.push(
-        this.text("ALPN", "comma separated", p.tls.alpn.join(", "), (v) => {
-          p.tls.alpn = v
-            .split(",")
-            .map((a) => a.trim())
-            .filter(Boolean);
-        }),
+        this.alpn(p.tls),
         this.toggle(
           "Allow insecure",
           "accepts any certificate — only for a server you control",
@@ -510,7 +487,7 @@ export class ProfileEditor {
         autocomplete: "off",
         value,
         // Per keystroke, unlike the Advanced panel: nothing here is persisted until Save, and
-        // the validity line and the derived link should keep up with what is being typed.
+        // the validity line should keep up with what is being typed.
         oninput: (e: Event) => {
           apply((e.target as HTMLInputElement).value);
           this.touched();
@@ -545,6 +522,110 @@ export class ProfileEditor {
           this.touched();
         },
       }),
+    );
+  }
+
+  /**
+   * ALPN as tags: click one to add or remove it, drag or use the arrow keys to reorder.
+   *
+   * A free-text field made the user spell `http/1.1` exactly and gave no sign that the order is
+   * meaningful. Selected tags come first, numbered in the order they are offered; unselected ones
+   * follow, dimmed. A value this list does not know, from an imported link, is kept as a tag
+   * rather than dropped, for the same reason unused protocol fields are kept.
+   */
+  private alpn(tls: Profile["tls"]) {
+    const host = h("span", { class: "tags", role: "listbox", "aria-label": "ALPN" });
+    let dragged: string | null = null;
+
+    const move = (value: string, to: number) => {
+      const from = tls.alpn.indexOf(value);
+      if (from < 0 || to < 0 || to >= tls.alpn.length || to === from) return;
+      tls.alpn.splice(from, 1);
+      tls.alpn.splice(to, 0, value);
+      draw(value);
+      this.touched();
+    };
+
+    const draw = (focus?: string) => {
+      const unselected = ALPNS.filter((a) => !tls.alpn.includes(a));
+      render(
+        host,
+        ...tls.alpn.map((value, i) =>
+          h(
+            "button",
+            {
+              type: "button",
+              class: "atag on",
+              // An enumerated attribute: a bare `draggable` is not "true" and leaves a button undraggable.
+              draggable: "true",
+              role: "option",
+              "aria-selected": "true",
+              "data-v": value,
+              title: "Click to remove · drag or ← → to reorder",
+              onclick: () => {
+                tls.alpn = tls.alpn.filter((a) => a !== value);
+                draw();
+                this.touched();
+              },
+              onkeydown: (e: Event) => {
+                const key = (e as KeyboardEvent).key;
+                if (key === "ArrowLeft") move(value, i - 1);
+                else if (key === "ArrowRight") move(value, i + 1);
+                else return;
+                e.preventDefault();
+              },
+              ondragstart: (e: Event) => {
+                dragged = value;
+                // WebKitGTK does not start a drag without data set.
+                (e as DragEvent).dataTransfer?.setData("text/plain", value);
+                (e.currentTarget as HTMLElement).classList.add("dragging");
+              },
+              ondragend: (e: Event) => {
+                dragged = null;
+                (e.currentTarget as HTMLElement).classList.remove("dragging");
+              },
+              ondragover: (e: Event) => {
+                if (dragged && dragged !== value) e.preventDefault();
+              },
+              ondrop: (e: Event) => {
+                e.preventDefault();
+                if (dragged) move(dragged, i);
+              },
+            },
+            h("span", { class: "n" }, String(i + 1)),
+            value,
+          ),
+        ),
+        ...unselected.map((value) =>
+          h(
+            "button",
+            {
+              type: "button",
+              class: "atag",
+              role: "option",
+              "aria-selected": "false",
+              "data-v": value,
+              title: "Click to add",
+              onclick: () => {
+                tls.alpn = [...tls.alpn, value];
+                draw();
+                this.touched();
+              },
+            },
+            h("span", { class: "n" }, "+"),
+            value,
+          ),
+        ),
+      );
+      if (focus) host.querySelector<HTMLElement>(`[data-v="${CSS.escape(focus)}"]`)?.focus();
+    };
+    draw();
+
+    return h(
+      "div",
+      { class: "srow stack" },
+      this.label("ALPN", "in order of preference · none lets the core decide"),
+      host,
     );
   }
 
@@ -585,7 +666,17 @@ export class ProfileEditor {
               class: key === value ? "on" : "",
               role: "radio",
               "aria-checked": String(key === value),
-              onclick: () => apply(key),
+              onclick: (e: Event) => {
+                // Structural choices rebuild the form and redraw this for free; the others (flow,
+                // cipher, fingerprint) only touch the draft, so the highlight has to move here or
+                // the control goes on showing the old choice while the draft holds the new one.
+                const picked = e.currentTarget as HTMLElement;
+                for (const b of picked.parentElement?.children ?? []) {
+                  b.classList.toggle("on", b === picked);
+                  b.setAttribute("aria-checked", String(b === picked));
+                }
+                apply(key);
+              },
             },
             text,
           ),

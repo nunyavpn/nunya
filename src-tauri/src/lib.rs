@@ -7,7 +7,10 @@ pub mod geo;
 pub mod rpc;
 pub mod storage;
 pub mod subscription;
+pub mod sysproxy;
 pub mod transport;
+#[cfg(target_os = "linux")]
+mod tray;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +34,29 @@ struct AppState {
     /// How the tunnel is actually carried. Chosen at startup; see `transport::select`.
     tunnel: Arc<dyn TunnelTransport>,
     tunnel_kind: transport::select::Kind,
+    /// The system proxy as it was before this app set it, while it is set. Also on disk, in
+    /// `sysproxy::SAVED_FILE`, so a crash cannot strand it.
+    system_proxy: Arc<std::sync::Mutex<Option<sysproxy::Saved>>>,
+}
+
+/// Puts the system proxy back if this app set it: the settings from before, then the file.
+///
+/// Blocking — it runs the desktop's own tools — and safe to call when nothing was set, which is
+/// what lets every way out (disconnect, quit, a dead core) call it without keeping score.
+fn release_system_proxy(dir: &std::path::Path, slot: &std::sync::Mutex<Option<sysproxy::Saved>>) -> Result<(), String> {
+    let Some(saved) = slot.lock().unwrap_or_else(|p| p.into_inner()).take() else {
+        return Ok(());
+    };
+    let result = sysproxy::restore(&saved);
+    match &result {
+        Ok(()) => {
+            sysproxy::remove_saved(dir);
+            log::info!("system proxy restored");
+        }
+        // The file stays, so the next launch tries again rather than leaving it pointed at us.
+        Err(e) => log::error!("could not restore the system proxy: {e}"),
+    }
+    result
 }
 
 /// The core reports errors two different ways: a transport failure comes back as a `LinkError`,
@@ -132,8 +158,57 @@ async fn start_tunnel(state: State<'_, AppState>, req: BuildRequest) -> Result<(
 }
 
 #[tauri::command]
-async fn stop_tunnel(state: State<'_, AppState>) -> Result<(), String> {
-    state.tunnel.stop().await.map_err(|e| e.to_string())
+async fn stop_tunnel(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let stopped = state.tunnel.stop().await.map_err(|e| e.to_string());
+    // Here as well as in the frontend, so no path that stops the tunnel can leave the system
+    // proxy pointing at a listener that is gone.
+    let dir = data_dir(&app)?;
+    let slot = state.system_proxy.clone();
+    let _ = tokio::task::spawn_blocking(move || release_system_proxy(&dir, &slot)).await;
+    stopped
+}
+
+/// Points the system proxy at the proxy-mode listener on `port`.
+///
+/// The settings it replaces are captured and written to disk first, and only once — a second
+/// call while ours are applied must not capture ours as "the user's" and restore them later. If
+/// applying fails part-way, what was captured is put straight back.
+#[tauri::command]
+async fn set_system_proxy(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    port: u16,
+) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    let slot = state.system_proxy.clone();
+    tokio::task::spawn_blocking(move || {
+        {
+            let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
+            if held.is_none() {
+                let saved = sysproxy::capture()?;
+                sysproxy::write_saved(&dir, &saved)?;
+                *held = Some(saved);
+            }
+        }
+        if let Err(e) = sysproxy::apply(port) {
+            let _ = release_system_proxy(&dir, &slot);
+            return Err(e);
+        }
+        log::info!("system proxy set to 127.0.0.1:{port}");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("system proxy task panicked: {e}"))?
+}
+
+/// Restores the system proxy this app set, if it set one.
+#[tauri::command]
+async fn clear_system_proxy(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    let slot = state.system_proxy.clone();
+    tokio::task::spawn_blocking(move || release_system_proxy(&dir, &slot))
+        .await
+        .map_err(|e| format!("system proxy task panicked: {e}"))?
 }
 
 #[tauri::command]
@@ -276,17 +351,180 @@ async fn test_servers(
         .collect())
 }
 
-/// Finds out where each server actually exits.
+/// One server's latency, trying `TEST_URLS` in order, as `test_servers` does for a whole list.
+async fn latency_of(link: &CoreLink, profile: &config::Profile, timeout_ms: i32) -> (i32, Option<String>) {
+    let mut last = String::from("the core reported nothing for this server");
+    for url in TEST_URLS {
+        let (cfg, tags) = config::build_test(std::slice::from_ref(profile));
+        let resp: Result<gen::TestResp, _> = link
+            .call(
+                method::TEST,
+                &gen::TestReq {
+                    config: Some(cfg.to_string()),
+                    outbound_tags: tags,
+                    url: Some(url.to_string()),
+                    test_timeout_ms: Some(timeout_ms),
+                    max_concurrency: Some(1),
+                    ..Default::default()
+                },
+            )
+            .await;
+        match resp {
+            Ok(resp) => match resp.results.into_iter().next() {
+                Some(item) => match item.error.filter(|e| !e.is_empty()) {
+                    // A failure reports 0ms, which would otherwise read as the fastest server.
+                    None => return (item.latency_ms.unwrap_or(0), None),
+                    Some(e) => last = e,
+                },
+                None => {}
+            },
+            // The link itself failed; another endpoint will not fix that.
+            Err(e) => return (-1, Some(e.to_string())),
+        }
+    }
+    (-1, Some(last))
+}
+
+/// One server's result from `check_servers`, sent as the `server-checked` event the moment it is
+/// known. `run` ties it to the call that asked, since a row's Check can overlap a Test all.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Checked {
+    run: u32,
+    index: usize,
+    /// Milliseconds, or -1 when the server does not work.
+    latency_ms: i32,
+    error: Option<String>,
+    /// The public address traffic left from — present exactly when traffic went through.
+    exit_ip: Option<String>,
+    /// Where that is, when a geo service could say.
+    exit: Option<geo::Spot>,
+}
+
+/// Tests servers end to end, reporting each one as soon as it is done.
 ///
-/// Separate from `test_servers` because it costs a great deal more: it starts a second core to
-/// get a local port per server. The frontend runs it after a latency sweep, for the servers that
-/// answered, so the cost is paid only for servers there is a flag worth drawing for.
+/// A server works only if traffic goes *through* it and comes out somewhere, so each one is asked
+/// for its latency and then for its exit, in one go. Answering the first but not the second — a
+/// dial that succeeds and then carries nothing — is a server that does not work, and is reported
+/// as such. Placing the exit is separate: a geo service out of quota says nothing about the server.
+///
+/// One scratch core serves the whole run, with a local port per server; each result is emitted as
+/// `server-checked`, so the list fills in row by row instead of waiting for its slowest member.
+#[tauri::command]
+async fn check_servers(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    run: u32,
+    profiles: Vec<config::Profile>,
+    timeout_ms: Option<i32>,
+) -> Result<(), String> {
+    if profiles.is_empty() {
+        return Ok(());
+    }
+    let timeout_ms = timeout_ms.unwrap_or(5000);
+    let session = Arc::new(geo::ProbeSession::start(&state.core_path, &profiles).await?);
+    let cache = Arc::new(geo::PlaceCache::default());
+    let slots = Arc::new(tokio::sync::Semaphore::new(6));
+
+    let mut tasks = Vec::with_capacity(profiles.len());
+    for (index, profile) in profiles.into_iter().enumerate() {
+        let (app, link, session, cache, slots) = (
+            app.clone(),
+            state.link.clone(),
+            session.clone(),
+            cache.clone(),
+            slots.clone(),
+        );
+        tasks.push(tokio::spawn(async move {
+            let Ok(_slot) = slots.acquire_owned().await else { return };
+            let (mut latency_ms, mut error) = latency_of(&link, &profile, timeout_ms).await;
+            let (mut exit_ip, mut exit) = (None, None);
+
+            if latency_ms >= 0 {
+                let seen = tokio::task::spawn_blocking(move || {
+                    // Once more after a pause: the first request through a fresh port can lose
+                    // the race with the server's own handshake.
+                    session.exit_of(index).or_else(|_| {
+                        std::thread::sleep(std::time::Duration::from_millis(800));
+                        session.exit_of(index)
+                    }).map(|seen| {
+                        let placed = cache.exit(&seen);
+                        (seen, placed)
+                    })
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
+                match seen {
+                    Ok((seen, placed)) => {
+                        exit_ip = Some(seen.plain);
+                        exit = placed;
+                    }
+                    Err(e) => {
+                        latency_ms = -1;
+                        error = Some(format!("connects, but no traffic came out through it: {e}"));
+                    }
+                }
+            }
+
+            let _ = app.emit(
+                "server-checked",
+                Checked { run, index, latency_ms, error, exit_ip, exit },
+            );
+        }));
+    }
+    for task in tasks {
+        let _ = task.await;
+    }
+    if let Ok(session) = Arc::try_unwrap(session) {
+        session.shut_down().await;
+    }
+    Ok(())
+}
+
+/// Finds where each server is: its entry (the address, by DNS) and its exit (measured end to end).
+///
+/// Separate from `test_servers` because the exit half costs a great deal more: it starts a second
+/// core to get a local port per server. The frontend asks for exits only from servers that just
+/// answered a latency test. Entries cost one DNS lookup each and are asked first, on their own,
+/// so a new row has a real flag within seconds; `entries`/`exits` pick the halves.
 #[tauri::command]
 async fn locate_servers(
     state: State<'_, AppState>,
     profiles: Vec<config::Profile>,
+    entries: Option<bool>,
+    exits: Option<bool>,
 ) -> Result<Vec<geo::Located>, String> {
-    geo::locate(&state.core_path, &profiles).await
+    geo::locate(
+        &state.core_path,
+        &profiles,
+        entries.unwrap_or(true),
+        exits.unwrap_or(true),
+    )
+    .await
+}
+
+/// Where this machine is: its public address and roughly where that is, for the map's first dot.
+///
+/// Asked directly, so the frontend only asks it with the tunnel down — in VPN mode a direct
+/// request goes through the tunnel and would answer for the exit instead.
+#[tauri::command]
+async fn locate_me() -> Result<geo::Whereabouts, String> {
+    tokio::task::spawn_blocking(|| geo::whereabouts(None))
+        .await
+        .map_err(|e| format!("lookup panicked: {e}"))?
+}
+
+/// Where the running tunnel comes out, for the exit chip and the end of the map's route.
+///
+/// In proxy mode the address is asked through the local listener on `proxy_port`, because only
+/// traffic pointed at it goes through the tunnel. In VPN mode everything does, so a direct
+/// question already answers for the exit.
+#[tauri::command]
+async fn locate_exit(proxy_port: Option<u16>) -> Result<geo::Exit, String> {
+    tokio::task::spawn_blocking(move || geo::exit_addresses(proxy_port))
+        .await
+        .map_err(|e| format!("lookup panicked: {e}"))?
 }
 
 /// Where the data file lives, and where the socket directory is made.
@@ -355,6 +593,49 @@ fn preview_config(req: BuildRequest) -> Result<String, String> {
     serde_json::to_string_pretty(&config::build(&req)).map_err(|e| e.to_string())
 }
 
+/// Puts the icon in the top bar and makes closing the window hide it rather than quit.
+///
+/// The tray library is loaded at runtime and panics when it is missing, so its presence is checked
+/// first: without it the app keeps the old behaviour, where the window is the whole UI and closing
+/// it quits. Hiding a window with no icon to bring it back would leave a tunnel nobody can reach.
+#[cfg(target_os = "linux")]
+fn install_tray(app: &tauri::AppHandle) {
+    let available = ["libayatana-appindicator3.so.1", "libappindicator3.so.1"]
+        .iter()
+        .any(|name| {
+            let name = std::ffi::CString::new(*name).expect("no interior nul");
+            // SAFETY: a nul-terminated name; the handle is released again immediately.
+            let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_LAZY) };
+            if handle.is_null() {
+                return false;
+            }
+            unsafe { libc::dlclose(handle) };
+            true
+        });
+    if !available {
+        log::warn!("no appindicator library; running without a tray icon");
+        return;
+    }
+    if let Err(e) = tray::install(app) {
+        log::warn!("could not create the tray icon: {e}");
+        return;
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let handle = app.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // The tunnel is the point of the app and the window is only its controls, so
+                // closing the controls leaves the tunnel as it was. "Quit Nunya" really quits.
+                api.prevent_close();
+                if let Some(w) = handle.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+        });
+    }
+}
+
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -405,6 +686,19 @@ pub fn run() {
             let tunnel = transport::select::build(tunnel_kind, link.clone());
             log::info!("tunnel transport: {}", tunnel_kind.as_str());
 
+            // A saved system proxy on disk means the last run died holding it. Put it back now,
+            // before anything else: until this runs, every browser on the machine is pointed at a
+            // port nothing listens on.
+            let leftover = data_dir(app.handle())
+                .ok()
+                .and_then(|dir| sysproxy::read_saved(&dir).map(|saved| (dir, saved)));
+            let system_proxy = Arc::new(std::sync::Mutex::new(None));
+            if let Some((dir, saved)) = leftover {
+                log::warn!("the last session left the system proxy set; restoring it");
+                *system_proxy.lock().unwrap_or_else(|p| p.into_inner()) = Some(saved);
+                let _ = release_system_proxy(&dir, &system_proxy);
+            }
+
             app.manage(AppState {
                 link,
                 core_path: core_path.clone(),
@@ -412,7 +706,11 @@ pub fn run() {
                 runtime_dir,
                 tunnel,
                 tunnel_kind,
+                system_proxy,
             });
+
+            #[cfg(target_os = "linux")]
+            install_tray(app.handle());
 
             Ok(())
         })
@@ -427,9 +725,16 @@ pub fn run() {
             preview_config,
             test_servers,
             locate_servers,
+            check_servers,
+            locate_me,
+            locate_exit,
+            set_system_proxy,
+            clear_system_proxy,
             fetch_subscription,
             load_data,
             save_data,
+            #[cfg(target_os = "linux")]
+            tray::set_tray_status,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the application")
@@ -438,6 +743,9 @@ pub fn run() {
                 // A core left running would keep the TUN interface and its routes installed, so
                 // the machine would lose connectivity after the UI disappeared.
                 let state = app.state::<AppState>();
+                if let Ok(dir) = data_dir(app) {
+                    let _ = release_system_proxy(&dir, &state.system_proxy);
+                }
                 tauri::async_runtime::block_on(async {
                     if let Ok(resp) = state
                         .link

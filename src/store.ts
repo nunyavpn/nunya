@@ -33,23 +33,95 @@ export interface Server {
   /** A refresh dropped this server, but it is kept because the tunnel is running on it. */
   retired?: boolean;
   /**
-   * Where a sweep found this server actually exits, as a country code.
+   * Where the server's address is: its host name resolved and placed. Where the client connects.
    *
-   * Kept apart from `country` on purpose. `country` is read off the server's name and is what the
-   * row is *labelled* with; this is measured, and is what the row is *flagged* with. They are
-   * frequently different — a provider's "Germany" routinely exits in the United States — and
-   * overwriting the label with the measurement would silently rename the user's servers, which
-   * is not what a latency sweep is for.
+   * Known as soon as a server is added — it needs DNS, not a working server — so a new row shows
+   * a real flag at once instead of a guess from its name.
    */
-  exitCountry?: string;
+  entry?: Spot;
   /**
-   * The user named this one themselves, so the row shows that name instead of the country.
+   * Where its traffic actually leaves: the public address a request made *through* the server
+   * comes from, measured end to end. What a website sees, so it is what the row's flag shows.
    *
-   * Recorded rather than guessed. A share link's own name is usually the country and city again,
-   * which is why the row prefers the country — but a name someone typed is the one thing that is
-   * certainly not redundant, and there is no way to tell the two apart after the fact.
+   * Differs from `entry` whenever the server relays — a Cloudflare Workers proxy, a domestic server
+   * tunnelled on to a foreign one — and both are kept because the pair is the honest answer to
+   * "where is this server". Neither is ever used to relabel the row: `country` is read off the
+   * name and stays the label, and overwriting it with a measurement would silently rename the
+   * user's servers.
+   */
+  exit?: Spot;
+  /**
+   * The user named this one themselves.
+   *
+   * It once decided whether the row showed the name or a country; the row now always shows the
+   * config's name, so this is only a record. Kept because it costs nothing and cannot be
+   * reconstructed later.
    */
   renamed?: boolean;
+}
+
+/** A place an address was found to be. Mirrors `geo::Spot`, plus when it was measured. */
+export interface Spot {
+  ip: string;
+  /** Two-letter code, uppercase. */
+  country: string;
+  city: string | null;
+  lat: number | null;
+  lon: number | null;
+  /** The address's network (AS number), when the geo service reported it. */
+  asn?: number | null;
+  /** Who runs that network: the data center or hosting company. */
+  org?: string | null;
+  /** The CDN the address belongs to, if any; see `cdnOf`. */
+  cdn?: Cdn | null;
+  /** Unix ms. */
+  checkedAt: number;
+}
+
+/** CDNs a config can be fronted by. Detected in `geo::cdn_of`, by network or published ranges. */
+export type Cdn = "cloudflare" | "fastly";
+
+export const CDN_NAMES: Record<Cdn, string> = { cloudflare: "Cloudflare", fastly: "Fastly" };
+
+/**
+ * The CDN a config is fronted by: its address (the entry) is a CDN edge, which forwards to the
+ * real server. Such configs can be tuned by picking the edge address, which is what this is kept
+ * for. Taken from the entry only — an exit on a CDN's network is a Worker's egress, a different
+ * thing.
+ */
+export function cdnOf(server: Server): Cdn | null {
+  return server.entry?.cdn ?? null;
+}
+
+/**
+ * Where a server is, as every view shows it — its flag, its label, its city, its map dot.
+ *
+ * Measured, from its addresses, in the order they become known:
+ *
+ * 1. **exit** — after a full test, the public address its traffic leaves from. What a website
+ *    sees, so once known it is the answer.
+ * 2. **entry** — within seconds of adding, the address the config names (a domain resolved first).
+ *    For a Cloudflare-fronted config that is a Cloudflare node, and it is shown as one until the
+ *    test says where traffic really comes out.
+ * 3. **the name** — only until the address has been looked up. A share link's name is whatever
+ *    the provider typed, so it is a placeholder, never the answer.
+ *
+ * The city comes from the same measurement as the country, never mixed: an exit placed only to a
+ * country leaves the city blank rather than borrowing the entry's, which is somewhere else.
+ */
+export function located(server: Server): {
+  country: string;
+  city: string;
+  source: "exit" | "entry" | "name";
+} {
+  if (server.exit) return { country: server.exit.country, city: server.exit.city ?? "", source: "exit" };
+  if (server.entry) return { country: server.entry.country, city: server.entry.city ?? "", source: "entry" };
+  return { country: server.country, city: server.city, source: "name" };
+}
+
+/** Whether the server enters in one country and exits in another — a relay, or a tunnel. */
+export function isRelayed(server: Server): boolean {
+  return Boolean(server.entry && server.exit && server.entry.country !== server.exit.country);
 }
 
 /** Traffic allowance, as reported by a subscription's `subscription-userinfo` header. */
@@ -106,6 +178,12 @@ export interface Settings {
   proxyPort: number;
   /** Proxy mode: bind every interface rather than loopback, so other machines can use it. */
   allowLan: boolean;
+  /**
+   * Proxy mode: point the desktop's system proxy at the listener while connected, and restore it
+   * on disconnect. Widens what proxy mode covers to apps that follow the system setting — not to
+   * everything, which only VPN mode does.
+   */
+  systemProxy: boolean;
   /** "system" is faster; "gvisor" is the portable fallback for odd kernels. */
   stack: "system" | "gvisor";
   mtu: number;
@@ -127,6 +205,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // alias pointed at one of them keeps working.
   proxyPort: 2080,
   allowLan: false,
+  // Off: changing a system-wide setting is something to opt into, not something a client does
+  // because it was installed.
+  systemProxy: false,
   stack: "system",
   mtu: 1500,
   // Matches the Qt build's default, so an existing user's routing assumptions still hold.
@@ -147,6 +228,31 @@ export interface AppData {
 }
 
 export const MANUAL_GROUP_ID = "manual";
+
+/**
+ * Carries a server saved before entries existed over to the current shape: the old `exitCountry`
+ * and `exitAt` become `exit`. There was no entry then; the next check finds it.
+ */
+function migrateExits(servers: Server[]) {
+  for (const server of servers) {
+    const old = server as Server & {
+      exitCountry?: string;
+      exitAt?: { lat: number; lon: number; city: string | null };
+    };
+    if (old.exitCountry && !server.exit) {
+      server.exit = {
+        ip: "",
+        country: old.exitCountry,
+        city: old.exitAt?.city ?? null,
+        lat: old.exitAt?.lat ?? null,
+        lon: old.exitAt?.lon ?? null,
+        checkedAt: 0,
+      };
+    }
+    delete old.exitCountry;
+    delete old.exitAt;
+  }
+}
 
 function emptyData(): AppData {
   return {
@@ -220,6 +326,7 @@ class Store {
           // its default instead of `undefined` reaching the config builder.
           settings: { ...DEFAULT_SETTINGS, ...(parsed.settings ?? {}) },
         };
+        migrateExits(this.data.servers);
       }
       this.loadError = null;
     } catch (e) {
@@ -298,16 +405,17 @@ class Store {
 
   // ------------------------------------------------------------- mutations
 
-  addServers(groupId: string, servers: Omit<Server, "id" | "groupId">[]) {
+  /** Returns the servers as stored, ids included, so the caller can check them straight away. */
+  addServers(groupId: string, servers: Omit<Server, "id" | "groupId">[]): Server[] {
+    const added = servers.map((s) => ({ ...s, id: newId(), groupId }));
     this.update((data) => {
-      for (const s of servers) {
-        data.servers.push({ ...s, id: newId(), groupId });
-      }
+      data.servers.push(...added);
       // Selecting the first import saves a click on the most common first run.
       if (!data.selectedServerId && data.servers.length) {
         data.selectedServerId = data.servers[0].id;
       }
     });
+    return added;
   }
 
   /**
@@ -359,7 +467,8 @@ class Store {
           // which is often enough that the flag would never settle.
           // A measured exit survives a refresh; the label and city follow the provider, which
           // is what a refresh is for.
-          exitCountry: previous.exitCountry,
+          entry: previous.entry,
+          exit: previous.exit,
           renamed: previous.renamed,
           retired: false,
         };
@@ -386,20 +495,45 @@ class Store {
   }
 
   /**
-   * Records where servers were found to actually exit.
+   * Records where servers were found to be.
    *
-   * This overrides the guess taken from the server's name, and records that it did, so a later
-   * subscription refresh does not quietly put the guess back.
+   * Each half is written only when it was measured this time: a server that is down still gets
+   * its entry refreshed, and keeps the exit it last had rather than losing its flag.
    */
-  applyCountries(updates: { id: string; country: string }[]) {
-    const byId = new Map(updates.map((u) => [u.id, u.country]));
+  applyLocations(updates: { id: string; entry?: Spot; exit?: Spot }[]) {
+    const byId = new Map(updates.map((u) => [u.id, u]));
     this.update((data) => {
       for (const server of data.servers) {
-        const country = byId.get(server.id);
-        if (!country) continue;
-        // The flag only. The name, the city and the label are the user's and the provider's;
-        // this is the one thing the measurement is entitled to change.
-        server.exitCountry = country;
+        const found = byId.get(server.id);
+        if (!found) continue;
+        // The flag and the map dot only. The name, the city and the label are the user's and
+        // the provider's; these are the things the measurement is entitled to change.
+        if (found.entry) server.entry = found.entry;
+        if (found.exit) server.exit = found.exit;
+      }
+    });
+  }
+
+  /** Forgets where a server is, because its address changed and both places described the old one. */
+  clearLocations(id: string) {
+    this.update((data) => {
+      const server = data.servers.find((s) => s.id === id);
+      if (!server) return;
+      delete server.entry;
+      delete server.exit;
+    });
+  }
+
+  /**
+   * Drops any exit recorded at `ip`, this machine's own address: a server cannot exit from it, so
+   * such an exit is a probe that never went through the server. Cleans up what an earlier version
+   * saved before it knew to refuse them; the next check measures those servers properly.
+   */
+  forgetExitsAt(ip: string) {
+    if (!this.data.servers.some((s) => s.exit?.ip === ip)) return;
+    this.update((data) => {
+      for (const server of data.servers) {
+        if (server.exit?.ip === ip) delete server.exit;
       }
     });
   }

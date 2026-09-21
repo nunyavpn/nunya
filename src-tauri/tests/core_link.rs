@@ -415,6 +415,32 @@ async fn proxy_mode_is_accepted_by_the_core() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// The location probe's config — one `mixed` port per server, and a catch-all that refuses rather
+/// than going direct — is a shape no other config here has, so the core has to see it too.
+#[tokio::test]
+#[ignore = "needs a built core; set NUNYA_CORE_PATH"]
+async fn the_location_probe_is_accepted_by_the_core() {
+    let (link, proc, _dir) = connect_core().await;
+
+    let profiles = vec![sample_request().profile, sample_request().profile];
+    let cfg = config::build_probe(&profiles, &[20801, 20802]);
+    let resp: gen::ErrorResp = link
+        .call(
+            method::CHECK_CONFIG,
+            &gen::LoadConfigReq {
+                core_config: Some(cfg.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("CheckConfig round trip");
+
+    proc.stop().await;
+    if let Some(err) = resp.error.filter(|e| !e.is_empty()) {
+        panic!("rejected: {err}\n{}", serde_json::to_string_pretty(&cfg).unwrap());
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs a built core; set NUNYA_CORE_PATH"]
 async fn bypass_rules_survive_validation() {

@@ -36,7 +36,11 @@
   --off-soft: #fde8e9;
   --off-glow: rgb(242 84 91 / 26%);
 
-  --map-dot: #c3ccdd;
+  /* Land, and the borders between countries — drawn in the pane's own colour, so a border reads as
+     a gap between neighbours rather than a line laid over them. */
+  --map-land: #d3d9e5;
+  --map-border: #f5f7fb;
+  --map-label: #7a849b;
   --map-line: #2e90fa;
 
   --shadow: 0 2px 4px rgb(16 23 40 / 5%), 0 18px 46px -16px rgb(16 23 40 / 24%);
@@ -76,7 +80,9 @@
     --off-soft: #2b1418;
     --off-glow: rgb(242 84 91 / 38%);
 
-    --map-dot: #232f49;
+    --map-land: #1c263c;
+    --map-border: #0c1222;
+    --map-label: #6d7892;
 
     --shadow: 0 2px 4px rgb(0 0 0 / 40%), 0 22px 54px -18px rgb(0 0 0 / 75%);
     --shadow-pop: 0 14px 40px -12px rgb(0 0 0 / 72%);
@@ -102,6 +108,31 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   overflow: hidden;
+}
+
+/* Styled scrollbars, for WebKitGTK's sake more than for looks. Unstyled, it draws GTK overlay
+   indicators that flash when a scrollable area appears — opening a sheet — and on Linux that fade
+   is not repainted until the pointer moves, leaving a stray bar over the sheet. A styled
+   scrollbar is drawn by WebKit itself as a plain element: no flash, no fade, nothing left behind. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--faint);
 }
 
 button {
@@ -448,6 +479,130 @@ button:disabled {
    the row, which is exactly when they are visible. Gating clicks on `:hover` instead makes them
    unreachable to anything that hit-tests before it moves — every automation tool, and the
    accessibility layer — for no gain a real cursor would ever notice. */
+/* A relay's entry flag, tucked on the corner of its exit flag. */
+.flag {
+  position: relative;
+}
+
+.flag.via {
+  position: absolute;
+  right: -6px;
+  bottom: -5px;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1.5px solid var(--surface);
+  box-sizing: content-box;
+}
+
+/* A CDN-fronted config: its address is a CDN edge. Beside the name, so it reads as a property of
+   the config rather than of where it is. */
+.cdn-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  vertical-align: 1px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--raised);
+  border: 1px solid var(--line);
+}
+
+.cdn-tag b {
+  font-weight: 700;
+}
+
+.cdn-tag.cloudflare b {
+  color: #f38020;
+}
+
+.cdn-tag.fastly b {
+  color: #ff282d;
+}
+
+.more-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: calc(100% - 32px);
+  margin: 6px 16px 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--line-2);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.more-row span {
+  margin-left: auto;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.more-row:hover {
+  background: var(--brand-soft);
+  border-color: var(--brand-fill);
+}
+
+.ping.checking {
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/* The row's ⋯ menu. Fixed to the viewport; see `LocationsPanel.openMenu`. */
+.rmenu {
+  position: fixed;
+  z-index: 20;
+  min-width: 150px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  box-shadow: var(--shadow-pop);
+}
+
+.rmenu-i {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.rmenu-i:hover,
+.rmenu-i:focus-visible {
+  background: var(--raised);
+  color: var(--ink);
+  outline: none;
+}
+
+.rmenu-i.danger {
+  color: var(--off);
+}
+
+.rmenu-i.danger:hover,
+.rmenu-i.danger:focus-visible {
+  background: var(--off-soft);
+  color: var(--off);
+}
+
+.rmenu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+
 .loc-wrap:hover .loc-acts,
 .loc-wrap:focus-within .loc-acts {
   opacity: 1;
@@ -596,8 +751,20 @@ button:disabled {
   font-size: 13.5px;
   font-weight: 600;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The name gives way, the CDN tag beside it does not. */
+.loc-name .nm {
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.loc-name .cdn-tag {
+  flex: none;
 }
 
 .loc-sub {
@@ -696,6 +863,47 @@ button:disabled {
   width: 100%;
   height: 100%;
   display: block;
+  cursor: grab;
+  /* The canvas takes the drag and the pinch itself; the page must not scroll or zoom instead. */
+  touch-action: none;
+}
+
+.mapcanvas.dragging {
+  cursor: grabbing;
+}
+
+/* Zoom controls, top-right of the map. */
+.mapzoom {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+
+.mapzoom button {
+  width: 32px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.mapzoom button + button {
+  border-top: 1px solid var(--line);
+}
+
+.mapzoom button:hover {
+  background: var(--raised);
+  color: var(--brand);
 }
 
 .pin {
@@ -713,9 +921,54 @@ button:disabled {
   box-shadow: 0 0 0 1px var(--brand-glow);
 }
 
+/* The user, not a server: a ring rather than a dot, in ink rather than the brand blue every
+   server is drawn in, so the two can never be mistaken for each other. */
 .pin.you i {
-  background: var(--faint);
-  box-shadow: none;
+  width: 14px;
+  height: 14px;
+  background: var(--surface);
+  border: 3.5px solid var(--ink-2);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.pin.you.here i {
+  width: 16px;
+  height: 16px;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 7px rgb(0 0 0 / 8%);
+}
+
+/* A node on the route between the user and the exit: bold, in the route's colour. */
+.pin.hop i {
+  width: 14px;
+  height: 14px;
+  background: var(--map-line);
+  border: 3px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--map-line);
+}
+
+.pin.hop b {
+  border-color: var(--map-line);
+}
+
+/* While a route is drawn, every dot not on it steps back — still there, still clickable, and
+   back to full strength under the cursor. */
+#pins.routing .pin:not(.act):not(.hop):not(.you) i {
+  opacity: 0.4;
+  transform: scale(0.75);
+}
+
+#pins.routing .pin.pick:not(.act):not(.hop):hover i,
+#pins.routing .pin.pick:not(.act):not(.hop):focus-visible i {
+  opacity: 1;
+  transform: scale(1.35);
+}
+
+/* The route's ends are bold too: the exit is already the large pulsing dot; the user's ring
+   is drawn heavier while it is where the route starts. */
+#pins.routing .pin.you i {
+  border-width: 4px;
+  border-color: var(--ink);
 }
 
 .pin.act i {
@@ -757,6 +1010,189 @@ button:disabled {
   }
 }
 
+/* A dot that selects a server: a bigger hit target than the 9px dot, and a hover label. */
+.pin.pick {
+  padding: 6px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.pin.pick:hover i,
+.pin.pick:focus-visible i {
+  transform: scale(1.35);
+}
+
+.pin.pick i {
+  transition: transform 0.12s ease;
+}
+
+.pin b.hover {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.pin.pick:hover b.hover,
+.pin.pick:focus-visible b.hover {
+  opacity: 1;
+}
+
+.pin.pick:hover,
+.pin.pick:focus-visible {
+  z-index: 3;
+}
+
+.mappane.picking .pin b.hover {
+  opacity: 0;
+}
+
+/* The map picker: a city's servers, opened from its dot. */
+.mpick {
+  position: absolute;
+  z-index: 6;
+  width: 272px;
+  max-height: min(360px, calc(100% - 20px));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+.mpick.details {
+  width: 250px;
+}
+
+.mpick-facts {
+  margin: 0;
+  padding: 10px 14px 4px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  font-size: 12px;
+}
+
+.mpick-facts dt {
+  color: var(--muted);
+}
+
+.mpick-facts dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  /* Between words where it can ("Example Telecom · AS64501"); inside one only when it must —
+     an IPv6 address has no spaces to break at. */
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.mpick-note {
+  margin: 4px 14px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.mpick-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mpick-t {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mpick-t b {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.mpick-t span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mpick-fast {
+  margin: 10px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--brand-fill), var(--brand));
+  color: #fff;
+  box-shadow: 0 5px 16px -7px var(--brand-glow);
+}
+
+.mpick-fast .k {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.mpick-fast .v {
+  font-size: 11px;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mpick-fast:disabled {
+  background: var(--raised);
+  color: var(--faint);
+  box-shadow: none;
+}
+
+.mpick-list {
+  overflow-y: auto;
+  padding: 2px 6px 8px;
+}
+
+.mpick-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.mpick-row:hover {
+  background: var(--raised);
+}
+
+.mpick-row.on {
+  background: var(--live-soft);
+}
+
+.mpick-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mpick-main b {
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mpick-main span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .pin b {
   position: absolute;
   left: 50%;
@@ -770,6 +1206,12 @@ button:disabled {
   border: 1px solid var(--line-2);
   border-radius: 6px;
   padding: 3px 8px;
+}
+
+.pin.below b {
+  top: auto;
+  bottom: -9px;
+  transform: translate(-50%, 100%);
 }
 
 /* ---------------------------------------------------------------- status card */
@@ -926,6 +1368,28 @@ button:disabled {
   user-select: text;
 }
 
+.tag.place {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tag.place b {
+  margin-right: 0;
+}
+
+.flag.mini {
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.tag.ip b {
+  color: var(--faint);
+  font-weight: 600;
+  margin-right: 6px;
+}
+
 .tag b {
   color: var(--live);
   font-weight: 500;
@@ -1021,6 +1485,73 @@ button:disabled {
   border: 1px solid var(--line-2);
   border-radius: 5px;
   padding: 2px 7px;
+}
+
+/* The Add sheet's tabs sit under the head, full width, like the editor's segmented rows. */
+.addtabs {
+  flex: none;
+  padding: 14px 18px 0;
+}
+
+.addtabs .seg {
+  width: 100%;
+}
+
+.addtabs .seg button {
+  flex: 1;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.dropzone {
+  flex: none;
+  margin: 14px 18px 0;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px;
+  border: 1px dashed var(--line-2);
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible,
+.dropzone.over {
+  border-color: var(--brand-fill);
+  border-style: solid;
+  color: var(--brand);
+  outline: none;
+}
+
+.dropzone.over {
+  background: var(--brand-soft);
+}
+
+.dz-t {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.dz-d {
+  font-size: 11.5px;
+}
+
+.fnote.qrnote {
+  margin: 10px 18px 0;
+  flex: 1;
+}
+
+.fnote.bad {
+  color: var(--off);
 }
 
 .paste {
@@ -1413,6 +1944,41 @@ button:disabled {
 
 /* ------------------------------------------------ advanced */
 
+/* The settings form, locked while connected. The fieldset is only a disabling wrapper. */
+.set-lock {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.set-lock:disabled {
+  opacity: 0.5;
+}
+
+.lockbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 18px 0;
+  padding: 10px 12px 10px 14px;
+  border-radius: 10px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.lockbar span {
+  flex: 1;
+}
+
+.lockbar .ghost {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .set-scroll {
   flex: 1;
   min-height: 0;
@@ -1664,6 +2230,127 @@ button:disabled {
   flex: 1 0 auto;
 }
 
+/* ALPN tags: selected ones first and numbered, since their order is the preference order. */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.atag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 4px 10px 4px 5px;
+  border-radius: 7px;
+  border: 1px dashed var(--line-2);
+  color: var(--muted);
+}
+
+.atag .n {
+  display: inline-grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--sunk);
+}
+
+.atag.on {
+  border: 1px solid var(--brand-fill);
+  background: var(--brand-soft);
+  color: var(--ink);
+  cursor: grab;
+}
+
+.atag.on .n {
+  background: var(--brand-fill);
+  color: #fff;
+}
+
+.atag.dragging {
+  opacity: 0.4;
+}
+
+/* ---------------------------------------------------------------- share */
+
+.st-share {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+}
+
+.st-share:hover:not(:disabled) {
+  color: var(--brand);
+  border-color: var(--brand-fill);
+}
+
+.st-share:disabled {
+  color: var(--faint);
+  border-color: var(--line);
+}
+
+.share-body {
+  padding: 16px 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.share-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* White in both themes: the code is drawn dark-on-light because that is what scanners read. */
+.share-qr {
+  align-self: center;
+  padding: 10px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  line-height: 0;
+}
+
+.share-body .fnote {
+  margin: 0;
+}
+
+.fnote.warn {
+  color: var(--warn);
+}
+
+.val.sharelink {
+  width: 100%;
+  text-align: left;
+  resize: none;
+  line-height: 1.5;
+  word-break: break-all;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* Only for the clipboard fallback, which needs a real, selectable element in the document. */
+.offscreen {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  opacity: 0;
+}
+
 .fnote {
   margin: 2px 0 8px;
   font-size: 11.5px;
@@ -1672,14 +2359,6 @@ button:disabled {
 }
 
 /* The generated link: full width and wrapping, unlike the single-line values above it. */
-.val.linkout {
-  width: 100%;
-  text-align: left;
-  resize: none;
-  line-height: 1.5;
-  word-break: break-all;
-}
-
 /* The footer doubles as the validity line, so it has to be able to say something is wrong. */
 .gpick.bad {
   color: var(--off);

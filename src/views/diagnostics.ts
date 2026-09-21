@@ -43,9 +43,13 @@ export class DiagnosticsPanel {
     private callbacks: DiagnosticsCallbacks,
   ) {}
 
+  /** Whether this is the panel on screen; see `BypassPanel.active`. */
+  active = false;
+
   update(model: DiagnosticsModel) {
     this.model = model;
-    if (!this.root.hidden) this.render();
+    // Not `root.hidden`: the container is shared, and it is visible whenever any panel is.
+    if (this.active) this.render();
   }
 
   render() {

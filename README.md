@@ -9,8 +9,12 @@ Nunya supports one transport — TUN — and a small set of protocols. That cons
 with no proxy mode there is no partial coverage, so "the device is in the tunnel" is a claim the UI
 can make honestly.
 
-It does not implement system proxy, a mixed inbound, OTP, global hotkeys, speed tests, WARP
-registration, the dashboard installer, or diagnostics capture.
+It does not implement OTP, global hotkeys, speed tests, WARP registration, the dashboard installer,
+or diagnostics capture.
+
+Proxy mode has since been added alongside TUN — a local SOCKS/HTTP listener, optionally set as the
+desktop's system proxy while connected — for machines where a TUN cannot be had. It gives up the
+whole-device claim, and the UI says so rather than making it.
 
 Both this repository and the core are forks of [Throne](https://github.com/throneproj/Throne),
 which is GPL-3.0; so is this.
