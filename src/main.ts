@@ -13,7 +13,17 @@ import {
   type Spot,
 } from "./store";
 import { fastestFirst, type QuickKind } from "./quick";
-import { describe, parseShareLink, toShareLink, type Profile } from "./share";
+import {
+  describe,
+  dnsAddressOf,
+  extractWgQuick,
+  parseShareLink,
+  toShareLink,
+  toWgQuick,
+  wgQuickRefusal,
+  type Profile,
+} from "./share";
+import { shieldState } from "./shield";
 import { SUPPORT } from "./support";
 import { advance, firstDay, total, type Bytes } from "./usage";
 import { icon } from "./views/icons";
@@ -57,6 +67,11 @@ let home: Whereabouts | null = null;
 /** Where the running tunnel comes out, once measured. */
 let exitPlace: Whereabouts | null = null;
 let tunnelDevice: string | null = null;
+/**
+ * Why the last attempt to connect failed, or why a running tunnel stopped: the rail shield's red.
+ * Cleared when a new attempt starts or the user disconnects, never by itself; see `shield.ts`.
+ */
+let tunnelFault: string | null = null;
 
 /** Cumulative counters from the previous poll, so the UI can show a rate rather than a total. */
 let lastCounters = { uplink: 0, downlink: 0, at: 0 };
@@ -501,6 +516,26 @@ function refresh() {
   const { pins, route } = buildMap(server);
   map.setPins(pins, route);
   syncTray(server, blockedReason() === null);
+  paintShield();
+}
+
+/** What the shield last showed, so the once-a-second refresh does not rebuild it. */
+let shieldShown = "";
+
+/**
+ * The shield at the top of the rail: whether the tunnel is working, on every screen, since the
+ * panels that replace the list hide the status card's detail. See `shield.ts` for the states.
+ */
+function paintShield() {
+  const shield = shieldState({ connection, mode: store.settings().mode, fault: tunnelFault, exit: exitIps });
+  const shown = `${shield.tone}|${shield.glyph}|${shield.label}`;
+  if (shown === shieldShown) return;
+  shieldShown = shown;
+  const logo = qs<HTMLElement>(".logo");
+  logo.className = `logo ${shield.tone}`;
+  logo.title = shield.label;
+  logo.setAttribute("aria-label", shield.label);
+  logo.replaceChildren(icon(shield.glyph, 19));
 }
 
 /** What was last sent to the tray, so the once-a-second uptime refresh does not resend it. */
@@ -881,6 +916,7 @@ async function connect() {
   }
 
   connection = "connecting";
+  tunnelFault = null;
   tunnelEpoch++;
   exitPlace = null;
   exitIps = null;
@@ -903,6 +939,7 @@ async function connect() {
     await applySystemProxy();
   } catch (e) {
     connection = "off";
+    tunnelFault = `the connection could not start (${String(e)})`;
     log(`[ui] start failed: ${String(e)}`);
     // Surface the core's own words; it knows more about the failure than we do.
     readiness = readiness ? { ...readiness, ready: false, detail: String(e) } : readiness;
@@ -945,6 +982,8 @@ async function disconnect() {
   }
   saveUsage();
   usageServerId = null;
+  // Asked for, so whatever went wrong before is no longer the state to report.
+  tunnelFault = null;
   systemProxyOn = false;
   systemProxyError = null;
   connection = "off";
@@ -1367,7 +1406,10 @@ function buildAddServers(close: () => void) {
       subscriptions = [];
       rejected = [];
 
-      for (const line of raw.split(/\s+/).filter(Boolean)) {
+      // A wg-quick config spans lines and has spaces in it, so it is lifted out whole before the
+      // rest is read a word at a time; see `extractWgQuick`.
+      const { configs, rest } = extractWgQuick(raw);
+      for (const line of [...configs, ...rest.split(/\s+/).filter(Boolean)]) {
         const item = classify(line);
         if (item.kind === "server") servers.push(item.server);
         else if (item.kind === "subscription") subscriptions.push({ url: item.url, name: item.name });
@@ -2005,8 +2047,14 @@ function openEditServer(server: Server) {
  * shared. The standard `vless://` / `vmess://` / `trojan://` form is what v2rayNG, Hiddify and
  * Streisand all scan.
  *
- * The sheet says plainly that the link is the credential. A QR code on screen looks like a harmless
- * picture, and anyone who photographs it can use the server exactly as the user does.
+ * A WireGuard server can also be shared as a wg-quick config, and opens on it: the official
+ * WireGuard apps — most people's phone client for WireGuard — scan only that, not a link. A WARP
+ * server says why it cannot be (`wgQuickRefusal`) and opens on the link instead. The config's DNS
+ * line comes from the app's DNS setting when that names an address; when it names a host, the
+ * sheet says so rather than choosing a resolver for the user.
+ *
+ * The sheet says plainly that what it shows is the credential. A QR code on screen looks like a
+ * harmless picture, and anyone who photographs it can use the server exactly as the user does.
  */
 function openShareServer(server: Server) {
   let link: string;
@@ -2017,43 +2065,123 @@ function openShareServer(server: Server) {
     return;
   }
 
+  const wireguard = server.profile.protocol === "wireguard";
+  const refusal = wireguard ? wgQuickRefusal(server.profile) : null;
+  const dnsSetting = store.settings().dns;
+  const dns = dnsAddressOf(dnsSetting);
+  const config = wireguard && !refusal ? toWgQuick(server.profile, dns ? [dns] : []) : null;
+  let format: "link" | "config" = config ? "config" : "link";
+
   openSheet((close) => {
-    const copyButton = h("button", { class: "btn brand" }, "Copy link") as HTMLButtonElement;
+    const body = h("div", { class: "share-body" });
+    const copyButton = h("button", { class: "btn brand" }) as HTMLButtonElement;
     let reset = 0;
+    const copyLabel = () => (format === "config" ? "Copy config" : "Copy link");
     copyButton.onclick = async () => {
-      const copied = await copyText(link);
+      const text = format === "config" ? config : link;
+      if (!text) return;
+      const copied = await copyText(text);
       copyButton.textContent = copied ? "Copied" : "Copy failed";
       window.clearTimeout(reset);
-      reset = window.setTimeout(() => (copyButton.textContent = "Copy link"), 1600);
+      reset = window.setTimeout(() => (copyButton.textContent = copyLabel()), 1600);
     };
 
-    const linkBox = h("textarea", {
-      class: "val sharelink",
-      readonly: true,
-      rows: 4,
-      spellcheck: false,
-      "aria-label": "Share link",
-      onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
-    }) as HTMLTextAreaElement;
-    linkBox.value = link;
+    const textBox = (value: string, label: string, rows: number, extra = "") => {
+      const box = h("textarea", {
+        class: `val sharelink${extra}`,
+        readonly: true,
+        rows,
+        spellcheck: false,
+        "aria-label": label,
+        onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
+      }) as HTMLTextAreaElement;
+      box.value = value;
+      return box;
+    };
+
+    const paint = () => {
+      window.clearTimeout(reset);
+      copyButton.textContent = copyLabel();
+      copyButton.disabled = format === "config" && !config;
+
+      const choice = wireguard
+        ? h(
+            "span",
+            { class: "seg share-format", role: "radiogroup", "aria-label": "Share as" },
+            ...(
+              [
+                ["config", "WireGuard config"],
+                ["link", "Link"],
+              ] as const
+            ).map(([key, text]) =>
+              h(
+                "button",
+                {
+                  class: key === format ? "on" : "",
+                  role: "radio",
+                  "aria-checked": String(key === format),
+                  onclick: () => {
+                    format = key;
+                    paint();
+                  },
+                },
+                text,
+              ),
+            ),
+          )
+        : null;
+
+      const shown =
+        format === "config"
+          ? config
+            ? [
+                h("div", { class: "share-qr" }, qrCode(config, 248)),
+                h("p", { class: "fnote" }, "Scan with the WireGuard app: Add a tunnel, then Create from QR code."),
+                // Tall enough for every line, and a row for the horizontal scrollbar a long key may
+                // need: the sheet focuses its first text box on open, which puts the caret at the end
+                // and would otherwise scroll the [Interface] header out of view.
+                textBox(config, "WireGuard config", config.trimEnd().split("\n").length + 1, " wgconf"),
+                dns
+                  ? null
+                  : h(
+                      "p",
+                      { class: "fnote warn" },
+                      `There is no DNS line: your DNS setting (${dnsSetting}) names a host, not an address. ` +
+                        "Add one in the WireGuard app, or names may not resolve through the tunnel.",
+                    ),
+                h(
+                  "p",
+                  { class: "fnote warn" },
+                  "The config contains this server's private key. Anyone who has it can use the server.",
+                ),
+              ]
+            : [h("p", { class: "fnote warn" }, refusal ?? "")]
+          : [
+              h("div", { class: "share-qr" }, qrCode(link)),
+              // Nunya first: it is the client this link is written for. It has no phone app, so a
+              // phone is pointed at the kind of client rather than at another product by name.
+              h(
+                "p",
+                { class: "fnote" },
+                "Import it in Nunya on another device, or scan it on a phone with a client that reads share links.",
+              ),
+              textBox(link, "Share link", 4),
+              h(
+                "p",
+                { class: "fnote warn" },
+                "The link contains this server's credentials. Anyone who has it can use the server.",
+              ),
+            ];
+
+      render(body, h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`), choice, ...shown);
+    };
+    paint();
 
     return h(
       "div",
       { class: "app sheet share", role: "dialog", "aria-label": "Share server" },
       sheetHead("Share server", close),
-      h(
-        "div",
-        { class: "share-body" },
-        h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`),
-        h("div", { class: "share-qr" }, qrCode(link)),
-        h("p", { class: "fnote" }, "Scan with a phone client such as v2rayNG, Hiddify or Streisand."),
-        linkBox,
-        h(
-          "p",
-          { class: "fnote warn" },
-          "The link contains this server's credentials. Anyone who has it can use the server.",
-        ),
-      ),
+      body,
       h(
         "div",
         { class: "sheet-foot" },
@@ -2120,7 +2248,7 @@ function paintRail() {
     button.appendChild(icon(glyph, size));
     button.addEventListener("click", () => show(name));
   }
-  qs(".logo").appendChild(icon("shield-check", 19));
+  paintShield();
 }
 
 // ---------------------------------------------------------------- boot
@@ -2167,6 +2295,7 @@ void listen<boolean>("core-connection", async (connected) => {
     // What was counted before the core went is real traffic; only the last poll's worth is lost.
     saveUsage();
     usageServerId = null;
+    tunnelFault = "the core stopped while connected";
     if (systemProxyOn) void invoke("clear_system_proxy").catch(() => {});
     systemProxyOn = false;
     exitIps = null;
