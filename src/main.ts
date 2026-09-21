@@ -24,6 +24,7 @@ import {
   type Profile,
 } from "./share";
 import { shieldState } from "./shield";
+import { SUPPORT } from "./support";
 import { advance, firstDay, total, type Bytes } from "./usage";
 import { icon } from "./views/icons";
 import { BypassPanel } from "./views/bypass";
@@ -36,6 +37,7 @@ import { StatusCard, type ConnectionState, type PlaceLine } from "./views/status
 import { ProfileEditor } from "./views/editor";
 import { qrCode, readQrCode } from "./views/qr";
 import { quickOptions } from "./views/quickpick";
+import { SupportPanel } from "./views/support";
 import { shortDate, usageBody } from "./views/usage";
 
 /** Mirrors the Rust `Readiness` struct. */
@@ -124,15 +126,20 @@ const diagnostics = new DiagnosticsPanel(panelHost, {
   },
   onPreviewConfig: () => invoke<string>("preview_config", buildRequest()),
 });
+const support = new SupportPanel(panelHost, SUPPORT, {
+  onOpen: (url) => void openExternal(url),
+  onCopy: (text) => copyText(text),
+});
 
 /** Which panel the rail is showing. `vpn` means the locations list, which is the default. */
-type Screen = "vpn" | "rules" | "settings" | "diagnostics";
+type Screen = "vpn" | "rules" | "settings" | "support" | "diagnostics";
 let screen: Screen = "vpn";
 
 const RAIL: Record<Screen, string> = {
   vpn: "#nav-vpn",
   rules: "#nav-rules",
   settings: "#nav-settings",
+  support: "#nav-support",
   diagnostics: "#nav-diagnostics",
 };
 
@@ -150,10 +157,12 @@ function show(next: Screen) {
 
   bypass.active = screen === "rules";
   settings.active = screen === "settings";
+  support.active = screen === "support";
   diagnostics.active = screen === "diagnostics";
 
   if (screen === "rules") bypass.render();
   else if (screen === "settings") settings.render();
+  else if (screen === "support") support.render();
   else if (screen === "diagnostics") diagnostics.render();
 }
 
@@ -2191,6 +2200,23 @@ function openShareServer(server: Server) {
  * the app's origin — reject, so the old selection-and-`execCommand` route is kept as a fallback
  * rather than reporting a copy that did not happen.
  */
+/**
+ * Opens a page in the system browser. In the app that is Rust's `open_external`, which opens only
+ * allow-listed https pages; in the browser preview there is no Rust side, and a new tab is the
+ * nearest thing.
+ */
+async function openExternal(url: string) {
+  if (!inTauri) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    await invoke("open_external", { url });
+  } catch (e) {
+    log(`[ui] could not open ${url}: ${String(e)}`);
+  }
+}
+
 async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -2213,6 +2239,7 @@ function paintRail() {
     ["vpn", "shield", 20],
     ["rules", "globe", 20],
     ["settings", "sliders", 20],
+    ["support", "heart", 18],
     ["diagnostics", "activity", 18],
   ];
 
