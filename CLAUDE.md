@@ -517,6 +517,18 @@ to another client. Round-tripping is the contract:
 `parseShareLink(toShareLink(p))` must equal `p`, which is why the WebSocket `?ed=N` parameter is
 written back into the path it was lifted out of.
 
+**WireGuard also shares as a wg-quick config** (`toWgQuick`), and its share sheet opens on it: the
+official WireGuard apps scan only `[Interface]`/`[Peer]` text, never a `wireguard://` link. The
+config carries `AllowedIPs = 0.0.0.0/0, ::/0` (what this client does with a tunnel), the name in a
+`# Name =` comment wg-quick skips, and a `DNS` line from the app's DNS setting when that names an
+address (`dnsAddressOf`; a host name gives none, and the sheet says so rather than picking a
+resolver). **WARP is refused by name** (`wgQuickRefusal`): wg-quick has no place for `reserved`,
+and the official apps would connect without it and carry nothing. The inverse, `parseWgQuick`,
+lets such a config be pasted or scanned back — `parseShareLink` detects it — and refuses by name
+what it cannot carry: a `PresharedKey`, AmneziaWG's `Jc`/`S1`/`H1`… keys, more than one peer. The
+paste box lifts configs out whole (`extractWgQuick`) before reading the rest a word at a time.
+Round-tripping holds here too: `parseWgQuick(toWgQuick(p))` equals `p`, guarded in `share.test.ts`.
+
 The name is a separate field, and an explicit rename sets `Server.renamed`. The list, the tray and
 Quick Connect show the config's name; the location is shown beside it, never instead of it.
 

@@ -13,7 +13,16 @@ import {
   type Spot,
 } from "./store";
 import { fastestFirst, type QuickKind } from "./quick";
-import { describe, parseShareLink, toShareLink, type Profile } from "./share";
+import {
+  describe,
+  dnsAddressOf,
+  extractWgQuick,
+  parseShareLink,
+  toShareLink,
+  toWgQuick,
+  wgQuickRefusal,
+  type Profile,
+} from "./share";
 import { shieldState } from "./shield";
 import { advance, firstDay, total, type Bytes } from "./usage";
 import { icon } from "./views/icons";
@@ -1388,7 +1397,10 @@ function buildAddServers(close: () => void) {
       subscriptions = [];
       rejected = [];
 
-      for (const line of raw.split(/\s+/).filter(Boolean)) {
+      // A wg-quick config spans lines and has spaces in it, so it is lifted out whole before the
+      // rest is read a word at a time; see `extractWgQuick`.
+      const { configs, rest } = extractWgQuick(raw);
+      for (const line of [...configs, ...rest.split(/\s+/).filter(Boolean)]) {
         const item = classify(line);
         if (item.kind === "server") servers.push(item.server);
         else if (item.kind === "subscription") subscriptions.push({ url: item.url, name: item.name });
@@ -2026,8 +2038,14 @@ function openEditServer(server: Server) {
  * shared. The standard `vless://` / `vmess://` / `trojan://` form is what v2rayNG, Hiddify and
  * Streisand all scan.
  *
- * The sheet says plainly that the link is the credential. A QR code on screen looks like a harmless
- * picture, and anyone who photographs it can use the server exactly as the user does.
+ * A WireGuard server can also be shared as a wg-quick config, and opens on it: the official
+ * WireGuard apps — most people's phone client for WireGuard — scan only that, not a link. A WARP
+ * server says why it cannot be (`wgQuickRefusal`) and opens on the link instead. The config's DNS
+ * line comes from the app's DNS setting when that names an address; when it names a host, the
+ * sheet says so rather than choosing a resolver for the user.
+ *
+ * The sheet says plainly that what it shows is the credential. A QR code on screen looks like a
+ * harmless picture, and anyone who photographs it can use the server exactly as the user does.
  */
 function openShareServer(server: Server) {
   let link: string;
@@ -2038,43 +2056,117 @@ function openShareServer(server: Server) {
     return;
   }
 
+  const wireguard = server.profile.protocol === "wireguard";
+  const refusal = wireguard ? wgQuickRefusal(server.profile) : null;
+  const dnsSetting = store.settings().dns;
+  const dns = dnsAddressOf(dnsSetting);
+  const config = wireguard && !refusal ? toWgQuick(server.profile, dns ? [dns] : []) : null;
+  let format: "link" | "config" = config ? "config" : "link";
+
   openSheet((close) => {
-    const copyButton = h("button", { class: "btn brand" }, "Copy link") as HTMLButtonElement;
+    const body = h("div", { class: "share-body" });
+    const copyButton = h("button", { class: "btn brand" }) as HTMLButtonElement;
     let reset = 0;
+    const copyLabel = () => (format === "config" ? "Copy config" : "Copy link");
     copyButton.onclick = async () => {
-      const copied = await copyText(link);
+      const text = format === "config" ? config : link;
+      if (!text) return;
+      const copied = await copyText(text);
       copyButton.textContent = copied ? "Copied" : "Copy failed";
       window.clearTimeout(reset);
-      reset = window.setTimeout(() => (copyButton.textContent = "Copy link"), 1600);
+      reset = window.setTimeout(() => (copyButton.textContent = copyLabel()), 1600);
     };
 
-    const linkBox = h("textarea", {
-      class: "val sharelink",
-      readonly: true,
-      rows: 4,
-      spellcheck: false,
-      "aria-label": "Share link",
-      onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
-    }) as HTMLTextAreaElement;
-    linkBox.value = link;
+    const textBox = (value: string, label: string, rows: number, extra = "") => {
+      const box = h("textarea", {
+        class: `val sharelink${extra}`,
+        readonly: true,
+        rows,
+        spellcheck: false,
+        "aria-label": label,
+        onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
+      }) as HTMLTextAreaElement;
+      box.value = value;
+      return box;
+    };
+
+    const paint = () => {
+      window.clearTimeout(reset);
+      copyButton.textContent = copyLabel();
+      copyButton.disabled = format === "config" && !config;
+
+      const choice = wireguard
+        ? h(
+            "span",
+            { class: "seg share-format", role: "radiogroup", "aria-label": "Share as" },
+            ...(
+              [
+                ["config", "WireGuard config"],
+                ["link", "Link"],
+              ] as const
+            ).map(([key, text]) =>
+              h(
+                "button",
+                {
+                  class: key === format ? "on" : "",
+                  role: "radio",
+                  "aria-checked": String(key === format),
+                  onclick: () => {
+                    format = key;
+                    paint();
+                  },
+                },
+                text,
+              ),
+            ),
+          )
+        : null;
+
+      const shown =
+        format === "config"
+          ? config
+            ? [
+                h("div", { class: "share-qr" }, qrCode(config, 248)),
+                h("p", { class: "fnote" }, "Scan with the WireGuard app: Add a tunnel, then Create from QR code."),
+                // Tall enough for every line, and a row for the horizontal scrollbar a long key may
+                // need: the sheet focuses its first text box on open, which puts the caret at the end
+                // and would otherwise scroll the [Interface] header out of view.
+                textBox(config, "WireGuard config", config.trimEnd().split("\n").length + 1, " wgconf"),
+                dns
+                  ? null
+                  : h(
+                      "p",
+                      { class: "fnote warn" },
+                      `There is no DNS line: your DNS setting (${dnsSetting}) names a host, not an address. ` +
+                        "Add one in the WireGuard app, or names may not resolve through the tunnel.",
+                    ),
+                h(
+                  "p",
+                  { class: "fnote warn" },
+                  "The config contains this server's private key. Anyone who has it can use the server.",
+                ),
+              ]
+            : [h("p", { class: "fnote warn" }, refusal ?? "")]
+          : [
+              h("div", { class: "share-qr" }, qrCode(link)),
+              h("p", { class: "fnote" }, "Scan with a phone client such as v2rayNG, Hiddify or Streisand."),
+              textBox(link, "Share link", 4),
+              h(
+                "p",
+                { class: "fnote warn" },
+                "The link contains this server's credentials. Anyone who has it can use the server.",
+              ),
+            ];
+
+      render(body, h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`), choice, ...shown);
+    };
+    paint();
 
     return h(
       "div",
       { class: "app sheet share", role: "dialog", "aria-label": "Share server" },
       sheetHead("Share server", close),
-      h(
-        "div",
-        { class: "share-body" },
-        h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`),
-        h("div", { class: "share-qr" }, qrCode(link)),
-        h("p", { class: "fnote" }, "Scan with a phone client such as v2rayNG, Hiddify or Streisand."),
-        linkBox,
-        h(
-          "p",
-          { class: "fnote warn" },
-          "The link contains this server's credentials. Anyone who has it can use the server.",
-        ),
-      ),
+      body,
       h(
         "div",
         { class: "sheet-foot" },
