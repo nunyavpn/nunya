@@ -212,7 +212,25 @@ One port serves all of them because the listener is a `mixed` inbound; an empty 
 app that silently goes around the tunnel. On GNOME the legacy `http.enabled` key is set too, since
 older readers treat HTTP as off without it. [sysproxy.rs](src-tauri/src/sysproxy.rs)
 shells out to the desktop's own tool — `gsettings` (GNOME family), `kwriteconfig6/5` (KDE),
-`networksetup` (macOS) — and refuses any other desktop by name.
+`networksetup` (macOS), `reg.exe` on `HKCU\…\Internet Settings` (Windows) — and refuses any other
+desktop by name.
+
+**macOS has no FTP slot any more**: current `networksetup` has dropped `-getftpproxy`/`-setftpproxy`
+and answers them with its usage text and `** Error: The command is not recognized.` Asking for it
+failed every capture, which is why the system proxy was never set on a Mac. `networksetup` also
+exits 0 on errors like that, so `run()` treats `** Error` output as a failure; `apply` sets every
+service without stopping at one that refuses (VPN configurations are services too), then **checks
+`scutil --proxy`** — what apps are actually given — and succeeds only if the listener is there.
+Restore writes each address back even when it was empty (`-setwebproxy <svc> "" 0`), so no
+`127.0.0.1` is left behind in a disabled slot. Tools are called by full path: an app started from
+Finder has a minimal `PATH`. `the_mac_proxy_is_set_and_then_put_back_exactly` runs the real cycle on
+a Mac, but only with `NUNYA_TOUCH_SYSTEM_PROXY=1`.
+
+**Windows** sets `ProxyEnable`, `ProxyServer` (one `127.0.0.1:<port>` for every scheme, as the
+settings page writes it) and `ProxyOverride`, and sets a PAC `AutoConfigURL` aside while ours is
+applied, since a PAC takes precedence. The whole key is read at once, so a missing value is absent
+rather than a localised error message. It is unit-tested everywhere but has not run on Windows:
+the app does not build there yet (the core link is a Unix socket).
 
 **Restoring is the load-bearing half.** A system proxy left pointing at a dead port breaks every
 browser on the machine. So the previous settings are captured *before* anything changes, written to
