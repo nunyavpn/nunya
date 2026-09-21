@@ -7,11 +7,15 @@
  * address is exactly what an address-swapping scam counts on nobody checking; with a Copy button
  * and a QR code for paying from a phone.
  *
+ * A channel not set up yet shows as coming — the page's button says "Coming soon" and opens
+ * nothing, a wallet lists its coin and network with no address — so the panel says support exists
+ * without offering anything that could be paid by mistake.
+ *
  * The channels come from `support.ts`; opening the page and copying go through `main.ts`.
  */
 
 import { h, render } from "../dom";
-import { NETWORKS, type Support, type Wallet } from "../support";
+import { acceptsDonations, NETWORKS, payable, type Support, type Wallet } from "../support";
 import { icon } from "./icons";
 import { qrCode } from "./qr";
 
@@ -36,6 +40,7 @@ export class SupportPanel {
 
   render() {
     const { buyMeACoffee, wallets } = this.support;
+    const open = acceptsDonations(this.support);
     render(
       this.root,
       h("div", { class: "sheet-head" }, h("span", { class: "t" }, "Support Nunya")),
@@ -54,17 +59,20 @@ export class SupportPanel {
         h(
           "p",
           { class: "fnote" },
-          buyMeACoffee || wallets.length
-            ? "These are the only ways to donate to Nunya. Anyone asking for payment in Nunya's name " +
+          !buyMeACoffee && !wallets.length
+            ? "Donations aren't set up in this build."
+            : open
+              ? "These are the only ways to donate to Nunya. Anyone asking for payment in Nunya's name " +
                 "anywhere else is not us. A donation is a gift to the project; it doesn't change how " +
                 "the app works for you."
-            : "Donations aren't set up in this build.",
+              : "Donations aren't open yet. When they are, these will be the only ways to donate to " +
+                "Nunya — anyone asking for payment in Nunya's name before then, or anywhere else, is not us.",
         ),
       ),
     );
   }
 
-  private coffee(url: string) {
+  private coffee({ url, live }: { url: string; live: boolean }) {
     const page = url.replace(/^https:\/\//, "").replace(/\/$/, "");
     return h(
       "div",
@@ -72,16 +80,30 @@ export class SupportPanel {
       h("h4", {}, "Buy Me a Coffee"),
       h(
         "button",
-        { class: "btn brand support-coffee", onclick: () => this.callbacks.onOpen(url) },
+        {
+          class: "btn brand support-coffee",
+          disabled: !live,
+          onclick: () => live && this.callbacks.onOpen(url),
+        },
         icon("coffee", 17),
-        "Buy me a coffee",
+        live ? "Buy me a coffee" : "Coming soon",
       ),
-      h("p", { class: "fnote" }, `${page} · opens in your browser`),
+      h("p", { class: "fnote" }, live ? `${page} · opens in your browser` : "The page isn't open yet."),
     );
   }
 
   private wallet(wallet: Wallet) {
     const network = NETWORKS[wallet.network];
+    // Nothing to copy, scan or send to: a placeholder says what is coming and nothing more.
+    if (!payable(wallet)) {
+      return h(
+        "div",
+        { class: "wallet soon" },
+        h("div", { class: "wallet-head" }, h("b", {}, wallet.coin), h("span", { class: "wallet-net" }, network.name)),
+        h("p", { class: "wallet-soon" }, "Address coming soon"),
+      );
+    }
+
     const showing = this.shownQr.has(wallet.address);
 
     const copy = h("button", { class: "ghost" }, icon("clipboard", 14), "Copy") as HTMLButtonElement;

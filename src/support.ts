@@ -8,6 +8,11 @@
  * people a "donate to Nunya" message from somewhere else would be aimed at. A short, fixed list is
  * something a user can check a request against.
  *
+ * A channel that is not set up yet is shipped as a placeholder — the Buy Me a Coffee page marked
+ * not `live`, a wallet with no `address` — so the panel shows that support is coming without
+ * offering anything to pay. A placeholder is never a made-up address: a string that merely looks
+ * valid can belong to a stranger, and whatever is sent to it is theirs.
+ *
  * Every address is checked against its network's format by `npm test`. A typo in a donation
  * address sends money to nobody, and nothing at runtime would ever notice. A format check cannot
  * prove an address is ours — only reading it against the wallet can — but it catches the dropped
@@ -39,12 +44,16 @@ export interface Wallet {
   /** What to send: `USDT`, `BTC`, `TON`. */
   coin: string;
   network: Network;
-  address: string;
+  /** `null` until the wallet is set up: listed as coming, with nothing to copy or pay. */
+  address: string | null;
 }
 
 export interface Support {
-  /** The Buy Me a Coffee page, or `null` if there is none. */
-  buyMeACoffee: string | null;
+  /**
+   * The Buy Me a Coffee page, or `null` if there is none. Not `live` until the page is published:
+   * the button then says so rather than opening a page that is not there.
+   */
+  buyMeACoffee: { url: string; live: boolean } | null;
   wallets: Wallet[];
 }
 
@@ -54,19 +63,38 @@ export interface Support {
  */
 export const SUPPORT_HOSTS = ["buymeacoffee.com", "www.buymeacoffee.com"];
 
+/**
+ * Placeholders until the page is published and the wallets exist (issue #23 stays open until
+ * then): the panel shows the channels as coming, and nothing in it can be paid.
+ */
 export const SUPPORT: Support = {
-  buyMeACoffee: "https://buymeacoffee.com/in_alie",
-  wallets: [],
+  buyMeACoffee: { url: "https://buymeacoffee.com/in_alie", live: false },
+  wallets: [
+    { coin: "USDT", network: "tron", address: null },
+    { coin: "BTC", network: "bitcoin", address: null },
+    { coin: "TON", network: "ton", address: null },
+  ],
 };
+
+/** Whether a wallet can be paid: it has a real address. A placeholder has none. */
+export function payable(wallet: Wallet): wallet is Wallet & { address: string } {
+  return wallet.address !== null;
+}
+
+/** Whether any channel can take a donation today. */
+export function acceptsDonations(support: Support): boolean {
+  return Boolean(support.buyMeACoffee?.live) || support.wallets.some(payable);
+}
 
 /** Everything wrong with a set of channels, as sentences; empty when they can ship. */
 export function supportProblems(support: Support): string[] {
   const problems: string[] = [];
 
   if (support.buyMeACoffee !== null) {
-    const match = /^https:\/\/([^/?#@]+)(?:[/?#]|$)/.exec(support.buyMeACoffee);
+    const { url } = support.buyMeACoffee;
+    const match = /^https:\/\/([^/?#@]+)(?:[/?#]|$)/.exec(url);
     if (!match || !SUPPORT_HOSTS.includes(match[1].toLowerCase())) {
-      problems.push(`${support.buyMeACoffee} is not an https:// page on ${SUPPORT_HOSTS.join(" or ")}`);
+      problems.push(`${url} is not an https:// page on ${SUPPORT_HOSTS.join(" or ")}`);
     }
   }
 
@@ -77,7 +105,7 @@ export function supportProblems(support: Support): string[] {
       problems.push(`${wallet.coin}: "${wallet.network}" is not a network this panel knows`);
       continue;
     }
-    if (!network.pattern.test(wallet.address)) {
+    if (payable(wallet) && !network.pattern.test(wallet.address)) {
       problems.push(`${wallet.coin} on ${network.name}: "${wallet.address}" is not a ${network.name} address`);
     }
     const key = `${wallet.coin}|${wallet.network}`;

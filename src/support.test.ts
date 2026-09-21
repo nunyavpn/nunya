@@ -8,18 +8,56 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { SUPPORT, supportProblems, type Support, type Wallet } from "./support.ts";
+import { acceptsDonations, payable, SUPPORT, supportProblems, type Support, type Wallet } from "./support.ts";
 
 test("the channels this build ships are well formed", () => {
   assert.deepEqual(supportProblems(SUPPORT), []);
 });
 
 /** A Support panel with nothing in it is worse than none: it reads as a broken feature. */
-test("this build offers at least one way to donate", () => {
+test("this build lists at least one way to donate, even if only as coming", () => {
   assert.ok(SUPPORT.buyMeACoffee !== null || SUPPORT.wallets.length > 0);
 });
 
-const only = (wallets: Wallet[], buyMeACoffee: string | null = null): Support => ({ buyMeACoffee, wallets });
+const only = (wallets: Wallet[], url: string | null = null, live = true): Support => ({
+  buyMeACoffee: url === null ? null : { url, live },
+  wallets,
+});
+
+/**
+ * A placeholder must never be payable. A made-up address that merely looks valid can belong to a
+ * stranger, so a wallet that is not set up has no address at all.
+ */
+test("a wallet without an address is listed but cannot be paid", () => {
+  const soon: Wallet = { coin: "USDT", network: "tron", address: null };
+  assert.equal(payable(soon), false);
+  assert.deepEqual(supportProblems(only([soon])), []);
+  assert.equal(acceptsDonations(only([soon])), false);
+});
+
+test("donations are open only once a channel is live", () => {
+  assert.equal(acceptsDonations(only([], "https://buymeacoffee.com/nunya", false)), false);
+  assert.equal(acceptsDonations(only([], "https://buymeacoffee.com/nunya", true)), true);
+  assert.equal(
+    acceptsDonations(only([{ coin: "BTC", network: "bitcoin", address: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq" }])),
+    true,
+  );
+});
+
+/** Placeholders relax nothing for the real thing: a real address is still checked. */
+test("a real address beside placeholders is still checked", () => {
+  assert.equal(
+    supportProblems(
+      only([
+        { coin: "TON", network: "ton", address: null },
+        { coin: "ETH", network: "ethereum", address: "0x123" },
+      ]),
+    ).length,
+    1,
+  );
+});
+
+// The addresses below are public, well-known ones, used only to check the formats; none is shipped.
 
 test("an address of each network's own shape passes", () => {
   assert.deepEqual(

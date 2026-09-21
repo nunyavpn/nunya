@@ -420,10 +420,8 @@ an empty one.
 
 ## Supporting Nunya
 
-Nunya is free and open source. If it keeps you connected, you can help keep it going:
+Nunya is free and open source. Donations are being set up, through two channels only: **Buy Me a
+Coffee** and **crypto wallets**. They will be listed here and in the app's Support panel (the heart
+in the rail) once they are open.
 
-- **Buy Me a Coffee**: [buymeacoffee.com/in_alie](https://buymeacoffee.com/in_alie)
-
-That is the only way to donate. Anyone asking for payment in Nunya's name anywhere else is not us.
-The app's Support panel (the heart in the rail) lists the same, and a donation doesn't change how
-the app works for you.
+Until then, and anywhere else afterwards, anyone asking for payment in Nunya's name is not us.

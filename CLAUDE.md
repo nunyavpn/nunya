@@ -510,7 +510,15 @@ of `ALLOWED_HOSTS` — the webview has no shell capability and gets no general o
 mirrors the hosts in `SUPPORT_HOSTS`; a link the Rust side refuses is a button that does nothing.
 
 `npm test` checks every shipped address against its network's format (`supportProblems`) — a typo
-in a donation address sends money to nobody — and fails if the build offers no channel at all.
+in a donation address sends money to nobody — and fails if the panel lists no channel at all.
+
+**Until the channels are real they ship as placeholders, never as made-up addresses** (a string
+that merely looks valid can belong to a stranger): the Buy Me a Coffee page with `live: false`, so
+its button reads "Coming soon" and opens nothing, and wallets with `address: null`, listed by coin
+and network with no address, Copy or QR (`payable`). The panel's closing line changes with
+`acceptsDonations`. Going live is `live: true` and real addresses in `SUPPORT`, the README section,
+and `.github/FUNDING.yml` (left out until the page exists, since it puts a Sponsor button on the
+repository). Issue #23 stays open until then.
 
 ### Editing and deleting
 

@@ -2819,6 +2819,18 @@ button:disabled {
   align-self: center;
 }
 
+/* A wallet not set up yet: the coin and network, dimmed, and nothing that could be paid. */
+.wallet.soon {
+  background: none;
+  border-style: dashed;
+}
+
+.wallet-soon {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* A wg-quick config is lines, not one long token: shown as written, scrolling rather than breaking
    a key across lines. The format switch sits above the code it changes. */
 .val.sharelink.wgconf {
