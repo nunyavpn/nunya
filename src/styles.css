@@ -287,40 +287,96 @@ button:disabled {
   color: var(--faint);
 }
 
+/* Quick Connect: a card of up to three one-click rows — latest, most used, fastest. Each row is
+   its own button, so the card itself is a plain container and the rows carry hover and focus. */
 .quick {
   flex: none;
   margin: 12px 16px 4px;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 13px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 6px 6px;
   border-radius: 10px;
   background: linear-gradient(135deg, var(--brand-fill), var(--brand));
   color: #fff;
   box-shadow: 0 5px 16px -6px var(--brand-glow);
 }
 
-.quick:disabled {
+.quick.empty {
   background: var(--raised);
   color: var(--faint);
   box-shadow: none;
+  padding-bottom: 10px;
 }
 
-.quick .qt {
-  flex: 1;
-  min-width: 0;
+.quick-head {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 0 7px 3px;
+  font-size: 13px;
 }
 
-.quick .qt b {
-  font-size: 13px;
+.quick-head b {
   font-weight: 700;
 }
 
-.quick .qt span {
-  font-size: 11px;
-  opacity: 0.82;
+.quick-none {
+  padding: 0 7px;
+  font-size: 11.5px;
+}
+
+.quick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 7px;
+  border-radius: 7px;
+  color: inherit;
+  text-align: left;
+  font-size: 12.5px;
+}
+
+.quick-row:hover,
+.quick-row:focus-visible {
+  background: rgb(255 255 255 / 16%);
+}
+
+.quick-row:disabled {
+  opacity: 0.7;
+}
+
+.quick-row .qk {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+.quick-row .qk i {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 20%);
+}
+
+.quick-row .qn {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.quick-row .qr {
+  flex: none;
+  font-size: 11.5px;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
 }
 
 .locs-list {

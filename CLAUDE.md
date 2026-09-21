@@ -450,6 +450,26 @@ modules must not import anything with a runtime value (type imports are erased),
 `usage.ts` and `identity.ts` stand apart from the store. Test files are excluded from `tsc`, which
 would need `@types/node` to check them.
 
+### Quick Connect
+
+The card above the list offers up to three one-click rows, chosen in [quick.ts](src/quick.ts):
+**Latest** (the config with the newest `Server.lastConnectedAt`, set in `connect()` only once the
+tunnel is really up — the selection is not a connection), **Most used** (most bytes in the last
+`RECENT_DAYS` from the usage history) and **Fastest** (lowest latency among configs whose last test
+passed). A config that is two of them is one row with both labels and reasons; a target with
+nothing behind it is left out. Retired configs are never offered. Rows, not a button with a menu,
+so there is no default to choose; the tray's Connect still connects the selected server.
+
+`quickConnect` in `main.ts` re-tests before using a **Fastest-only** row whose result is older than
+`QUICK_STALE_MS` (10 min): the top `QUICK_RETEST` (3) are checked together and the fastest that
+answers wins; if none does, nothing connects and the rows update to say so. A row that is also
+Latest or Most used names a config the user chose and is never swapped. A failed connect is
+reported like any other — Quick Connect does not fall back to another config behind the user's
+back.
+
+`quick.ts` is generic over the item and imports nothing, so `npm test` covers it on plain objects;
+the store turns servers into candidates (`quickCandidates`).
+
 ### Editing and deleting
 
 Every modal goes through `openSheet` in [main.ts](src/main.ts), which owns the scrim, the

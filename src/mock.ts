@@ -333,6 +333,12 @@ const USAGE: Record<string, { days: number; mb: number }> = {
   "fra-01": { days: 14, mb: 450 },
 };
 
+/**
+ * When the tunnel last ran on a config, by host, in hours ago: Quick Connect's "Latest". One config,
+ * and not the fastest or the most used, so the card shows all three of its rows.
+ */
+const LAST_CONNECTED: Record<string, number> = { "sto-01": 2 };
+
 function usageFor(spec: { days: number; mb: number }, now: number): Usage {
   const usage: Usage = {};
   const today = new Date(now);
@@ -371,8 +377,14 @@ export function mockData(): AppData {
       ...AURORA.map((s) => serverFrom(AURORA_ID, s)),
       ...BACKUP.map((s) => serverFrom(BACKUP_ID, s)),
     ].map((server) => {
-      const plan = USAGE[server.id.slice(server.groupId.length + 1)];
-      return plan ? { ...server, usage: usageFor(plan, now) } : server;
+      const host = server.id.slice(server.groupId.length + 1);
+      const plan = USAGE[host];
+      const hours = LAST_CONNECTED[host];
+      return {
+        ...server,
+        ...(plan ? { usage: usageFor(plan, now) } : {}),
+        ...(hours !== undefined ? { lastConnectedAt: now - hours * HOUR } : {}),
+      };
     }),
     bypass: BYPASS,
     settings: { ...DEFAULT_SETTINGS },

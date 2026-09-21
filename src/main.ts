@@ -12,6 +12,7 @@ import {
   type Server,
   type Spot,
 } from "./store";
+import { fastestFirst, type QuickTarget } from "./quick";
 import { describe, parseShareLink, toShareLink, type Profile } from "./share";
 import { advance, firstDay, total, type Bytes } from "./usage";
 import { icon } from "./views/icons";
@@ -151,14 +152,58 @@ const locations = new LocationsPanel(qs("#locations"), {
   onDelete: (server) => confirmDeleteServer(server),
   onRemoveGroup: (group) => confirmDeleteGroup(group),
   onAdd: () => openAddServers(),
-  onQuickConnect: () => {
-    const fastest = store.fastest();
-    if (fastest) {
-      store.select(fastest.id);
-      void connect();
-    }
-  },
+  onQuickConnect: (target) => void quickConnect(target),
 });
+
+/** A Fastest pick measured longer ago than this is re-measured before Quick Connect uses it. */
+const QUICK_STALE_MS = 10 * 60_000;
+/** How many of the fastest configs that re-measure covers. */
+const QUICK_RETEST = 3;
+
+/**
+ * Connects to one of Quick Connect's rows.
+ *
+ * Fastest is re-measured first when its numbers are old: a latency from yesterday says nothing
+ * about whether the server answers now, and connecting to a dead one is the failure Quick Connect
+ * exists to avoid. The top few are tested together and the fastest of those that answer wins.
+ * Only a row that is Fastest alone: a row that is also Latest or Most used names a config the
+ * user chose, and swapping it for another would contradict its own label.
+ *
+ * Latest and Most used are connected to as they are. If one fails, the failure is reported where
+ * any failed connection is, and nothing else is tried behind the user's back.
+ */
+async function quickConnect(target: QuickTarget<Server>) {
+  let server = target.candidate.item;
+  const fastestAlone = target.kinds.length === 1 && target.kinds[0] === "fastest";
+
+  if (fastestAlone && Date.now() - (server.testedAt ?? 0) > QUICK_STALE_MS && inTauri && coreReady) {
+    const top = fastestFirst(store.quickCandidates(Date.now()))
+      .slice(0, QUICK_RETEST)
+      .map((c) => c.item);
+    log(`[ui] Quick Connect: re-testing the ${top.length} fastest servers first`);
+    locations.setQuickChecking(true);
+    try {
+      await checkServers(top);
+    } finally {
+      locations.setQuickChecking(false);
+    }
+    const ids = new Set(top.map((s) => s.id));
+    const answered = fastestFirst(store.quickCandidates(Date.now()).filter((c) => ids.has(c.item.id)))[0];
+    if (!answered) {
+      // Their rows now say they failed, and the Fastest row has moved on to the next candidate:
+      // the user sees why nothing happened, and chooses again.
+      log(`[ui] Quick Connect: none of the ${top.length} fastest servers answered just now`);
+      return;
+    }
+    server = answered.item;
+  }
+
+  if (connection === "connecting") return;
+  if (connection === "on" && store.get().selectedServerId === server.id) return;
+  // Selecting reconnects when the tunnel is up; otherwise it only selects, and this connects.
+  selectServer(server);
+  if (connection === "off") await connect();
+}
 
 /**
  * Servers checked automatically — on add and after a subscription update — at most. A public list
@@ -775,6 +820,9 @@ async function connect() {
     usageServerId = running;
     pendingUsage = { up: 0, down: 0 };
     usageSavedAt = connectedAt;
+    // Quick Connect's "Latest". Only once the tunnel is really up: a connect that failed was not
+    // a connection, and should not become the thing offered first next time.
+    if (running) store.markConnected(running, connectedAt);
     connection = "on";
     log("[ui] tunnel started");
     void locateExit();

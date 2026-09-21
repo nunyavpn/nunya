@@ -9,7 +9,8 @@
 import { matchExisting } from "./identity";
 import { backend, DebouncedWriter } from "./persist";
 import type { Profile } from "./share";
-import { addUsage, type Bytes, type Usage } from "./usage";
+import { quickTargets, RECENT_DAYS, type Candidate, type QuickTarget } from "./quick";
+import { addUsage, daysAgo, total, type Bytes, type Usage } from "./usage";
 
 /** Where a server came from. Hand-added servers live in their own group, which sorts first. */
 export type GroupKind = "manual" | "subscription";
@@ -68,6 +69,13 @@ export interface Server {
    * deleted or its subscription drops it.
    */
   usage?: Usage;
+  /**
+   * Unix ms of the last time the tunnel came up on this config: Quick Connect's "Latest".
+   *
+   * Not the selection, which only says which row was clicked last. Kept across a refresh like the
+   * usage history, and for the same reason.
+   */
+  lastConnectedAt?: number;
 }
 
 /** A place an address was found to be. Mirrors `geo::Spot`, plus when it was measured. */
@@ -406,11 +414,30 @@ class Store {
     return this.server(this.data.selectedServerId);
   }
 
-  /** The lowest-latency reachable server, which is what Quick Connect picks. */
-  fastest(): Server | undefined {
+  /**
+   * Every config as a Quick Connect candidate; see `quick.ts`.
+   *
+   * A retired config is left out: it is kept only while the tunnel runs on it, and offering it
+   * to connect to again would bring back a server its subscription has dropped.
+   */
+  quickCandidates(now: number): Candidate<Server>[] {
+    const since = daysAgo(RECENT_DAYS - 1, now);
     return this.data.servers
-      .filter((s) => s.latency !== null && s.latency >= 0)
-      .sort((a, b) => (a.latency ?? 0) - (b.latency ?? 0))[0];
+      .filter((s) => !s.retired)
+      .map((server) => {
+        const recent = total([server.usage], since);
+        return {
+          item: server,
+          lastConnectedAt: server.lastConnectedAt ?? null,
+          recentBytes: recent.up + recent.down,
+          latency: server.latency,
+        };
+      });
+  }
+
+  /** Quick Connect's rows: latest, most used and fastest, each config once. */
+  quickTargets(now: number): QuickTarget<Server>[] {
+    return quickTargets(this.quickCandidates(now));
   }
 
   // ------------------------------------------------------------- mutations
@@ -479,6 +506,7 @@ class Store {
           renamed: previous.renamed,
           // The history belongs to the config, and this is still the config.
           usage: previous.usage,
+          lastConnectedAt: previous.lastConnectedAt,
           retired: false,
         };
       });
@@ -584,6 +612,14 @@ class Store {
       server.renamed = place.renamed || undefined;
       server.latency = null;
       server.testedAt = null;
+    });
+  }
+
+  /** Records that the tunnel came up on a config, for Quick Connect's "Latest". */
+  markConnected(id: string, at: number) {
+    this.update((data) => {
+      const server = data.servers.find((s) => s.id === id);
+      if (server) server.lastConnectedAt = at;
     });
   }
 

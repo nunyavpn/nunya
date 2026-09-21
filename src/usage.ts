@@ -93,6 +93,17 @@ export function firstDay(histories: (Usage | undefined)[]): string | null {
 }
 
 /**
+ * The day `back` calendar days before the day `now` falls on.
+ *
+ * Stepping the calendar date rather than subtracting 24-hour strides, which land on the wrong day
+ * either side of a daylight-saving change.
+ */
+export function daysAgo(back: number, now: number): string {
+  const today = new Date(now);
+  return dayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - back, 12).getTime());
+}
+
+/**
  * The last `days` days up to and including today, oldest first, summed across the histories.
  *
  * Every day is present, zero when nothing moved: a chart that skipped quiet days would put last
@@ -100,12 +111,8 @@ export function firstDay(histories: (Usage | undefined)[]): string | null {
  */
 export function lastDays(histories: (Usage | undefined)[], days: number, now: number): DayBytes[] {
   const series: DayBytes[] = [];
-  const today = new Date(now);
   for (let back = days - 1; back >= 0; back--) {
-    // Stepping the calendar date rather than subtracting 24 hours, which lands on the wrong day
-    // either side of a daylight-saving change.
-    const at = new Date(today.getFullYear(), today.getMonth(), today.getDate() - back, 12).getTime();
-    const day = dayKey(at);
+    const day = daysAgo(back, now);
     const entry: DayBytes = { day, up: 0, down: 0 };
     for (const history of histories) {
       entry.up += history?.[day]?.up ?? 0;
