@@ -971,12 +971,21 @@ type Pasted =
   | { kind: "rejected"; reason: string };
 
 /**
+ * A panel's "import to sing-box" or "import to Clash" link, which wraps the subscription address
+ * in `url=`. Kept whole as the group's address; Rust unwraps it on every fetch (`subscription::
+ * resolve`), so this only has to recognise one, not take it apart.
+ */
+const IMPORT_LINK = /^(sing-box:\/\/import-remote-profile|clash:\/\/install-config|clashmeta:\/\/install-config)\b/i;
+
+/**
  * Names a subscription from its URL fragment.
  *
  * Providers put the display name there — `#%F0%9F%92%A6%20BPB%20Normal` is "💦 BPB Normal" — and
  * it is the only name available until the fetch returns, because `profile-title` is a header not
- * every panel sends. The host is a weak fallback but an honest one, and the first refresh replaces
- * either with whatever the subscription calls itself.
+ * every panel sends. Clash's import link carries it as `name=` instead. The host is a weak fallback
+ * but an honest one — the host of the address inside, for an import link, whose own "host" is
+ * `import-remote-profile` — and the first refresh replaces any of them with whatever the
+ * subscription calls itself.
  */
 function subscriptionName(url: string): string {
   try {
@@ -984,7 +993,10 @@ function subscriptionName(url: string): string {
     // A malformed percent-escape throws, which is why this sits inside the try rather than beside
     // it: a name is never worth failing an import over.
     const fragment = decodeURIComponent(parsed.hash.replace(/^#/, "")).trim();
-    return fragment || parsed.hostname;
+    if (fragment) return fragment;
+    if (!IMPORT_LINK.test(url)) return parsed.hostname;
+    const carried = parsed.searchParams.get("url") ?? "";
+    return parsed.searchParams.get("name")?.trim() || new URL(carried).hostname;
   } catch {
     return url;
   }
@@ -998,7 +1010,7 @@ function subscriptionName(url: string): string {
  * looking at what they pasted.
  */
 function classify(line: string): Pasted {
-  if (/^https:\/\//i.test(line)) {
+  if (/^https:\/\//i.test(line) || IMPORT_LINK.test(line)) {
     return { kind: "subscription", url: line, name: subscriptionName(line) };
   }
 

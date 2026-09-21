@@ -352,16 +352,21 @@ has to ship with the bundle).
 ### Subscriptions
 
 A subscription URL goes into the same box as share links; an `https://` line is taken as a
-subscription and gets its own group, which is then refreshable. Two body formats are in
-circulation and nothing in the headers tells them apart, so they are distinguished by content:
+subscription and gets its own group, which is then refreshable. So is a panel's import link —
+`sing-box://import-remote-profile?url=…` or `clash://install-config?url=…` — which wraps the real
+address and is unwrapped each time it is fetched. Several body formats are in circulation and
+nothing in the headers tells them apart, so they are distinguished by content:
 
 | | |
 | --- | --- |
 | A list of share links | one per line, plain or base64-encoded. The common case. |
 | A JSON Xray configuration, or an array of them | what a BPB panel serves to `?app=xray`: each entry is a whole client config — inbounds, routing, DNS — wrapped around a single `proxy` outbound. |
+| A sing-box configuration | what BPB serves to `?app=sing-box`: every server is an outbound (or, for WireGuard, an endpoint), beside groups that are skipped. |
+| A Clash configuration in JSON | what BPB serves to `?app=clash`: every server is in `proxies`. Clash YAML is refused by name. |
 
-The second is rewritten back into share links in `subscription.rs`, so everything downstream is
-unchanged and rejections are still reported entry by entry.
+The configurations are rewritten back into share links in `subscription.rs`, all through one
+writer, so the three forms of one subscription import identically, everything downstream is
+unchanged, and rejections are still reported entry by entry.
 
 Two decisions inside that are easy to get wrong. A configuration with no outbound tagged `proxy`
 is a load balancer — BPB's "Best Ping" carries `proxy-1` through `proxy-8` behind a `leastPing`
