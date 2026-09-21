@@ -255,8 +255,9 @@ dot sits at the exit city; and a connected route to a relay goes you → entry �
 
 `checkServers` in `main.ts` is the one path that measures a server: entry first (fast), then the
 end-to-end test (latency and exit together, per server) — a server that fails keeps its last exit. It
-runs from Test all, from each row's **Check**, on servers just added (link, QR or manual), and
-after every subscription reload. `locate_servers` takes `entries`/`exits` flags so the two passes
+runs on servers just added (link, QR or manual), after every subscription reload, and from each
+row's **Check**. There is deliberately no Test all: those three already cover every server, and a
+button that re-measured the whole list would only repeat them. `locate_servers` takes `entries`/`exits` flags so the two passes
 do not look the same addresses up twice. Old data with `exitCountry`/`exitAt` is migrated to
 `exit` on load.
 
@@ -388,12 +389,12 @@ while both WARP endpoints answered, and `gstatic.com` was the precise inverse. I
 so a working subscription reported every server unreachable. Do not reduce the list to one entry or
 put a Cloudflare endpoint first; a unit test guards both.
 
-Test all **streams, end to end**: the `check_servers` command starts one scratch core for the run
+A check **streams, end to end**: the `check_servers` command starts one scratch core for the run
 (`geo::ProbeSession`, a local port per server) and tests six servers at a time. Each server gets
 its latency, then a real request *through* it for the public address it comes out of, then that
 address placed (`geo::PlaceCache`, one lookup per distinct address). The result is emitted as a
-`server-checked` event the moment that server is done, so rows fill in one by one and the button
-counts "Testing 7/18". **A server works only if traffic comes out of it**: a dial that succeeds
+`server-checked` event the moment that server is done, so rows fill in one by one, each showing
+"testing…" until its own result lands. **A server works only if traffic comes out of it**: a dial that succeeds
 and then carries nothing is reported failed, and so is one whose traffic came out of the user's
 own address. A geo service that could not place the exit does not fail the server. The list keeps
 its scroll position and the search box its focus across every re-render (`LocationsPanel.render`).
@@ -401,9 +402,9 @@ its scroll position and the search box its focus across every re-render (`Locati
 **Lists run to tens of thousands.** Public subscriptions on GitHub are plain-text files of 20,000+
 links (4.7 MB); one crashed the client by being treated like a provider's list of twenty. So:
 the list renders `ROW_PAGE` (100) rows per group behind a "Show more" button, always including
-the selected server; servers are auto-checked on add or update only up to `AUTO_CHECK_MAX` (100);
-Test all runs in `CHECK_BATCH` (50) batches, each its own probe core, and its button becomes Stop;
-and `geo::ProbeSession::start` refuses more than `MAX_PROBE` servers so a caller that forgets to
+the selected server; servers are auto-checked on add or update only up to `AUTO_CHECK_MAX` (100),
+and a larger list is checked a row at a time; `checkServers` runs in `CHECK_BATCH` (50) batches,
+each its own probe core; and `geo::ProbeSession::start` refuses more than `MAX_PROBE` servers so a caller that forgets to
 batch fails with a reason instead of exhausting file descriptors.
 
 A caller that passes its own `url` gets that one endpoint and no fallback — an explicit choice is

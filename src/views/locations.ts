@@ -35,9 +35,6 @@ export interface LocationsCallbacks {
   onRemoveGroup: (group: Group) => void;
   onAdd: () => void;
   onQuickConnect: () => void;
-  onTestAll: () => void;
-  /** Stop a running Test all after the batch in flight. */
-  onStopTest: () => void;
 }
 
 /** Rows a group shows before "Show more". */
@@ -45,9 +42,7 @@ const ROW_PAGE = 100;
 
 export class LocationsPanel {
   private filter = "";
-  /** Test all's progress, while it runs: how many are done, of how many. */
-  private progress: { done: number; total: number } | null = null;
-  /** Servers being checked on their own from the ⋯ menu; their rows show progress. */
+  /** Servers being checked — on arrival, after an update, or from the ⋯ menu; their rows show progress. */
   private checking = new Set<string>();
   private menu: HTMLElement | null = null;
   /** How many rows each group is showing, beyond the first page; see `ROW_PAGE`. */
@@ -74,15 +69,6 @@ export class LocationsPanel {
       if (checking) this.checking.add(id);
       else this.checking.delete(id);
     }
-    this.render();
-  }
-
-  /**
-   * Test all's progress: "Testing 7/18", then `null` when done. Each row updates on its own as its
-   * result arrives; this is only the running count.
-   */
-  setProgress(progress: { done: number; total: number } | null) {
-    this.progress = progress;
     this.render();
   }
 
@@ -120,7 +106,6 @@ export class LocationsPanel {
         { class: "locs-list" },
         ...orderGroups(data.groups).flatMap((group) => this.groupSection(group, selectedId)),
       ),
-      this.footer(data.servers.length),
     );
 
     const list = this.root.querySelector<HTMLElement>(".locs-list");
@@ -130,26 +115,6 @@ export class LocationsPanel {
       next?.focus();
       next?.setSelectionRange(caret[0], caret[1]);
     }
-  }
-
-  private footer(count: number) {
-    return h(
-      "div",
-      { class: "locs-foot" },
-      h(
-        "button",
-        {
-          class: "ghost",
-          disabled: count === 0,
-          // While running, the same button stops it: a list of thousands takes a long time, and
-          // there must be a way out that is not quitting the app.
-          onclick: () => (this.progress === null ? this.callbacks.onTestAll() : this.callbacks.onStopTest()),
-        },
-        this.progress === null
-          ? `Test all ${count ? count.toLocaleString() : ""}`.trim()
-          : `Stop · Testing ${this.progress.done.toLocaleString()}/${this.progress.total.toLocaleString()}`,
-      ),
-    );
   }
 
   private header() {
@@ -194,7 +159,7 @@ export class LocationsPanel {
       "button",
       {
         class: "quick",
-        // Nothing has been tested yet, so there is no "fastest" to honour.
+        // No server has passed a test, so there is no "fastest" to honour.
         disabled: !fastest,
         onclick: () => this.callbacks.onQuickConnect(),
       },
@@ -208,7 +173,7 @@ export class LocationsPanel {
           {},
           fastest
             ? `${fastest.profile.name} · ${fastest.latency} ms`
-            : "Test your servers to enable",
+            : "No server has passed a test yet",
         ),
       ),
     );
