@@ -6,7 +6,12 @@
 //! it, which it does automatically here because the TUN carries the whole process.
 //!
 //! The response format is not standardised. In practice a subscription is a list of share links,
-//! either as plain text or base64-encoded, and the interesting metadata arrives in a header.
+//! either as plain text or base64-encoded, and the interesting metadata arrives in a header. A panel
+//! asked for a particular app — BPB's `?app=xray`, `?app=sing-box`, `?app=clash` — serves that app's
+//! whole configuration instead, and `extract_links` reads each of the three back into share links.
+//!
+//! The address itself arrives in more than one form too: a panel's "import to sing-box" button
+//! copies a `sing-box://import-remote-profile?url=…` link wrapping the real one; see `resolve`.
 
 use std::io::Read;
 use std::time::Duration;
@@ -78,6 +83,63 @@ fn check_url(url: &str) -> Result<(), SubscriptionError> {
         ));
     }
     Ok(())
+}
+
+/// Links that hand a subscription address to one particular app.
+///
+/// Panels offer them as "import to sing-box" and "import to Clash" buttons, and that button is what
+/// users copy — so refusing the wrapper would turn away a working subscription over its envelope.
+/// The wrapper is kept as the group's address and unwrapped on every fetch, which keeps this the one
+/// parser for it rather than one here and another in the frontend.
+const IMPORT_LINKS: &[&str] = &[
+    "sing-box://import-remote-profile",
+    "clash://install-config",
+    "clashmeta://install-config",
+];
+
+/// The address to fetch: the URL itself, or the one an import link carries in `url=`.
+///
+/// sing-box's scheme says the carried address is percent-encoded, and BPB writes it raw —
+/// `?url=https://host/sub/normal?app=sing-box#name` — so both are read. A raw address runs to the
+/// end of the link, because any `&` in it belongs to its own query. The fragment is a display name
+/// in every form, never part of the address, and is left off the request.
+fn resolve(url: &str) -> Result<String, SubscriptionError> {
+    let trimmed = url.trim();
+    let carried = IMPORT_LINKS.iter().find_map(|prefix| {
+        trimmed
+            .get(..prefix.len())
+            .filter(|head| head.eq_ignore_ascii_case(prefix))
+            .map(|_| &trimmed[prefix.len()..])
+    });
+
+    let address = match carried {
+        None => trimmed.to_string(),
+        Some(rest) => {
+            let query = rest.split('#').next().unwrap_or_default();
+            let query = query.trim_start_matches('/').trim_start_matches('?');
+            let value = query
+                .strip_prefix("url=")
+                .or_else(|| query.find("&url=").map(|at| &query[at + 5..]))
+                .ok_or_else(|| {
+                    SubscriptionError::Rejected(
+                        "This import link carries no subscription address (url=…).".into(),
+                    )
+                })?;
+            let first = value.split('&').next().unwrap_or_default();
+            if first.contains("://") {
+                value.to_string()
+            } else {
+                percent_decode(first).ok_or_else(|| {
+                    SubscriptionError::Rejected(
+                        "The address inside this import link is not validly encoded.".into(),
+                    )
+                })?
+            }
+        }
+    };
+
+    check_url(&address)?;
+    Ok(address.split('#').next().unwrap_or_default().trim().to_string())
 }
 
 /// Parses `subscription-userinfo: upload=1; download=2; total=3; expire=1700000000`.
@@ -165,11 +227,10 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
 
 /// Pulls share links out of a decoded body.
 ///
-/// Two formats are in circulation and nothing in the headers distinguishes them, so this goes by
-/// content. The common one is a list of share links, one per line. The other is a JSON Xray
-/// configuration — or an array of them — which is what a BPB panel serves to `?app=xray`: the same
-/// servers, each wrapped in an entire client config of inbounds, routing and DNS, of which exactly
-/// one outbound is the part worth keeping.
+/// Two kinds of body are in circulation and nothing in the headers distinguishes them, so this goes
+/// by content. The common one is a list of share links, one per line. The other is a client's whole
+/// JSON configuration — what a panel serves when the link names an app — of which the servers are
+/// the only part worth keeping; see `config_links`.
 ///
 /// A body that parses as JSON never falls back to the line scan. JSON is never a list of share
 /// links, and scanning it anyway finds the `://` inside a DNS address and reports a "server" made
@@ -178,8 +239,11 @@ fn extract_links(body: &str) -> Vec<String> {
     let trimmed = body.trim_start();
 
     if trimmed.starts_with('[') || trimmed.starts_with('{') {
-        if let Some(links) = xray_config_links(trimmed) {
-            return links;
+        if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+            return match &parsed {
+                Value::Array(configs) => configs.iter().flat_map(config_links).collect(),
+                _ => config_links(&parsed),
+            };
         }
     }
 
@@ -190,64 +254,298 @@ fn extract_links(body: &str) -> Vec<String> {
         .collect()
 }
 
-/// Rewrites one or more Xray configurations as share links.
+/// Rewrites one client configuration as share links.
 ///
-/// `None` means the body was not JSON at all, which is the caller's signal to scan it by line.
-///
-/// Each configuration contributes the outbound tagged `proxy`, which is the convention every panel
-/// emitting this format follows. One without such an outbound is a load balancer — BPB's
-/// "Best Ping" entry carries `proxy-1` through `proxy-8` behind a `leastPing` selector — and is
-/// skipped rather than flattened, because this client has no balancer and the servers behind one
-/// are already listed individually elsewhere in the same array. Flattening would import each of
-/// them twice.
+/// Which client it was written for is read from its shape, because nothing else says: Clash lists
+/// its servers under `proxies`; sing-box and Xray both use `outbounds`, but sing-box names each
+/// one's protocol `type` and Xray `protocol`. sing-box has also moved WireGuard out to `endpoints`.
 ///
 /// Protocols this build cannot run are emitted anyway, under their own scheme. The frontend then
 /// rejects them by name, exactly as it does for a hand-pasted link. Dropping them here would hand
 /// the user a list quietly shorter than the one their provider published, with nothing to say why
 /// half of it went missing.
-fn xray_config_links(body: &str) -> Option<Vec<String>> {
-    let parsed: Value = serde_json::from_str(body).ok()?;
-
-    let configs: Vec<&Value> = match &parsed {
-        Value::Array(items) => items.iter().collect(),
-        Value::Object(_) => vec![&parsed],
-        _ => return None,
-    };
-
-    let mut links = Vec::new();
-
-    for config in configs {
-        let Some(outbounds) = config.get("outbounds").and_then(Value::as_array) else {
-            continue;
-        };
-
-        let remarks = config
-            .get("remarks")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-
-        match carrier(outbounds) {
-            Carrier::One(proxy) => {
-                if let Some(link) = outbound_link(proxy, remarks) {
-                    links.push(link);
-                }
-            }
-            // Named rather than quietly reduced to its last hop. BPB's "WoW" entries are
-            // WARP-over-WARP, and importing one as a single hop would give the user something
-            // labelled WoW that is not.
-            Carrier::Chain(exit) => {
-                let mut link = format!("chain://{exit}");
-                if !remarks.is_empty() {
-                    link.push('#');
-                    link.push_str(&percent_encode(remarks));
-                }
-                links.push(link);
-            }
-            Carrier::Balancer => {}
-        }
+fn config_links(config: &Value) -> Vec<String> {
+    if let Some(proxies) = config.get("proxies").and_then(Value::as_array) {
+        return proxies.iter().filter_map(clash_link).collect();
     }
 
-    Some(links)
+    let list = |key: &str| {
+        config
+            .get(key)
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    };
+    let (outbounds, endpoints) = (list("outbounds"), list("endpoints"));
+    if outbounds.iter().chain(endpoints).any(|o| o.get("type").is_some()) {
+        return outbounds
+            .iter()
+            .chain(endpoints)
+            .filter_map(singbox_link)
+            .collect();
+    }
+
+    xray_config_link(config).into_iter().collect()
+}
+
+// ------------------------------------------------------------------------------------ the writer
+
+/// One server as every configuration format describes it: what the readers fill in and the one
+/// link writer reads.
+///
+/// One writer is the point. Xray, sing-box and Clash spell the same server three ways, and links
+/// written from each by its own code would drift apart — one subscription importing differently
+/// depending on which of the panel's buttons the user happened to copy. Empty means absent.
+#[derive(Default)]
+struct Node {
+    /// The share-link scheme, which is not always the configuration's word: `ss`, not
+    /// `shadowsocks`. See `scheme_of`.
+    scheme: String,
+    /// The UUID for VLESS and VMess, the password for everything password-based.
+    credential: String,
+    address: String,
+    port: i64,
+    network: String,
+    header_type: String,
+    security: String,
+    /// The WebSocket path carries early data as `?ed=N`, the way every panel's links write it.
+    path: String,
+    host: String,
+    service_name: String,
+    sni: String,
+    fingerprint: String,
+    public_key: String,
+    short_id: String,
+    alpn: Vec<String>,
+    insecure: bool,
+    /// VLESS only.
+    flow: String,
+    /// VMess only.
+    cipher: String,
+    alter_id: Option<i64>,
+    name: String,
+}
+
+impl Node {
+    /// The `scheme://credential@host:port?query#name` link the frontend parses.
+    fn link(&self) -> String {
+        let mut params: Vec<(&str, String)> = vec![
+            ("type", self.network.clone()),
+            ("security", self.security.clone()),
+            ("headerType", self.header_type.clone()),
+            ("path", self.path.clone()),
+            ("host", self.host.clone()),
+            ("serviceName", self.service_name.clone()),
+            ("sni", self.sni.clone()),
+            ("fp", self.fingerprint.clone()),
+            ("pbk", self.public_key.clone()),
+            ("sid", self.short_id.clone()),
+            ("alpn", self.alpn.join(",")),
+        ];
+        if self.insecure {
+            params.push(("allowInsecure", "1".to_string()));
+        }
+        params.push(("flow", self.flow.clone()));
+        params.push(("encryption", self.cipher.clone()));
+        if let Some(alter_id) = self.alter_id {
+            params.push(("alterId", alter_id.to_string()));
+        }
+
+        let link = format!(
+            "{}://{}@{}:{}",
+            self.scheme,
+            percent_encode(&self.credential),
+            bracketed(&self.address),
+            self.port
+        );
+        named(with_query(link, &params), &self.name)
+    }
+}
+
+/// A WireGuard server, which has keys and interface addresses where the others have a user and a
+/// transport, and so shares nothing with `Node` but the address.
+///
+/// The link syntax is the one v2rayN and Hiddify already emit — private key as userinfo, peer key
+/// and interface addresses as query parameters — so a link pasted from another client parses here
+/// too, and this is not a private format invented for one panel.
+///
+/// `reserved` is Cloudflare WARP's client identifier. Getting it wrong is silent — the server drops
+/// the handshake rather than refusing it — which is why it is carried rather than dropped as an
+/// optimisation. It is kept as text: numbers comma-separated, or the base64 some exports use, both
+/// of which the frontend reads.
+#[derive(Default)]
+struct WireGuard {
+    secret: String,
+    /// Bracketed already when it is an IPv6 literal.
+    host: String,
+    port: i64,
+    public_key: String,
+    addresses: Vec<String>,
+    reserved: String,
+    mtu: Option<i64>,
+    keepalive: Option<i64>,
+    name: String,
+}
+
+impl WireGuard {
+    fn link(&self) -> String {
+        let mut params: Vec<(&str, String)> = vec![
+            ("publickey", self.public_key.clone()),
+            ("address", self.addresses.join(",")),
+            ("reserved", self.reserved.clone()),
+        ];
+        if let Some(mtu) = self.mtu {
+            params.push(("mtu", mtu.to_string()));
+        }
+        if let Some(keepalive) = self.keepalive {
+            params.push(("keepalive", keepalive.to_string()));
+        }
+
+        let link = format!(
+            "wireguard://{}@{}:{}",
+            percent_encode(&self.secret),
+            self.host,
+            self.port
+        );
+        named(with_query(link, &params), &self.name)
+    }
+}
+
+/// A link that is only a scheme and an endpoint: enough for the frontend to refuse the entry by
+/// name. Used for chains (`chain://`) and for protocols whose shape is not known here.
+fn marker(scheme: &str, endpoint: &str, name: &str) -> String {
+    named(format!("{scheme}://{endpoint}"), name)
+}
+
+/// The share-link scheme for a configuration's protocol name, where the two differ.
+fn scheme_of(protocol: &str) -> &str {
+    match protocol {
+        "shadowsocks" => "ss",
+        other => other,
+    }
+}
+
+fn with_query(mut link: String, params: &[(&str, String)]) -> String {
+    let query: Vec<String> = params
+        .iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(key, value)| format!("{key}={}", percent_encode(value)))
+        .collect();
+    if !query.is_empty() {
+        link.push('?');
+        link.push_str(&query.join("&"));
+    }
+    link
+}
+
+fn named(mut link: String, name: &str) -> String {
+    if !name.is_empty() {
+        link.push('#');
+        link.push_str(&percent_encode(name));
+    }
+    link
+}
+
+/// An IPv6 literal needs brackets, or the port cannot be told apart from the address.
+fn bracketed(address: &str) -> String {
+    if address.contains(':') && !address.starts_with('[') {
+        format!("[{address}]")
+    } else {
+        address.to_string()
+    }
+}
+
+/// A string field, or empty.
+fn text(from: Option<&Value>, field: &str) -> String {
+    from.and_then(|v| v.get(field))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The first of two readings that has anything in it — for fields formats spell two ways.
+fn either(first: String, second: String) -> String {
+    if first.is_empty() {
+        second
+    } else {
+        first
+    }
+}
+
+/// A number that may have been written as a number or as a string — ports especially.
+fn number(from: Option<&Value>, field: &str) -> Option<i64> {
+    let value = from?.get(field)?;
+    value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
+/// A list of strings that may also have been written as one string.
+fn strings(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(one)) if !one.is_empty() => vec![one.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// WARP's client id: three numbers, or text already in link form.
+fn reserved_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::Array(bytes)) => bytes
+            .iter()
+            .filter_map(Value::as_i64)
+            .map(|b| b.to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        Some(Value::String(text)) => text.clone(),
+        _ => String::new(),
+    }
+}
+
+/// The WebSocket path with early data written back into it as `?ed=N`, the form links carry.
+///
+/// sing-box and Clash hold early data as two fields beside the path. The header name is the one
+/// Xray always uses unless it says otherwise, and `eh` is how a link says otherwise. With no header
+/// at all the early data would go in the path itself, which a link cannot express — so none is
+/// written, and the connection does without the optimisation rather than failing.
+fn early_data_path(path: String, max_early_data: Option<i64>, header: &str) -> String {
+    match max_early_data {
+        Some(ed) if ed > 0 && header == "Sec-WebSocket-Protocol" => format!("{path}?ed={ed}"),
+        Some(ed) if ed > 0 && !header.is_empty() => {
+            format!("{path}?ed={ed}&eh={}", percent_encode(header))
+        }
+        _ => path,
+    }
+}
+
+// -------------------------------------------------------------------------------------- xray
+
+/// Rewrites one Xray configuration as a share link.
+///
+/// BPB serves `?app=xray` as an array of these, one server each, wrapped in an entire client
+/// config of inbounds, routing and DNS. The server is the outbound tagged `proxy`, which is the
+/// convention every panel emitting this format follows. One without such an outbound is a load
+/// balancer — BPB's "Best Ping" entry carries `proxy-1` through `proxy-8` behind a `leastPing`
+/// selector — and is skipped rather than flattened, because this client has no balancer and the
+/// servers behind one are already listed individually elsewhere in the same array. Flattening
+/// would import each of them twice.
+fn xray_config_link(config: &Value) -> Option<String> {
+    let outbounds = config.get("outbounds").and_then(Value::as_array)?;
+    let remarks = text(Some(config), "remarks");
+
+    match carrier(outbounds) {
+        Carrier::One(proxy) => xray_link(proxy, &remarks),
+        // Named rather than quietly reduced to its last hop. BPB's "WoW" entries are
+        // WARP-over-WARP, and importing one as a single hop would give the user something
+        // labelled WoW that is not.
+        Carrier::Chain(exit) => Some(marker("chain", &exit, &remarks)),
+        Carrier::Balancer => None,
+    }
 }
 
 /// What a configuration's outbounds add up to.
@@ -275,12 +573,7 @@ enum Carrier<'a> {
 /// BPB's WARP subscription has a "Best Ping" entry holding exactly one `proxy-1`, which is a real
 /// configuration and not a duplicate of anything — skipping it on the tag alone lost it.
 fn carrier(outbounds: &[Value]) -> Carrier<'_> {
-    let tag_of = |o: &Value| {
-        o.get("tag")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    };
+    let tag_of = |o: &Value| text(Some(o), "tag");
 
     if let Some(outer) = outbounds.iter().find(|o| {
         o.pointer("/streamSettings/sockopt/dialerProxy")
@@ -314,45 +607,29 @@ fn carrier(outbounds: &[Value]) -> Carrier<'_> {
     }
 }
 
-/// A port that may have been written as a number or as a string.
-fn port_of(peer: &Value) -> Option<i64> {
-    let port = peer.get("port")?;
-    port.as_i64()
-        .or_else(|| port.as_str().and_then(|s| s.parse().ok()))
-}
-
-/// Turns one outbound into a share link.
-///
-/// The scheme is whatever the outbound calls its protocol, including protocols this build does not
-/// run — deciding that is the frontend's job, and it explains a refusal better than a silent drop.
-fn outbound_link(outbound: &Value, remarks: &str) -> Option<String> {
+/// Turns one Xray outbound into a share link.
+fn xray_link(outbound: &Value, remarks: &str) -> Option<String> {
     let protocol = outbound.get("protocol").and_then(Value::as_str)?;
 
     // Where the address and the credential live depends on the protocol: VLESS and VMess use
     // `vnext[].users[]`, and everything password-based uses `servers[]`.
-    let (address, port, credential) = match protocol {
+    let (peer, credential) = match protocol {
         "vless" | "vmess" => {
             let peer = outbound.pointer("/settings/vnext/0")?;
-            (
-                peer.get("address").and_then(Value::as_str)?,
-                port_of(peer)?,
-                peer.pointer("/users/0/id").and_then(Value::as_str)?,
-            )
+            (peer, peer.pointer("/users/0/id").and_then(Value::as_str)?)
         }
-        // Everything password-based in Xray's schema keeps its peer under `servers`.
         "trojan" | "shadowsocks" | "socks" | "http" => {
             let peer = outbound.pointer("/settings/servers/0")?;
             (
-                peer.get("address").and_then(Value::as_str)?,
-                port_of(peer)?,
+                peer,
                 peer.get("password")
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             )
         }
         // WireGuard keeps its peer under `peers` and its identity in keys rather than a user
-        // record, so it shares nothing with the two shapes above and is encoded on its own.
-        "wireguard" => return wireguard_link(outbound, remarks),
+        // record, so it shares nothing with the two shapes above and is read on its own.
+        "wireguard" => return xray_wireguard(outbound, remarks),
         // A protocol whose shape this does not know. Returning `None` would drop the entry, and a
         // subscription made only of such entries would come back as "nothing that looks like a
         // server list" — which reads as a broken link rather than as an unsupported protocol. A
@@ -363,198 +640,426 @@ fn outbound_link(outbound: &Value, remarks: &str) -> Option<String> {
                 .or_else(|| outbound.pointer("/settings/peers/0/endpoint"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let mut link = format!("{protocol}://{endpoint}");
-            if !remarks.is_empty() {
-                link.push('#');
-                link.push_str(&percent_encode(remarks));
-            }
-            return Some(link);
+            return Some(marker(scheme_of(protocol), endpoint, remarks));
         }
     };
 
     let stream = outbound.get("streamSettings");
-    let network = stream
-        .and_then(|s| s.get("network"))
-        .and_then(Value::as_str)
-        .unwrap_or("tcp");
-    let security = stream
-        .and_then(|s| s.get("security"))
-        .and_then(Value::as_str)
-        .unwrap_or("none");
+    let network = text(stream, "network");
+    let security = text(stream, "security");
+    let at = |key: &str| stream.and_then(|s| s.get(key));
 
-    let mut params: Vec<(&str, String)> = vec![
-        ("type", network.to_string()),
-        ("security", security.to_string()),
-    ];
-
-    let settings_at = |key: &str| stream.and_then(|s| s.get(key));
-    let push_str = |params: &mut Vec<(&str, String)>, key: &'static str, from: Option<&Value>, field: &str| {
-        if let Some(value) = from.and_then(|v| v.get(field)).and_then(Value::as_str) {
-            params.push((key, value.to_string()));
-        }
+    let mut node = Node {
+        scheme: scheme_of(protocol).to_string(),
+        credential: credential.to_string(),
+        address: peer.get("address").and_then(Value::as_str)?.to_string(),
+        port: number(Some(peer), "port")?,
+        network: if network.is_empty() { "tcp".into() } else { network },
+        security: if security.is_empty() { "none".into() } else { security },
+        name: remarks.to_string(),
+        ..Node::default()
     };
 
     // The share-link field names are not always Xray's JSON ones, so each transport is spelled out
-    // rather than mapped generically.
-    match network {
+    // rather than mapped generically. Xray already writes early data into the WebSocket path.
+    match node.network.as_str() {
         "ws" => {
-            let ws = settings_at("wsSettings");
-            push_str(&mut params, "path", ws, "path");
-            push_str(&mut params, "host", ws, "host");
+            let ws = at("wsSettings");
+            node.path = text(ws, "path");
+            node.host = text(ws, "host");
+            if node.host.is_empty() {
+                node.host = text(ws.and_then(|w| w.get("headers")), "Host");
+            }
         }
         "httpupgrade" => {
-            let hu = settings_at("httpupgradeSettings");
-            push_str(&mut params, "path", hu, "path");
-            push_str(&mut params, "host", hu, "host");
+            let hu = at("httpupgradeSettings");
+            node.path = text(hu, "path");
+            node.host = text(hu, "host");
         }
-        "grpc" => {
-            push_str(&mut params, "serviceName", settings_at("grpcSettings"), "serviceName");
-        }
+        "grpc" => node.service_name = text(at("grpcSettings"), "serviceName"),
         "http" | "h2" | "h3" => {
-            let http = settings_at("httpSettings");
-            push_str(&mut params, "path", http, "path");
+            let http = at("httpSettings");
+            node.path = text(http, "path");
             // HTTP/2 is the one transport whose host is a list rather than a string — the same
             // asymmetry config.rs has to handle on the way out.
-            if let Some(first) = http
-                .and_then(|v| v.get("host"))
-                .and_then(Value::as_array)
-                .and_then(|hosts| hosts.first())
-                .and_then(Value::as_str)
-            {
-                params.push(("host", first.to_string()));
-            } else {
-                push_str(&mut params, "host", http, "host");
-            }
+            node.host = strings(http.and_then(|h| h.get("host")))
+                .into_iter()
+                .next()
+                .unwrap_or_default();
         }
         _ => {}
     }
 
     // Reality keeps its settings under its own key rather than in `tlsSettings`.
-    let tls = settings_at(if security == "reality" {
+    let tls = at(if node.security == "reality" {
         "realitySettings"
     } else {
         "tlsSettings"
     });
-    push_str(&mut params, "sni", tls, "serverName");
-    push_str(&mut params, "fp", tls, "fingerprint");
-    push_str(&mut params, "pbk", tls, "publicKey");
-    push_str(&mut params, "sid", tls, "shortId");
-
-    if let Some(alpn) = tls.and_then(|v| v.get("alpn")).and_then(Value::as_array) {
-        let names: Vec<&str> = alpn.iter().filter_map(Value::as_str).collect();
-        if !names.is_empty() {
-            params.push(("alpn", names.join(",")));
-        }
-    }
-    if tls.and_then(|v| v.get("allowInsecure")).and_then(Value::as_bool) == Some(true) {
-        params.push(("allowInsecure", "1".to_string()));
-    }
+    node.sni = text(tls, "serverName");
+    node.fingerprint = text(tls, "fingerprint");
+    node.public_key = text(tls, "publicKey");
+    node.short_id = text(tls, "shortId");
+    node.alpn = strings(tls.and_then(|t| t.get("alpn")));
+    node.insecure = tls.and_then(|t| t.get("allowInsecure")).and_then(Value::as_bool) == Some(true);
 
     // VLESS carries its flow on the user rather than the stream, and VMess its cipher and alterId.
     let user = outbound.pointer("/settings/vnext/0/users/0");
     if protocol == "vless" {
-        push_str(&mut params, "flow", user, "flow");
+        node.flow = text(user, "flow");
     }
     if protocol == "vmess" {
-        push_str(&mut params, "encryption", user, "security");
-        if let Some(alter_id) = user.and_then(|u| u.get("alterId")).and_then(Value::as_i64) {
-            params.push(("alterId", alter_id.to_string()));
-        }
+        node.cipher = text(user, "security");
+        node.alter_id = user.and_then(|u| u.get("alterId")).and_then(Value::as_i64);
     }
 
-    // An IPv6 literal needs brackets, or the port cannot be told apart from the address.
-    let host = if address.contains(':') && !address.starts_with('[') {
-        format!("[{address}]")
-    } else {
-        address.to_string()
-    };
-
-    let query: Vec<String> = params
-        .iter()
-        .filter(|(_, value)| !value.is_empty())
-        .map(|(key, value)| format!("{key}={}", percent_encode(value)))
-        .collect();
-
-    let mut link = format!("{protocol}://{}@{host}:{port}", percent_encode(credential));
-    if !query.is_empty() {
-        link.push('?');
-        link.push_str(&query.join("&"));
-    }
-    if !remarks.is_empty() {
-        link.push('#');
-        link.push_str(&percent_encode(remarks));
-    }
-
-    Some(link)
+    Some(node.link())
 }
 
-/// A WireGuard outbound as a `wireguard://` link.
-///
-/// The syntax is the one v2rayN and Hiddify already emit — private key as userinfo, peer key and
-/// interface addresses as query parameters — so a link pasted from another client parses here too,
-/// and this is not a private format invented for one panel.
-///
-/// `reserved` is Cloudflare WARP's client identifier. Xray writes it as three numbers; the link
-/// form writes them comma-separated. Getting it wrong is silent — the server drops the handshake
-/// rather than refusing it — which is why it is carried rather than dropped as an optimisation.
-fn wireguard_link(outbound: &Value, remarks: &str) -> Option<String> {
+/// A WireGuard outbound in Xray's shape: the peer as one `host:port` string, which has to survive
+/// an IPv6 literal, and `reserved` as three numbers.
+fn xray_wireguard(outbound: &Value, remarks: &str) -> Option<String> {
     let settings = outbound.get("settings")?;
     let peer = settings.pointer("/peers/0")?;
+    let (host, port) = peer.get("endpoint").and_then(Value::as_str)?.rsplit_once(':')?;
 
-    // Xray writes the peer as a single `host:port` string, which has to survive an IPv6 literal.
-    let endpoint = peer.get("endpoint").and_then(Value::as_str)?;
-    let (host, port) = endpoint.rsplit_once(':')?;
-
-    let mut params: Vec<(&str, String)> = Vec::new();
-    if let Some(key) = peer.get("publicKey").and_then(Value::as_str) {
-        params.push(("publickey", key.to_string()));
-    }
-    if let Some(addresses) = settings.get("address").and_then(Value::as_array) {
-        let list: Vec<&str> = addresses.iter().filter_map(Value::as_str).collect();
-        if !list.is_empty() {
-            params.push(("address", list.join(",")));
+    Some(
+        WireGuard {
+            secret: text(Some(settings), "secretKey"),
+            host: host.to_string(),
+            port: port.parse().ok()?,
+            public_key: text(Some(peer), "publicKey"),
+            addresses: strings(settings.get("address")),
+            reserved: reserved_text(settings.get("reserved")),
+            mtu: number(Some(settings), "mtu"),
+            keepalive: number(Some(peer), "keepAlive"),
+            name: remarks.to_string(),
         }
+        .link(),
+    )
+}
+
+// ---------------------------------------------------------------------------------- sing-box
+
+/// sing-box outbound types that are not servers: groups of other outbounds, and the local ones.
+///
+/// A group is skipped rather than expanded because every member is listed as its own outbound in
+/// the same configuration — BPB's "Best Ping" `urltest` names the eight servers beside it.
+const SINGBOX_NOT_SERVERS: &[&str] = &["selector", "urltest", "direct", "block", "dns"];
+
+/// Turns one sing-box outbound, or endpoint, into a share link.
+///
+/// sing-box's `network` field is not the transport — it restricts the outbound to TCP or UDP — so
+/// the transport is read from `transport.type` alone, and its absence means plain TCP.
+fn singbox_link(outbound: &Value) -> Option<String> {
+    let o = Some(outbound);
+    let kind = text(o, "type");
+    if SINGBOX_NOT_SERVERS.contains(&kind.as_str()) {
+        return None;
     }
-    if let Some(reserved) = settings.get("reserved").and_then(Value::as_array) {
-        let bytes: Vec<String> = reserved
-            .iter()
-            .filter_map(Value::as_i64)
-            .map(|b| b.to_string())
-            .collect();
-        if !bytes.is_empty() {
-            params.push(("reserved", bytes.join(",")));
+    let name = text(o, "tag");
+    let server = text(o, "server");
+    let port = number(o, "server_port");
+
+    // `detour` dials this outbound through another, so traffic crosses both: a chain, refused by
+    // name for the same reason as Xray's `dialerProxy`. The far hop is this outbound itself.
+    if !text(o, "detour").is_empty() {
+        let peer = outbound.pointer("/peers/0");
+        let (host, port) = if server.is_empty() {
+            (text(peer, "address"), number(peer, "port"))
+        } else {
+            (server, port)
+        };
+        let endpoint = match port {
+            Some(port) => format!("{}:{port}", bracketed(&host)),
+            None => host,
+        };
+        return Some(marker("chain", &endpoint, &name));
+    }
+
+    let credential = match kind.as_str() {
+        "vless" | "vmess" => text(o, "uuid"),
+        "trojan" | "shadowsocks" => text(o, "password"),
+        "wireguard" => return singbox_wireguard(outbound, &name),
+        _ => return Some(marker(scheme_of(&kind), &server, &name)),
+    };
+    if server.is_empty() {
+        return None;
+    }
+
+    let mut node = Node {
+        scheme: scheme_of(&kind).to_string(),
+        credential,
+        address: server,
+        port: port?,
+        security: "none".into(),
+        name,
+        ..Node::default()
+    };
+
+    let tls = outbound.get("tls");
+    let reality = tls.and_then(|t| t.get("reality"));
+    let enabled = |v: Option<&Value>| {
+        v.and_then(|v| v.get("enabled")).and_then(Value::as_bool) == Some(true)
+    };
+    if enabled(tls) {
+        node.security = if enabled(reality) { "reality" } else { "tls" }.into();
+        node.sni = text(tls, "server_name");
+        node.insecure = tls.and_then(|t| t.get("insecure")).and_then(Value::as_bool) == Some(true);
+        node.alpn = strings(tls.and_then(|t| t.get("alpn")));
+        let utls = tls.and_then(|t| t.get("utls"));
+        if enabled(utls) {
+            node.fingerprint = text(utls, "fingerprint");
         }
-    }
-    if let Some(mtu) = settings.get("mtu").and_then(Value::as_i64) {
-        params.push(("mtu", mtu.to_string()));
-    }
-    if let Some(keepalive) = peer.get("keepAlive").and_then(Value::as_i64) {
-        params.push(("keepalive", keepalive.to_string()));
+        node.public_key = text(reality, "public_key");
+        node.short_id = text(reality, "short_id");
     }
 
-    let secret = settings
-        .get("secretKey")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let transport = outbound.get("transport");
+    let network = text(transport, "type");
+    node.network = if network.is_empty() { "tcp".into() } else { network };
+    match node.network.as_str() {
+        "ws" => {
+            // A header may be a list in sing-box; the first entry is the one sent.
+            node.host = strings(transport.and_then(|t| t.pointer("/headers/Host")))
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            node.path = early_data_path(
+                text(transport, "path"),
+                number(transport, "max_early_data"),
+                &text(transport, "early_data_header_name"),
+            );
+        }
+        "http" | "httpupgrade" => {
+            node.path = text(transport, "path");
+            node.host = strings(transport.and_then(|t| t.get("host")))
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+        }
+        "grpc" => node.service_name = text(transport, "service_name"),
+        _ => {}
+    }
 
-    let query: Vec<String> = params
+    match kind.as_str() {
+        "vless" => node.flow = text(o, "flow"),
+        "vmess" => {
+            node.cipher = text(o, "security");
+            node.alter_id = number(o, "alter_id");
+        }
+        _ => {}
+    }
+
+    Some(node.link())
+}
+
+/// WireGuard in either of sing-box's shapes: the endpoint it moved to in 1.11 (`address`, and the
+/// peer under `peers`), or the older outbound (`local_address`, the peer inline).
+fn singbox_wireguard(outbound: &Value, name: &str) -> Option<String> {
+    let o = Some(outbound);
+    let peer = outbound.pointer("/peers/0");
+    let host = either(either(text(peer, "address"), text(peer, "server")), text(o, "server"));
+    if host.is_empty() {
+        return None;
+    }
+    let mut addresses = strings(outbound.get("address"));
+    if addresses.is_empty() {
+        addresses = strings(outbound.get("local_address"));
+    }
+
+    Some(
+        WireGuard {
+            secret: text(o, "private_key"),
+            host: bracketed(&host),
+            port: number(peer, "port")
+                .or_else(|| number(peer, "server_port"))
+                .or_else(|| number(o, "server_port"))?,
+            public_key: either(text(peer, "public_key"), text(o, "peer_public_key")),
+            addresses,
+            reserved: either(
+                reserved_text(peer.and_then(|p| p.get("reserved"))),
+                reserved_text(outbound.get("reserved")),
+            ),
+            mtu: number(o, "mtu"),
+            keepalive: number(peer, "persistent_keepalive_interval"),
+            name: name.to_string(),
+        }
+        .link(),
+    )
+}
+
+// ------------------------------------------------------------------------------------- clash
+
+/// Clash (mihomo) proxy types that are not servers.
+const CLASH_NOT_SERVERS: &[&str] = &["direct", "reject", "dns"];
+
+/// Turns one entry of a Clash configuration's `proxies` into a share link.
+///
+/// Clash is usually YAML, which this client does not read (see `is_clash_yaml`), but BPB serves
+/// `?app=clash` as JSON — YAML's own superset — so its configuration arrives here as ordinary JSON.
+/// `proxy-groups` is ignored: its members are all in `proxies`.
+fn clash_link(proxy: &Value) -> Option<String> {
+    let p = Some(proxy);
+    let kind = text(p, "type").to_ascii_lowercase();
+    if CLASH_NOT_SERVERS.contains(&kind.as_str()) {
+        return None;
+    }
+    let name = text(p, "name");
+    let server = text(p, "server");
+    let port = number(p, "port");
+
+    // Clash's spelling of a chain: this proxy dials through the one named.
+    if !text(p, "dialer-proxy").is_empty() {
+        let endpoint = match port {
+            Some(port) => format!("{}:{port}", bracketed(&server)),
+            None => server,
+        };
+        return Some(marker("chain", &endpoint, &name));
+    }
+
+    let credential = match kind.as_str() {
+        "vless" | "vmess" => text(p, "uuid"),
+        "trojan" | "ss" => text(p, "password"),
+        "wireguard" => return clash_wireguard(proxy, &name),
+        _ => return Some(marker(scheme_of(&kind), &server, &name)),
+    };
+    if server.is_empty() {
+        return None;
+    }
+
+    // Trojan is TLS by definition in Clash, so it often says nothing about it.
+    let reality = proxy.get("reality-opts").filter(|r| r.is_object());
+    let tls = kind == "trojan" || proxy.get("tls").and_then(Value::as_bool) == Some(true);
+    let mut node = Node {
+        scheme: scheme_of(&kind).to_string(),
+        credential,
+        address: server,
+        port: port?,
+        security: match (reality, tls) {
+            (Some(_), _) => "reality",
+            (None, true) => "tls",
+            (None, false) => "none",
+        }
+        .into(),
+        name,
+        ..Node::default()
+    };
+
+    if node.security != "none" {
+        // VLESS and VMess call it `servername`, Trojan `sni`.
+        node.sni = either(text(p, "servername"), text(p, "sni"));
+        node.fingerprint = text(p, "client-fingerprint");
+        node.insecure = proxy.get("skip-cert-verify").and_then(Value::as_bool) == Some(true);
+        node.alpn = strings(proxy.get("alpn"));
+        node.public_key = text(reality, "public-key");
+        node.short_id = text(reality, "short-id");
+    }
+
+    let network = text(p, "network");
+    node.network = if network.is_empty() { "tcp".into() } else { network };
+    let first = |value: Option<&Value>| strings(value).into_iter().next().unwrap_or_default();
+    match node.network.as_str() {
+        "ws" => {
+            let ws = proxy.get("ws-opts");
+            // Older Clash configs spell these as top-level `ws-path` and `ws-headers`.
+            let path = either(text(ws, "path"), text(p, "ws-path"));
+            node.host = first(ws.and_then(|w| w.pointer("/headers/Host")));
+            if node.host.is_empty() {
+                node.host = first(proxy.pointer("/ws-headers/Host"));
+            }
+            // mihomo's switch for HTTPUpgrade, which it carries as a kind of WebSocket.
+            if ws.and_then(|w| w.get("v2ray-http-upgrade")).and_then(Value::as_bool) == Some(true) {
+                node.network = "httpupgrade".into();
+                node.path = path;
+            } else {
+                node.path = early_data_path(
+                    path,
+                    number(ws, "max-early-data"),
+                    &text(ws, "early-data-header-name"),
+                );
+            }
+        }
+        "grpc" => node.service_name = text(proxy.get("grpc-opts"), "grpc-service-name"),
+        // Clash's `h2` is the HTTP transport; its `http` is TCP with an HTTP header in front.
+        "h2" => {
+            let h2 = proxy.get("h2-opts");
+            node.network = "http".into();
+            node.path = text(h2, "path");
+            node.host = first(h2.and_then(|h| h.get("host")));
+        }
+        "http" => {
+            let http = proxy.get("http-opts");
+            node.network = "tcp".into();
+            node.header_type = "http".into();
+            node.path = first(http.and_then(|h| h.get("path")));
+            node.host = first(http.and_then(|h| h.pointer("/headers/Host")));
+        }
+        _ => {}
+    }
+
+    match kind.as_str() {
+        "vless" => node.flow = text(p, "flow"),
+        "vmess" => {
+            node.cipher = text(p, "cipher");
+            node.alter_id = number(p, "alterId");
+        }
+        _ => {}
+    }
+
+    Some(node.link())
+}
+
+/// WireGuard as Clash writes it: bare interface addresses under `ip` and `ipv6`, which a link needs
+/// as prefixes, and the peer either inline or under `peers`.
+fn clash_wireguard(proxy: &Value, name: &str) -> Option<String> {
+    let p = Some(proxy);
+    let peer = proxy.pointer("/peers/0");
+    let host = either(text(peer, "server"), text(p, "server"));
+    if host.is_empty() {
+        return None;
+    }
+    let addresses = ["ip", "ipv6"]
         .iter()
-        .filter(|(_, value)| !value.is_empty())
-        .map(|(key, value)| format!("{key}={}", percent_encode(value)))
+        .map(|key| text(p, key))
+        .filter(|address| !address.is_empty())
+        .map(|address| match (address.contains('/'), address.contains(':')) {
+            (true, _) => address,
+            (false, true) => format!("{address}/128"),
+            (false, false) => format!("{address}/32"),
+        })
         .collect();
 
-    let mut link = format!("wireguard://{}@{host}:{port}", percent_encode(secret));
-    if !query.is_empty() {
-        link.push('?');
-        link.push_str(&query.join("&"));
-    }
-    if !remarks.is_empty() {
-        link.push('#');
-        link.push_str(&percent_encode(remarks));
-    }
-
-    Some(link)
+    Some(
+        WireGuard {
+            secret: text(p, "private-key"),
+            host: bracketed(&host),
+            port: number(peer, "port").or_else(|| number(p, "port"))?,
+            public_key: either(text(peer, "public-key"), text(p, "public-key")),
+            addresses,
+            reserved: either(
+                reserved_text(peer.and_then(|x| x.get("reserved"))),
+                reserved_text(proxy.get("reserved")),
+            ),
+            mtu: number(p, "mtu"),
+            keepalive: number(p, "persistent-keepalive"),
+            name: name.to_string(),
+        }
+        .link(),
+    )
 }
+
+/// Whether a body that is not JSON is a Clash configuration in YAML.
+///
+/// Refused by name rather than read. Reading YAML means carrying a parser for an untrusted body,
+/// for a format the panels this client is built around serve as JSON anyway — and letting it fall
+/// through to the line scan is worse than either: that finds the `://` in its DNS servers and
+/// health-check URLs and reports each one as a server.
+fn is_clash_yaml(body: &str) -> bool {
+    body.lines().any(|line| line.starts_with("proxies:"))
+}
+
+// ----------------------------------------------------------------------------------- escaping
 
 /// Percent-encodes everything outside RFC 3986's unreserved set.
 ///
@@ -574,18 +1079,38 @@ fn percent_encode(value: &str) -> String {
     out
 }
 
+/// The inverse of `percent_encode`: `None` for a malformed escape or bytes that are not UTF-8.
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+// ----------------------------------------------------------------------------------- fetching
+
 /// Fetches a subscription and returns its links and allowance.
 ///
 /// Blocking: call it from `spawn_blocking`.
 pub fn fetch(url: &str) -> Result<Fetched, SubscriptionError> {
-    check_url(url)?;
+    let address = resolve(url)?;
 
     let agent = ureq::AgentBuilder::new()
         .timeout(TIMEOUT)
         .user_agent(USER_AGENT)
         .build();
 
-    let response = match agent.get(url.trim()).call() {
+    let response = match agent.get(&address).call() {
         Ok(r) => r,
         Err(ureq::Error::Status(status, _)) => return Err(SubscriptionError::Status { status }),
         Err(e) => return Err(SubscriptionError::Network(e.to_string())),
@@ -619,7 +1144,15 @@ fn assemble(
     title: Option<String>,
     body: &str,
 ) -> Result<Fetched, SubscriptionError> {
-    let links = extract_links(&decode_body(body));
+    let decoded = decode_body(body);
+    if is_clash_yaml(&decoded) {
+        return Err(SubscriptionError::Rejected(
+            "This subscription is a Clash configuration in YAML, which this build cannot read. \
+             Use the provider's link for another app — sing-box, Xray or v2rayNG — instead."
+                .into(),
+        ));
+    }
+    let links = extract_links(&decoded);
     if links.is_empty() {
         return Err(SubscriptionError::Empty);
     }
@@ -1009,5 +1542,373 @@ mod tests {
         assert!(link.contains("pbk=PBK"));
         assert!(link.contains("sid=ab"));
         assert!(link.contains("flow=xtls-rprx-vision"));
+    }
+
+    // ---------------------------------------------------------- the links a BPB panel offers
+
+    /// One BPB subscription, three ways, as its panel hands them out: an import link for sing-box
+    /// wrapping the address raw, and the address itself asked for Clash and for Xray. Each carries
+    /// the panel's display name in its fragment.
+    const SING_BOX_LINK: &str = "sing-box://import-remote-profile?url=https://edge.example.net/Xq3vT9pLmN2wR8sK/sub/normal?app=sing-box#%F0%9F%92%A6%20BPB%20Normal";
+    const CLASH_LINK: &str =
+        "https://edge.example.net/Xq3vT9pLmN2wR8sK/sub/normal?app=clash#%F0%9F%92%A6%20BPB%20Normal";
+    const XRAY_LINK: &str =
+        "https://edge.example.net/Xq3vT9pLmN2wR8sK/sub/normal?app=xray#%F0%9F%92%A6%20BPB%20Normal";
+
+    /// What BPB serves to `?app=sing-box`: one configuration holding every server as an outbound,
+    /// beside a selector, a `urltest` "Best Ping" group over the same servers, and `direct`. The
+    /// same two servers as `bpb_array`, trimmed of the inbounds, routing and most of the DNS.
+    fn bpb_sing_box() -> &'static str {
+        r#"{
+          "dns": { "servers": [{ "type": "https", "server": "8.8.8.8", "detour": "✅ Selector", "tag": "dns-remote" }] },
+          "outbounds": [
+            {
+              "tag": "💦 1. VLESS - Domain : 443",
+              "type": "vless",
+              "server": "edge.example.net",
+              "server_port": 443,
+              "tcp_fast_open": false,
+              "uuid": "455c35ab-42b9-43d7-b63c-ea915c2c72ab",
+              "packet_encoding": "",
+              "network": "tcp",
+              "tls": {
+                "enabled": true,
+                "server_name": "edge.example.net",
+                "record_fragment": false,
+                "insecure": false,
+                "alpn": ["http/1.1"],
+                "utls": { "enabled": true, "fingerprint": "chrome" }
+              },
+              "transport": {
+                "type": "ws",
+                "path": "/vl/8NjpyzwBr4ARYZEeGqW",
+                "max_early_data": 2560,
+                "early_data_header_name": "Sec-WebSocket-Protocol",
+                "headers": { "Host": "edge.example.net" }
+              },
+              "domain_resolver": "dns-direct"
+            },
+            {
+              "tag": "💦 1. Trojan - Domain : 443",
+              "type": "trojan",
+              "server": "edge.example.net",
+              "server_port": 443,
+              "password": "E1wy;,GYGPPhYEYXn",
+              "network": "tcp",
+              "tls": {
+                "enabled": true,
+                "server_name": "edge.example.net",
+                "insecure": false,
+                "utls": { "enabled": true, "fingerprint": "chrome" }
+              },
+              "transport": {
+                "type": "ws",
+                "path": "/tr/FHxj7oXIlRMTvceFHCN",
+                "max_early_data": 2560,
+                "early_data_header_name": "Sec-WebSocket-Protocol",
+                "headers": { "Host": "edge.example.net" }
+              }
+            },
+            { "type": "selector", "tag": "✅ Selector",
+              "outbounds": ["💦 Best Ping 🚀", "💦 1. VLESS - Domain : 443", "💦 1. Trojan - Domain : 443"] },
+            { "type": "direct", "tag": "direct" },
+            { "type": "urltest", "tag": "💦 Best Ping 🚀",
+              "outbounds": ["💦 1. VLESS - Domain : 443", "💦 1. Trojan - Domain : 443"],
+              "url": "https://www.gstatic.com/generate_204" }
+          ]
+        }"#
+    }
+
+    /// What BPB serves to `?app=clash`: a Clash configuration, but as JSON rather than YAML, with
+    /// the servers under `proxies` and the groups over them under `proxy-groups`. The same two
+    /// servers again.
+    fn bpb_clash() -> &'static str {
+        r#"{
+          "mixed-port": 7890,
+          "dns": { "nameserver": ["https://8.8.8.8/dns-query"] },
+          "proxies": [
+            {
+              "name": "💦 1. VLESS - Domain : 443",
+              "type": "vless",
+              "server": "edge.example.net",
+              "port": 443,
+              "ip-version": "ipv4",
+              "tfo": false,
+              "udp": false,
+              "uuid": "455c35ab-42b9-43d7-b63c-ea915c2c72ab",
+              "packet-encoding": "",
+              "encryption": "",
+              "tls": true,
+              "servername": "edge.example.net",
+              "client-fingerprint": "chrome",
+              "skip-cert-verify": false,
+              "alpn": ["http/1.1"],
+              "network": "ws",
+              "ws-opts": {
+                "path": "/vl/8NjpyzwBr4ARYZEeGqW",
+                "max-early-data": 2560,
+                "early-data-header-name": "Sec-WebSocket-Protocol",
+                "headers": { "Host": "edge.example.net" }
+              }
+            },
+            {
+              "name": "💦 1. Trojan - Domain : 443",
+              "type": "trojan",
+              "server": "edge.example.net",
+              "port": 443,
+              "password": "E1wy;,GYGPPhYEYXn",
+              "tls": true,
+              "sni": "edge.example.net",
+              "client-fingerprint": "chrome",
+              "skip-cert-verify": false,
+              "network": "ws",
+              "ws-opts": {
+                "path": "/tr/FHxj7oXIlRMTvceFHCN",
+                "max-early-data": 2560,
+                "early-data-header-name": "Sec-WebSocket-Protocol",
+                "headers": { "Host": "edge.example.net" }
+              }
+            }
+          ],
+          "proxy-groups": [
+            { "name": "✅ Selector", "type": "select",
+              "proxies": ["💦 Best Ping 🚀", "💦 1. VLESS - Domain : 443", "💦 1. Trojan - Domain : 443"] },
+            { "name": "💦 Best Ping 🚀", "type": "url-test", "url": "https://www.gstatic.com/generate_204",
+              "proxies": ["💦 1. VLESS - Domain : 443", "💦 1. Trojan - Domain : 443"] }
+          ]
+        }"#
+    }
+
+    #[test]
+    fn a_sing_box_import_link_is_fetched_at_the_address_it_carries() {
+        assert_eq!(
+            resolve(SING_BOX_LINK).unwrap(),
+            "https://edge.example.net/Xq3vT9pLmN2wR8sK/sub/normal?app=sing-box"
+        );
+    }
+
+    /// The fragment is the panel's name for the subscription, not part of its address.
+    #[test]
+    fn the_clash_and_xray_links_are_fetched_as_written_less_their_name() {
+        assert_eq!(
+            resolve(CLASH_LINK).unwrap(),
+            "https://edge.example.net/Xq3vT9pLmN2wR8sK/sub/normal?app=clash"
+        );
+        assert_eq!(
+            resolve(XRAY_LINK).unwrap(),
+            "https://edge.example.net/Xq3vT9pLmN2wR8sK/sub/normal?app=xray"
+        );
+    }
+
+    /// Each link asks for a different app's format, and each format comes back as the same two
+    /// servers — the whole path, from what the user pasted to the links the frontend parses.
+    #[test]
+    fn the_three_links_a_bpb_panel_offers_all_import() {
+        for (link, app, body) in [
+            (SING_BOX_LINK, "sing-box", bpb_sing_box()),
+            (CLASH_LINK, "clash", bpb_clash()),
+            (XRAY_LINK, "xray", bpb_array()),
+        ] {
+            assert!(resolve(link).unwrap().ends_with(&format!("?app={app}")), "{link}");
+            let fetched = assemble(None, None, body).unwrap();
+            assert_eq!(fetched.links.len(), 2, "{app}: {:?}", fetched.links);
+            assert!(fetched.links[0].starts_with("vless://"), "{app}");
+            assert!(fetched.links[1].starts_with("trojan://"), "{app}");
+        }
+    }
+
+    /// Xray, sing-box and Clash spell one server three ways. Which button the user copied must not
+    /// change what gets imported, so all three have to come out as the very same links.
+    #[test]
+    fn every_format_of_one_subscription_imports_the_same_servers() {
+        let xray = extract_links(bpb_array());
+        assert_eq!(extract_links(bpb_sing_box()), xray);
+        assert_eq!(extract_links(bpb_clash()), xray);
+    }
+
+    /// sing-box and Clash keep early data in two fields beside the path; the link form carries it
+    /// inside the path as `?ed=N`, where the frontend lifts it back out.
+    #[test]
+    fn early_data_is_written_back_into_the_path_the_way_links_carry_it() {
+        for body in [bpb_sing_box(), bpb_clash()] {
+            let links = extract_links(body);
+            assert!(links[0].contains("path=%2Fvl%2F8NjpyzwBr4ARYZEeGqW%3Fed%3D2560"), "{}", links[0]);
+        }
+    }
+
+    #[test]
+    fn early_data_under_another_header_names_it_in_the_path() {
+        let body = r#"{"outbounds":[{"type":"vless","tag":"x","server":"a.example.net","server_port":443,"uuid":"u",
+          "transport":{"type":"ws","path":"/p","max_early_data":2048,"early_data_header_name":"X-Early"}}]}"#;
+        assert!(extract_links(body)[0].contains("path=%2Fp%3Fed%3D2048%26eh%3DX-Early"));
+    }
+
+    /// The groups are not servers, and every member of one is listed on its own already.
+    #[test]
+    fn sing_box_selectors_and_url_tests_are_not_imported_as_servers() {
+        let links = extract_links(bpb_sing_box());
+        assert!(!links.iter().any(|l| l.contains("Best") || l.contains("Selector")), "{links:?}");
+    }
+
+    /// Clash's groups hold a health-check URL, which must not be read as a server either.
+    #[test]
+    fn clash_proxy_groups_are_not_imported_as_servers() {
+        let links = extract_links(bpb_clash());
+        assert!(!links.iter().any(|l| l.contains("gstatic") || l.contains("Best")), "{links:?}");
+    }
+
+    /// Trojan is always TLS in Clash, so a configuration is free to leave `tls` out.
+    #[test]
+    fn a_clash_trojan_is_tls_even_when_it_does_not_say_so() {
+        let body = r#"{"proxies":[{"name":"t","type":"trojan","server":"a.example.net","port":443,
+          "password":"p","sni":"a.example.net"}]}"#;
+        let link = &extract_links(body)[0];
+        assert!(link.contains("security=tls"), "{link}");
+        assert!(link.contains("sni=a.example.net"), "{link}");
+    }
+
+    #[test]
+    fn an_import_link_may_carry_its_address_percent_encoded() {
+        // The encoded form keeps the carried address's own `&` inside it.
+        let link = "sing-box://import-remote-profile?url=https%3A%2F%2Fedge.example.net%2Fsub%3Fapp%3Dsing-box%26lang%3Den#Normal";
+        assert_eq!(resolve(link).unwrap(), "https://edge.example.net/sub?app=sing-box&lang=en");
+    }
+
+    /// Clash's import link puts the name in its own parameter, which is not part of the address.
+    #[test]
+    fn a_clash_import_link_is_unwrapped_and_its_name_left_behind() {
+        let link = "clash://install-config?url=https%3A%2F%2Fedge.example.net%2Fsub%2Fnormal%3Fapp%3Dclash&name=BPB%20Normal";
+        assert_eq!(resolve(link).unwrap(), "https://edge.example.net/sub/normal?app=clash");
+    }
+
+    /// The wrapper changes nothing about the rule: the address inside is a credential, and plain
+    /// HTTP would hand it to the network.
+    #[test]
+    fn an_import_link_wrapping_plain_http_is_refused() {
+        let err = resolve("sing-box://import-remote-profile?url=http://edge.example.net/sub#x").unwrap_err();
+        assert!(err.to_string().contains("plain HTTP"), "{err}");
+    }
+
+    #[test]
+    fn an_import_link_carrying_no_address_is_refused() {
+        let err = resolve("sing-box://import-remote-profile?name=x").unwrap_err();
+        assert!(matches!(err, SubscriptionError::Rejected(_)), "{err}");
+    }
+
+    #[test]
+    fn a_sing_box_detour_is_a_chain_and_refused_by_name() {
+        let body = r#"{"endpoints":[
+          { "type": "wireguard", "tag": "💦 1 - WoW", "detour": "💦 1 - Warp",
+            "private_key": "s", "address": ["172.16.0.2/32"],
+            "peers": [{ "address": "162.159.192.1", "port": 2408, "public_key": "k" }] }
+        ]}"#;
+        let links = extract_links(body);
+        assert_eq!(links.len(), 1);
+        assert!(links[0].starts_with("chain://162.159.192.1:2408#"), "got {}", links[0]);
+    }
+
+    #[test]
+    fn a_clash_dialer_proxy_is_a_chain_and_refused_by_name() {
+        let body = r#"{"proxies":[{"name":"WoW","type":"wireguard","server":"162.159.192.1","port":2408,
+          "dialer-proxy":"Warp","private-key":"s","public-key":"k","ip":"172.16.0.2"}]}"#;
+        assert!(extract_links(body)[0].starts_with("chain://162.159.192.1:2408#"));
+    }
+
+    /// sing-box moved WireGuard from `outbounds` to `endpoints`, with the peer under `peers`. The
+    /// WARP client id has to come through, or the tunnel comes up and carries nothing.
+    #[test]
+    fn a_sing_box_wireguard_endpoint_keeps_its_keys_and_reserved_bytes() {
+        let body = r#"{"endpoints":[{
+          "type": "wireguard", "tag": "💦 1 - Warp", "mtu": 1280,
+          "address": ["172.16.0.2/32", "2606:4700:110::1/128"],
+          "private_key": "f7m/C8NHWPWIkGAbxTBAMhYHlzu3Ya7lSCbOSqfGu68=",
+          "peers": [{ "address": "engage.cloudflareclient.com", "port": 2408,
+                      "public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+                      "reserved": [216, 253, 3], "persistent_keepalive_interval": 5,
+                      "allowed_ips": ["0.0.0.0/0", "::/0"] }]
+        }]}"#;
+        let link = &extract_links(body)[0];
+        assert!(
+            link.starts_with("wireguard://f7m%2FC8NHWPWIkGAbxTBAMhYHlzu3Ya7lSCbOSqfGu68%3D@engage.cloudflareclient.com:2408?"),
+            "got {link}"
+        );
+        assert!(link.contains("publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzH0JuVo51h2wPfgyo%3D"));
+        assert!(link.contains("address=172.16.0.2%2F32%2C2606%3A4700%3A110%3A%3A1%2F128"));
+        assert!(link.contains("reserved=216%2C253%2C3"));
+        assert!(link.contains("mtu=1280"));
+        assert!(link.contains("keepalive=5"));
+    }
+
+    /// Clash gives the interface bare addresses; the link needs them as prefixes.
+    #[test]
+    fn a_clash_wireguard_proxy_gets_prefixes_on_its_bare_addresses() {
+        let body = r#"{"proxies":[{"name":"Warp","type":"wireguard","server":"engage.cloudflareclient.com",
+          "port":2408,"ip":"172.16.0.2","ipv6":"2606:4700:110::1","private-key":"s","public-key":"k",
+          "reserved":[216,253,3],"mtu":1280}]}"#;
+        let link = &extract_links(body)[0];
+        assert!(link.starts_with("wireguard://s@engage.cloudflareclient.com:2408?"), "{link}");
+        assert!(link.contains("address=172.16.0.2%2F32%2C2606%3A4700%3A110%3A%3A1%2F128"), "{link}");
+        assert!(link.contains("reserved=216%2C253%2C3"), "{link}");
+    }
+
+    #[test]
+    fn clash_reality_keys_are_read_from_reality_opts() {
+        let body = r#"{"proxies":[{"name":"R","type":"vless","server":"a.example.net","port":443,"uuid":"u",
+          "flow":"xtls-rprx-vision","tls":true,"servername":"www.example.net","client-fingerprint":"chrome",
+          "reality-opts":{"public-key":"PBK","short-id":"ab"},"network":"tcp"}]}"#;
+        let link = &extract_links(body)[0];
+        assert!(link.contains("security=reality"), "{link}");
+        assert!(link.contains("pbk=PBK"));
+        assert!(link.contains("sid=ab"));
+        assert!(link.contains("sni=www.example.net"));
+        assert!(link.contains("flow=xtls-rprx-vision"));
+    }
+
+    #[test]
+    fn sing_box_reality_keys_are_read_from_the_tls_block() {
+        let body = r#"{"outbounds":[{"type":"vless","tag":"R","server":"a.example.net","server_port":443,
+          "uuid":"u","flow":"xtls-rprx-vision",
+          "tls":{"enabled":true,"server_name":"www.example.net","utls":{"enabled":true,"fingerprint":"chrome"},
+                 "reality":{"enabled":true,"public_key":"PBK","short_id":"ab"}}}]}"#;
+        assert_eq!(
+            extract_links(body)[0],
+            "vless://u@a.example.net:443?type=tcp&security=reality&sni=www.example.net&fp=chrome&pbk=PBK&sid=ab&flow=xtls-rprx-vision#R"
+        );
+    }
+
+    /// VMess over gRPC: the cipher and alterId live on the outbound, the service name on the
+    /// transport, and each has a different name in the link.
+    #[test]
+    fn sing_box_vmess_over_grpc_keeps_its_cipher_and_service_name() {
+        let body = r#"{"outbounds":[{"type":"vmess","tag":"V","server":"a.example.net","server_port":443,
+          "uuid":"u","security":"auto","alter_id":0,
+          "tls":{"enabled":true,"server_name":"a.example.net"},
+          "transport":{"type":"grpc","service_name":"svc"}}]}"#;
+        assert_eq!(
+            extract_links(body)[0],
+            "vmess://u@a.example.net:443?type=grpc&security=tls&serviceName=svc&sni=a.example.net&encryption=auto&alterId=0#V"
+        );
+    }
+
+    /// `shadowsocks` is sing-box's word; the frontend knows the scheme as `ss` and names it in its
+    /// refusal. Under the long spelling it could only say "not a protocol this build knows".
+    #[test]
+    fn shadowsocks_is_written_under_the_scheme_the_frontend_can_name() {
+        let body = r#"{"outbounds":[{"type":"shadowsocks","tag":"S","server":"a.example.net","server_port":8388,
+          "method":"aes-128-gcm","password":"p"}]}"#;
+        assert!(extract_links(body)[0].starts_with("ss://"));
+    }
+
+    /// Clash's usual form is YAML, which this build does not read. Scanned as lines it would
+    /// report its DNS servers and health-check URLs as servers, so it is refused by name instead.
+    #[test]
+    fn a_clash_yaml_configuration_is_refused_by_name_rather_than_scanned() {
+        let body = "mixed-port: 7890\n\
+                    dns:\n  nameserver:\n    - https://8.8.8.8/dns-query\n\
+                    proxies:\n  - {name: A, type: vless, server: a.example.net, port: 443, uuid: u}\n\
+                    proxy-groups:\n  - {name: Auto, type: url-test, url: https://www.gstatic.com/generate_204, proxies: [A]}\n";
+        let err = assemble(None, None, body).unwrap_err();
+        assert!(matches!(err, SubscriptionError::Rejected(_)), "{err}");
+        assert!(err.to_string().contains("Clash"), "{err}");
     }
 }

@@ -503,20 +503,42 @@ A subscription URL is pasted into the same "Add servers" box as share links; `cl
 [main.ts](src/main.ts) sorts each pasted line into a server, a subscription, or a rejection.
 An `https://` line is taken as a subscription — which means a pasted `https://` *proxy* link is no
 longer reachable, an acceptable trade in a TUN-only client that does not run HTTP proxies anyway.
+So is a panel's **import link** — `sing-box://import-remote-profile?url=…` or
+`clash://install-config?url=…` — which wraps the real address. It is stored whole as the group's
+URL and unwrapped on every fetch by `subscription::resolve`, the one parser for it (the frontend
+only recognises it, via `IMPORT_LINK`). The carried address may be percent-encoded, as sing-box's
+scheme says, or raw, as BPB writes it; a raw one runs to the end of the link, because its own `&`s
+belong to it. The fragment is always a display name, and is never sent.
 An update fetches and parses the new list first, leaving the old servers usable meanwhile; if the
 tunnel runs on one of the group's servers it is disconnected right before the swap, rather than the
 old server being kept alive as "retired".
 The group is created before the first fetch, so a dead endpoint shows up as a row carrying an error
 rather than a dialog that hangs, and re-pasting a known URL refreshes it instead of duplicating it.
 
-**Two body formats, told apart by content because no header distinguishes them.** The common one is
-a list of share links, optionally base64-encoded. The other is a JSON Xray configuration, or an
-array of them — what a BPB panel serves to `?app=xray`: each entry is a whole client config
-(inbounds, routing, DNS) wrapped around one `proxy` outbound. `xray_config_links` in
-[subscription.rs](src-tauri/src/subscription.rs) rewrites those outbounds back into share links, so
-everything downstream is unchanged and the frontend still reports rejections per entry.
+**Two kinds of body, told apart by content because no header distinguishes them.** The common one
+is a list of share links, optionally base64-encoded. The other is a client's whole JSON
+configuration — what a BPB panel serves when the link names an app — and `config_links` in
+[subscription.rs](src-tauri/src/subscription.rs) tells the three apps apart by shape:
 
-Three rules there are load-bearing:
+| Asked for | Served as | Servers are |
+| --- | --- | --- |
+| `?app=xray` | an array of Xray configs, one server each | the outbound tagged `proxy` (see `carrier`) |
+| `?app=sing-box` | one sing-box config | every `outbounds`/`endpoints` entry that is not a group or local (`type`, not `protocol`) |
+| `?app=clash` | one Clash config, **as JSON** | every entry of `proxies`; `proxy-groups` is ignored |
+
+Each reader fills a `Node` (or a `WireGuard`) and **one writer** turns it into a share link, so the
+three formats of one subscription produce the very same links —
+`every_format_of_one_subscription_imports_the_same_servers` guards that, and it held against a real
+BPB panel. sing-box and Clash keep WebSocket early data in two fields beside the path; the writer
+puts it back into the path as `?ed=N` (plus `eh=` for a non-standard header), which is how links
+carry it. A chain is `detour` in sing-box and `dialer-proxy` in Clash, and is refused like Xray's.
+
+Clash is usually **YAML**, which is not read: that would mean carrying a parser for an untrusted
+body in a format the panels this client is built around serve as JSON anyway. A YAML body is
+refused by name (`is_clash_yaml`) before the line scan, which would otherwise report its DNS
+servers and health-check URLs as servers.
+
+Three rules are load-bearing:
 
 - **A body that parses as JSON never falls back to the line scan.** JSON is never a list of share
   links, and scanning it anyway finds the `://` inside a DNS address and reports a "server" made of
@@ -537,7 +559,9 @@ Three rules there are load-bearing:
   made only of such entries would otherwise come back as "nothing that looks like a server list",
   indistinguishable from a broken link. Those entries get a marker link carrying the scheme and
   endpoint, which is enough for the frontend to refuse them by name. (WireGuard itself is now
-  encoded properly by `wireguard_link`; the marker path is for whatever turns up next.)
+  encoded properly by the `WireGuard` writer; the marker path is for whatever turns up next.)
+  Scheme names follow the link, not the config: sing-box's `shadowsocks` is written `ss`, which is
+  the name the frontend can refuse by.
 
 Query values must be percent-encoded on the way out: a WebSocket path is routinely
 `/vl/abc?ed=2560`, whose `?` would otherwise terminate the query it is written into.
