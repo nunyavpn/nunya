@@ -491,8 +491,8 @@ function componentsSection() {
           h("button", { class: "btn go" }, "Connect"),
           h("button", { class: "btn" }, "Disconnect"),
           h("button", { class: "btn brand" }, "Add servers"),
-          h("button", { class: "ghost" }, "Test all 17"),
-          h("button", { class: "ghost", disabled: true }, "Testing…"),
+          h("button", { class: "ghost" }, "Cancel"),
+          h("button", { class: "ghost", disabled: true }, "Show config"),
         ),
         h(
           "div",

@@ -133,37 +133,16 @@ const locations = new LocationsPanel(qs("#locations"), {
       void connect();
     }
   },
-  onTestAll: () => void testAll(),
-  onStopTest: () => {
-    stopRequested = true;
-    log("[ui] stopping the test after the current batch");
-  },
 });
-
-/**
- * Measures every server, showing each result as it lands.
- *
- * Runs in short-lived core work with no TUN, so it never disturbs a running tunnel. That is why
- * it is safe to offer while connected.
- */
-async function testAll() {
-  const servers = [...store.get().servers];
-  if (!servers.length) return;
-  stopRequested = false;
-  try {
-    await checkServers(servers, (p) => locations.setProgress(p), () => stopRequested);
-  } finally {
-    locations.setProgress(null);
-  }
-}
-
-/** Set by the Test all button while a run is going; the run stops after its current batch. */
-let stopRequested = false;
 
 /**
  * Servers checked automatically — on add and after a subscription update — at most. A public list
  * of twenty thousand is not something to start testing unasked: it would run for hours and spend
- * every geo lookup the free tiers allow. Larger additions wait for Test all or a row's Check.
+ * every geo lookup the free tiers allow. Larger additions are checked a row at a time.
+ *
+ * There is no Test all. A server is measured when it arrives and when its subscription is
+ * updated, and a row's Check re-measures one on demand — so a button that re-measured
+ * everything would only repeat those, at the cost of the whole list's probes and geo lookups.
  */
 const AUTO_CHECK_MAX = 100;
 
@@ -171,11 +150,11 @@ function autoCheck(servers: Server[]) {
   if (servers.length <= AUTO_CHECK_MAX) {
     void checkServers(servers);
   } else {
-    log(`[ui] ${servers.length.toLocaleString()} servers added; not testing them all unasked — use Test all or a row's Check`);
+    log(`[ui] ${servers.length.toLocaleString()} servers added; not testing them all unasked — use a row's Check`);
   }
 }
 
-/** The ⋯ menu's Check: the same as Test all, for one server. */
+/** The ⋯ menu's Check: the same test a server gets on arrival, for one server. */
 async function checkOne(server: Server) {
   await checkServers([server]);
 }
@@ -203,6 +182,13 @@ let lastRun = 0;
 void listen<Checked>("server-checked", (checked) => checkRuns.get(checked.run)?.(checked));
 
 /**
+ * Servers per `check_servers` call. Each call runs its own small probe core with a port per
+ * server, so a batch bounds the ports, the listeners and the lookups in flight however long the
+ * list is.
+ */
+const CHECK_BATCH = 50;
+
+/**
  * Everything a server can be asked, in the order the answers become useful.
  *
  * 1. **Entry**, from DNS alone — seconds, and it works for a server that is down, so a freshly
@@ -212,38 +198,18 @@ void listen<Checked>("server-checked", (checked) => checkRuns.get(checked.run)?.
  *    traffic never comes out does not work, whatever its latency said. Each row updates the
  *    moment its own result lands; `check_servers` runs a few at a time on one scratch core.
  *
- * Used by Test all, by each row's Check, on servers just added, and after a subscription reload,
- * so a server's two locations are refreshed whenever it is measured at all.
+ * Used by each row's Check, on servers just added, and after a subscription reload, so a
+ * server's two locations are refreshed whenever it is measured at all.
  */
-/**
- * Servers per `check_servers` call. Each call runs its own small probe core with a port per
- * server, so a batch bounds the ports, the listeners and the lookups in flight however long the
- * list is — and gives Stop a place to take effect.
- */
-const CHECK_BATCH = 50;
-
-async function checkServers(
-  snapshot: Server[],
-  onProgress?: (p: { done: number; total: number }) => void,
-  shouldStop?: () => boolean,
-) {
+async function checkServers(snapshot: Server[]) {
   const all = [...snapshot];
-  let done = 0;
-  onProgress?.({ done, total: all.length });
   for (let start = 0; start < all.length; start += CHECK_BATCH) {
-    if (shouldStop?.()) {
-      log(`[ui] test stopped after ${done.toLocaleString()} of ${all.length.toLocaleString()} servers`);
-      return;
-    }
-    await checkBatch(all.slice(start, start + CHECK_BATCH), () => {
-      done += 1;
-      onProgress?.({ done, total: all.length });
-    });
+    await checkBatch(all.slice(start, start + CHECK_BATCH));
   }
 }
 
 /** One batch of `checkServers`: entries, then the end-to-end test, streamed per server. */
-async function checkBatch(snapshot: Server[], onOne: () => void) {
+async function checkBatch(snapshot: Server[]) {
   // Snapshotted: results come back by position, and a list that changed underneath would pin
   // measurements on the wrong servers.
   const servers = [...snapshot];
@@ -282,7 +248,6 @@ async function checkBatch(snapshot: Server[], onOne: () => void) {
       if (latencyMs >= 0) working += 1;
       done += 1;
       locations.setChecking([server.id], false);
-      onOne();
       if (done === servers.length) allIn();
     });
 

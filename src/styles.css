@@ -2386,17 +2386,3 @@ button:disabled {
 .loc.retired .flag {
   filter: saturate(0.35);
 }
-
-.locs-foot {
-  flex: none;
-  border-top: 1px solid var(--line);
-  padding: 11px 16px;
-  display: flex;
-  gap: 8px;
-}
-
-.locs-foot .ghost {
-  flex: 1;
-  padding: 8px 12px;
-  font-size: 12.5px;
-}
