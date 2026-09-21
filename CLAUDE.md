@@ -238,6 +238,19 @@ The Rules, Advanced and Diagnostics panels share one container, `#panel`. Each h
 set by `show()` in `main.ts` and renders only while active — before that, whichever re-rendered last
 on a store change painted itself over the panel the user was looking at.
 
+### The rail shield
+
+The shield at the top of the rail (`.logo`) is the connection's state on every screen — the
+panels that replace the list hide the status card — decided by `shieldState` in
+[shield.ts](src/shield.ts) and painted by `paintShield` on every `refresh()`:
+**green** connected (check), **amber** connecting (pulsing; steady under reduced motion), **grey**
+off (slash), **red** not working (exclamation mark). Not working is a tunnel that is up with no
+public exit (`exitIps.failed`), an attempt that failed, or a core that stopped while connected —
+`tunnelFault` in `main.ts`, cleared only by a new attempt or a disconnect, never by itself. Not
+being *ready* (core starting, no permission) is grey, not red: the status card explains it, and red
+at every launch would teach users to ignore red. The tooltip follows the modes' rule — in proxy
+mode it names what the listener covers, never the device.
+
 ### Locating servers (the flags)
 
 The flag beside a server used to be guessed from the share link's name — whatever the provider
