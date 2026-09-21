@@ -417,3 +417,13 @@ Each transport is validated against a real core in
 client emits and the shape sing-box accepts differ in ways unit tests here cannot see — `host` is a
 string for HTTPUpgrade and a list for HTTP/2, and plain TCP means *no* `transport` key rather than
 an empty one.
+
+## Supporting Nunya
+
+Nunya is free and open source. If it keeps you connected, you can help keep it going:
+
+- **Buy Me a Coffee**: [buymeacoffee.com/in_alie](https://buymeacoffee.com/in_alie)
+
+That is the only way to donate. Anyone asking for payment in Nunya's name anywhere else is not us.
+The app's Support panel (the heart in the rail) lists the same, and a donation doesn't change how
+the app works for you.

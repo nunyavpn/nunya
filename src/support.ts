@@ -55,7 +55,7 @@ export interface Support {
 export const SUPPORT_HOSTS = ["buymeacoffee.com", "www.buymeacoffee.com"];
 
 export const SUPPORT: Support = {
-  buyMeACoffee: null,
+  buyMeACoffee: "https://buymeacoffee.com/in_alie",
   wallets: [],
 };
 
