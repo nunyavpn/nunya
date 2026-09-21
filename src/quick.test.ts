@@ -1,5 +1,5 @@
 /**
- * Quick Connect's choice of rows: latest, most used and fastest, each config once.
+ * Quick Connect's three choices: fastest, most used and most recent.
  *
  * Run with `npm test`; see `usage.test.ts` for why imports name the `.ts` file.
  */
@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { fastestFirst, quickTargets, type Candidate } from "./quick.ts";
+import { fastestFirst, quickPicks, type Candidate } from "./quick.ts";
 
 const HOUR = 3_600_000;
 const GB = 1024 ** 3;
@@ -16,48 +16,46 @@ function candidate(name: string, change: Partial<Candidate<string>> = {}): Candi
   return { item: name, lastConnectedAt: null, recentBytes: 0, latency: null, ...change };
 }
 
-/** The rows as `name: kinds`, which is what a user reads off the card. */
-const rows = (candidates: Candidate<string>[]) =>
-  quickTargets(candidates).map((t) => `${t.candidate.item}: ${t.kinds.join("+")}`);
+/** What each option of the prompt would connect to. */
+function picks(candidates: Candidate<string>[]) {
+  const found = quickPicks(candidates);
+  return { fastest: found.fastest?.item, mostUsed: found.mostUsed?.item, recent: found.recent?.item };
+}
 
-test("each of the three picks its own config, in the card's order", () => {
+test("each choice picks by its own measure", () => {
   assert.deepEqual(
-    rows([
+    picks([
       candidate("fast", { latency: 24 }),
       candidate("daily", { recentBytes: 30 * GB, latency: 90 }),
       candidate("yesterday", { lastConnectedAt: 1000 * HOUR, latency: 150 }),
     ]),
-    ["yesterday: latest", "daily: mostUsed", "fast: fastest"],
+    { fastest: "fast", mostUsed: "daily", recent: "yesterday" },
   );
 });
 
-test("one config that is two of them is one row with both reasons", () => {
-  assert.deepEqual(
-    rows([
-      candidate("home", { lastConnectedAt: 5 * HOUR, recentBytes: 12 * GB, latency: 60 }),
-      candidate("quick", { latency: 20 }),
-    ]),
-    ["home: latest+mostUsed", "quick: fastest"],
+/** A choice of criterion: every option says what it would connect to, even when they agree. */
+test("one config can be the answer to all three", () => {
+  assert.deepEqual(picks([candidate("only", { lastConnectedAt: 1, recentBytes: 1, latency: 30 })]), {
+    fastest: "only",
+    mostUsed: "only",
+    recent: "only",
+  });
+});
+
+test("most recent is the newest connection, not the first in the list", () => {
+  assert.equal(
+    picks([candidate("older", { lastConnectedAt: 1 * HOUR }), candidate("newer", { lastConnectedAt: 9 * HOUR })]).recent,
+    "newer",
   );
 });
 
-test("one config that is all three is the whole card", () => {
-  assert.deepEqual(rows([candidate("only", { lastConnectedAt: 1, recentBytes: 1, latency: 30 })]), [
-    "only: latest+mostUsed+fastest",
-  ]);
-});
-
-test("latest is the most recent connection, not the first in the list", () => {
-  assert.deepEqual(
-    rows([candidate("older", { lastConnectedAt: 1 * HOUR }), candidate("newer", { lastConnectedAt: 9 * HOUR })]),
-    ["newer: latest"],
-  );
-});
-
-/** A new install has no history and nothing tested; the card says so rather than offering nothing. */
-test("a target with nothing behind it is left out", () => {
-  assert.deepEqual(rows([candidate("new"), candidate("untested")]), []);
-  assert.deepEqual(rows([candidate("tested", { latency: 80 })]), ["tested: fastest"]);
+/** A new install has no history and nothing tested, and the prompt says why for each. */
+test("a choice with nothing behind it has no answer", () => {
+  assert.deepEqual(picks([candidate("new"), candidate("untested")]), {
+    fastest: undefined,
+    mostUsed: undefined,
+    recent: undefined,
+  });
 });
 
 test("an unreachable or untested config is never the fastest", () => {
@@ -73,5 +71,5 @@ test("an unreachable or untested config is never the fastest", () => {
 });
 
 test("traffic of zero does not make a config the most used", () => {
-  assert.deepEqual(rows([candidate("idle", { recentBytes: 0, latency: 50 })]), ["idle: fastest"]);
+  assert.equal(picks([candidate("idle", { recentBytes: 0, latency: 50 })]).mostUsed, undefined);
 });
