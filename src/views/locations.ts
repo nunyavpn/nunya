@@ -10,7 +10,6 @@
 import { ago, bars as barCount, latency as gradeLatency, size } from "../format";
 import { h, render } from "../dom";
 import { place } from "../geo";
-import { RECENT_DAYS, type Candidate, type QuickKind, type QuickTarget } from "../quick";
 import { describe } from "../share";
 import {
   CDN_NAMES,
@@ -38,42 +37,8 @@ export interface LocationsCallbacks {
   onDelete: (server: Server) => void;
   onRemoveGroup: (group: Group) => void;
   onAdd: () => void;
-  /** Connect to one of Quick Connect's rows: the latest, most used or fastest config. */
-  onQuickConnect: (target: QuickTarget<Server>) => void;
-}
-
-/**
- * How each Quick Connect row explains itself: a label, a reason short enough for the row, and the
- * full sentence for its tooltip.
- */
-const QUICK: Record<
-  QuickKind,
-  { label: string; short: (c: Candidate<Server>) => string; long: (c: Candidate<Server>) => string }
-> = {
-  latest: {
-    label: "Latest",
-    short: (c) => shortAgo(c.lastConnectedAt ?? 0),
-    long: (c) => `Latest: connected ${ago(c.lastConnectedAt)}`,
-  },
-  mostUsed: {
-    label: "Most used",
-    short: (c) => size(c.recentBytes),
-    long: (c) => `Most used: ${size(c.recentBytes)} in the last ${RECENT_DAYS} days`,
-  },
-  fastest: {
-    label: "Fastest",
-    short: (c) => `${c.latency} ms`,
-    long: (c) => `Fastest: ${c.latency} ms, tested ${ago(c.item.testedAt)}`,
-  },
-};
-
-/** "2h ago": `ago` shortened to fit beside a name and another reason. */
-function shortAgo(at: number): string {
-  const minutes = Math.max(0, Math.floor((Date.now() - at) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  if (minutes < 48 * 60) return `${Math.floor(minutes / 60)}h ago`;
-  return `${Math.floor(minutes / (24 * 60))}d ago`;
+  /** Open Quick Connect's prompt: fastest, most used or most recent. */
+  onQuickConnect: () => void;
 }
 
 /** Rows a group shows before "Show more". */
@@ -81,8 +46,6 @@ const ROW_PAGE = 100;
 
 export class LocationsPanel {
   private filter = "";
-  /** Set while Quick Connect re-tests the fastest configs before connecting to one. */
-  private quickChecking = false;
   /** Servers being checked — on arrival, after an update, or from the ⋯ menu; their rows show progress. */
   private checking = new Set<string>();
   private menu: HTMLElement | null = null;
@@ -103,11 +66,6 @@ export class LocationsPanel {
     // A fixed-position menu would stay put while its row scrolled away underneath it.
     root.addEventListener("scroll", () => this.closeMenu(), true);
     window.addEventListener("resize", () => this.closeMenu());
-  }
-
-  setQuickChecking(checking: boolean) {
-    this.quickChecking = checking;
-    this.render();
   }
 
   setChecking(ids: string[], checking: boolean) {
@@ -200,50 +158,26 @@ export class LocationsPanel {
   }
 
   /**
-   * Quick Connect: a row each for the latest, most used and fastest config, each one click.
-   *
-   * Rows rather than one button with a choice behind it, so none of the three is a default the
-   * user has to find a setting for. A config that is two of them is one row with both reasons.
+   * Quick Connect: one button that opens a prompt, where the user picks fastest, most used or most
+   * recent. Disabled only when none of the three has an answer — nothing tested, used or connected.
    */
   private quickConnect() {
-    const targets = store.quickTargets(Date.now());
-    if (!targets.length) {
-      // Nothing connected, nothing used and nothing tested: a new install, or a list that has
-      // never answered. Still shown, so the feature is not a mystery the first time it appears.
-      return h(
-        "div",
-        { class: "quick empty" },
-        h("div", { class: "quick-head" }, icon("bolt", 14), h("b", {}, "Quick Connect")),
-        h("span", { class: "quick-none" }, "No server has passed a test yet"),
-      );
-    }
-    return h(
-      "div",
-      { class: "quick" },
-      h("div", { class: "quick-head" }, icon("bolt", 14), h("b", {}, "Quick Connect")),
-      ...targets.map((target) => this.quickRow(target)),
-    );
-  }
-
-  private quickRow(target: QuickTarget<Server>) {
-    const { candidate, kinds } = target;
-    const checking = this.quickChecking && kinds.length === 1 && kinds[0] === "fastest";
-    const reasons = kinds.map((kind) => QUICK[kind].long(candidate));
+    const picks = store.quickPicks(Date.now());
+    const any = Boolean(picks.fastest || picks.mostUsed || picks.recent);
     return h(
       "button",
       {
-        class: "quick-row",
-        title: reasons.join("\n"),
-        "aria-label": `Connect to ${candidate.item.profile.name}. ${reasons.join(". ")}`,
-        disabled: checking,
-        onclick: () => this.callbacks.onQuickConnect(target),
+        class: "quick",
+        disabled: !any,
+        "aria-haspopup": "dialog",
+        onclick: () => this.callbacks.onQuickConnect(),
       },
-      h("span", { class: "qk" }, ...kinds.map((kind) => h("i", {}, QUICK[kind].label))),
-      h("span", { class: "qn" }, candidate.item.profile.name),
+      icon("bolt", 17),
       h(
         "span",
-        { class: "qr" },
-        checking ? "checking…" : kinds.map((kind) => QUICK[kind].short(candidate)).join(" · "),
+        { class: "qt" },
+        h("b", {}, "Quick Connect"),
+        h("span", {}, any ? "Fastest, most used or most recent" : "No server has passed a test yet"),
       ),
     );
   }

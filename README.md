@@ -349,7 +349,7 @@ The subprocess transport is implemented and tested; the NetworkExtension one is 
 
 Working and tested: the toolchain, the split core build and its checksum-pinned install, the IPC codec with peer verification, config
 generation, config validation against a real core, connect/disconnect, throughput polling, per-config
-usage history with daily charts, Quick Connect to the latest, most used or fastest config, VLESS and
+usage history with daily charts, a Quick Connect prompt offering the fastest, most used or most recent config, VLESS and
 VMess, Trojan and WireGuard parsing over every transport the core implements, subscriptions in
 both formats below, the transport seam, and the core's Darwin TUN-descriptor support.
 

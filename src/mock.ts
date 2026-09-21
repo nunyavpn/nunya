@@ -334,8 +334,8 @@ const USAGE: Record<string, { days: number; mb: number }> = {
 };
 
 /**
- * When the tunnel last ran on a config, by host, in hours ago: Quick Connect's "Latest". One config,
- * and not the fastest or the most used, so the card shows all three of its rows.
+ * When the tunnel last ran on a config, by host, in hours ago: Quick Connect's "Most recent". One
+ * config, and not the fastest or the most used, so the prompt's three choices name three configs.
  */
 const LAST_CONNECTED: Record<string, number> = { "sto-01": 2 };
 

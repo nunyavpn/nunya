@@ -46,6 +46,7 @@ const ICONS: Record<string, Icon> = {
   cloud: { paths: ["M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.2 4.7 4.7 0 0 0 7 18.5Z"] },
   more: { paths: ["M6 12h.01M12 12h.01M18 12h.01"] },
   chart: { paths: ["M4 20h16", "M7.5 16.5v-4", "M12 16.5V7", "M16.5 16.5v-6.5"] },
+  clock: { paths: ["M12 7.5V12l3 2"], circles: [[12, 12, 8.5]] },
   scan: {
     paths: [
       "M4 8.5V5.5A1.5 1.5 0 0 1 5.5 4h3",

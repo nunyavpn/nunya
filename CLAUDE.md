@@ -452,23 +452,30 @@ would need `@types/node` to check them.
 
 ### Quick Connect
 
-The card above the list offers up to three one-click rows, chosen in [quick.ts](src/quick.ts):
-**Latest** (the config with the newest `Server.lastConnectedAt`, set in `connect()` only once the
-tunnel is really up — the selection is not a connection), **Most used** (most bytes in the last
-`RECENT_DAYS` from the usage history) and **Fastest** (lowest latency among configs whose last test
-passed). A config that is two of them is one row with both labels and reasons; a target with
-nothing behind it is left out. Retired configs are never offered. Rows, not a button with a menu,
-so there is no default to choose; the tray's Connect still connects the selected server.
+The **Quick Connect** button opens a prompt (`openQuickConnect` in `main.ts`, drawn by
+[views/quickpick.ts](src/views/quickpick.ts)) where the user picks by criterion, chosen in
+[quick.ts](src/quick.ts):
 
-`quickConnect` in `main.ts` re-tests before using a **Fastest-only** row whose result is older than
-`QUICK_STALE_MS` (10 min): the top `QUICK_RETEST` (3) are checked together and the fastest that
-answers wins; if none does, nothing connects and the rows update to say so. A row that is also
-Latest or Most used names a config the user chose and is never swapped. A failed connect is
-reported like any other — Quick Connect does not fall back to another config behind the user's
-back.
+- **Fastest**: lowest latency among configs whose last test passed.
+- **Most used**: most bytes in the last `RECENT_DAYS` (30), from the usage history.
+- **Most recent**: the newest `Server.lastConnectedAt`, set in `connect()` only once the tunnel is
+  really up. Not the selection: selecting a row is not connecting to it.
+
+Each choice is answered on its own and names the config it would connect to (flag, name, group),
+so two may name the same config. All three are always listed; one with no answer is disabled and
+says what is missing, rather than disappearing. Retired configs are never offered. The button is
+disabled only when none of the three has an answer. The tray's Connect still connects the
+selected server.
+
+Choosing **Fastest** when its result is older than `QUICK_STALE_MS` (10 min) re-tests the top
+`QUICK_RETEST` (3) first, with the prompt still open and the option saying "Re-testing…"; the
+fastest that answers wins, and if none does the option says so and nothing connects. Closing the
+prompt meanwhile cancels. Most used and Most recent connect to exactly the config they name, and a
+failed connect is reported like any other — nothing falls back to a config the user did not pick.
+The prompt repaints on store changes while open, like the usage sheet.
 
 `quick.ts` is generic over the item and imports nothing, so `npm test` covers it on plain objects;
-the store turns servers into candidates (`quickCandidates`).
+the store turns servers into candidates (`quickCandidates`, `quickPicks`).
 
 ### Editing and deleting
 

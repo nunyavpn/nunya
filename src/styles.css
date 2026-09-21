@@ -287,96 +287,40 @@ button:disabled {
   color: var(--faint);
 }
 
-/* Quick Connect: a card of up to three one-click rows — latest, most used, fastest. Each row is
-   its own button, so the card itself is a plain container and the rows carry hover and focus. */
 .quick {
   flex: none;
   margin: 12px 16px 4px;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 9px 6px 6px;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
   border-radius: 10px;
   background: linear-gradient(135deg, var(--brand-fill), var(--brand));
   color: #fff;
   box-shadow: 0 5px 16px -6px var(--brand-glow);
 }
 
-.quick.empty {
+.quick:disabled {
   background: var(--raised);
   color: var(--faint);
   box-shadow: none;
-  padding-bottom: 10px;
 }
 
-.quick-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 7px 3px;
-  font-size: 13px;
-}
-
-.quick-head b {
-  font-weight: 700;
-}
-
-.quick-none {
-  padding: 0 7px;
-  font-size: 11.5px;
-}
-
-.quick-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 6px 7px;
-  border-radius: 7px;
-  color: inherit;
-  text-align: left;
-  font-size: 12.5px;
-}
-
-.quick-row:hover,
-.quick-row:focus-visible {
-  background: rgb(255 255 255 / 16%);
-}
-
-.quick-row:disabled {
-  opacity: 0.7;
-}
-
-.quick-row .qk {
-  flex: none;
-  display: flex;
-  gap: 4px;
-}
-
-.quick-row .qk i {
-  font-style: normal;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: rgb(255 255 255 / 20%);
-}
-
-.quick-row .qn {
+.quick .qt {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+}
+
+.quick .qt b {
+  font-size: 13px;
   font-weight: 700;
 }
 
-.quick-row .qr {
-  flex: none;
-  font-size: 11.5px;
-  opacity: 0.85;
-  font-variant-numeric: tabular-nums;
+.quick .qt span {
+  font-size: 11px;
+  opacity: 0.82;
 }
 
 .locs-list {
@@ -2617,4 +2561,119 @@ button:disabled {
 
 .ghost.danger:disabled {
   color: var(--faint);
+}
+
+/* ---------------------------------------------------------------- quick connect prompt
+
+   Three choices as large targets, each with what it would connect to underneath. A choice with no
+   answer stays in place, dimmed, saying what is missing. */
+
+.qpicks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qpick {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 3px;
+  align-items: center;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
+}
+
+.qpick:hover:not(:disabled),
+.qpick:focus-visible {
+  border-color: var(--brand-fill);
+  background: var(--brand-soft);
+}
+
+.qpick:disabled {
+  cursor: default;
+}
+
+.qpick:disabled:not(.busy) .qp-icon {
+  background: var(--raised);
+  color: var(--faint);
+}
+
+.qpick:disabled:not(.busy) .qp-title {
+  color: var(--muted);
+}
+
+.qpick.busy {
+  border-color: var(--brand-fill);
+  cursor: progress;
+}
+
+.qp-icon {
+  grid-row: 1 / span 2;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.qp-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.qp-reason {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.qp-sub {
+  grid-column: 2 / span 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.qp-sub .flag {
+  width: 18px;
+  height: 13px;
+  border-radius: 2px;
+}
+
+.qp-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.qp-group {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qp-group::before {
+  content: "· ";
+}
+
+.qp-note {
+  grid-column: 2 / span 2;
+  font-size: 11.5px;
+  color: var(--warn);
 }

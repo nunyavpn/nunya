@@ -9,7 +9,7 @@
 import { matchExisting } from "./identity";
 import { backend, DebouncedWriter } from "./persist";
 import type { Profile } from "./share";
-import { quickTargets, RECENT_DAYS, type Candidate, type QuickTarget } from "./quick";
+import { quickPicks, RECENT_DAYS, type Candidate, type QuickKind } from "./quick";
 import { addUsage, daysAgo, total, type Bytes, type Usage } from "./usage";
 
 /** Where a server came from. Hand-added servers live in their own group, which sorts first. */
@@ -70,7 +70,7 @@ export interface Server {
    */
   usage?: Usage;
   /**
-   * Unix ms of the last time the tunnel came up on this config: Quick Connect's "Latest".
+   * Unix ms of the last time the tunnel came up on this config: Quick Connect's "Most recent".
    *
    * Not the selection, which only says which row was clicked last. Kept across a refresh like the
    * usage history, and for the same reason.
@@ -435,9 +435,9 @@ class Store {
       });
   }
 
-  /** Quick Connect's rows: latest, most used and fastest, each config once. */
-  quickTargets(now: number): QuickTarget<Server>[] {
-    return quickTargets(this.quickCandidates(now));
+  /** What each of Quick Connect's choices would connect to: fastest, most used, most recent. */
+  quickPicks(now: number): Record<QuickKind, Candidate<Server> | undefined> {
+    return quickPicks(this.quickCandidates(now));
   }
 
   // ------------------------------------------------------------- mutations
@@ -615,7 +615,7 @@ class Store {
     });
   }
 
-  /** Records that the tunnel came up on a config, for Quick Connect's "Latest". */
+  /** Records that the tunnel came up on a config, for Quick Connect's "Most recent". */
   markConnected(id: string, at: number) {
     this.update((data) => {
       const server = data.servers.find((s) => s.id === id);

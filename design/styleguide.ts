@@ -506,21 +506,10 @@ function componentsSection() {
       specimen(
         "quick connect · search",
         h(
-          "div",
+          "button",
           { class: "quick" },
-          h("div", { class: "quick-head" }, icon("bolt", 14), h("b", {}, "Quick Connect")),
-          ...[
-            [["Latest", "Fastest"], "DE-1 Frankfurt", "2h ago · 24 ms"],
-            [["Most used"], "FI-1 Helsinki", "28.7 GB"],
-          ].map(([kinds, name, reason]) =>
-            h(
-              "button",
-              { class: "quick-row" },
-              h("span", { class: "qk" }, ...(kinds as string[]).map((k) => h("i", {}, k))),
-              h("span", { class: "qn" }, name as string),
-              h("span", { class: "qr" }, reason as string),
-            ),
-          ),
+          icon("bolt", 17),
+          h("span", { class: "qt" }, h("b", {}, "Quick Connect"), h("span", {}, "Fastest, most used or most recent")),
         ),
         h(
           "label",
