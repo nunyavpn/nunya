@@ -821,7 +821,7 @@ export function wgQuickRefusal(profile: Profile): string | null {
     return (
       "This is a Cloudflare WARP config. Its client id (reserved) cannot be written into a WireGuard " +
       "config, and the official WireGuard apps would connect and pass no traffic without it. Share " +
-      "the link instead, with a client that reads it, such as Hiddify."
+      "the link instead, and import it in Nunya, which keeps the client id."
     );
   }
   return null;

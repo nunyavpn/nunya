@@ -67,6 +67,9 @@ test("a WARP config is refused by name, not written without its client id", () =
       "&address=172.16.0.2%2F32&reserved=216%2C253%2C3#Warp",
   );
   assert.match(wgQuickRefusal(warp) ?? "", /WARP/);
+  // The way out it offers is this app, not another client.
+  assert.match(wgQuickRefusal(warp) ?? "", /import it in Nunya/);
+  assert.doesNotMatch(wgQuickRefusal(warp) ?? "", /Hiddify|v2rayNG|Streisand/);
   assert.throws(() => toWgQuick(warp), /WARP/);
   assert.equal(wgQuickRefusal(plain()), null);
 });
