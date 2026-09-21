@@ -1,6 +1,7 @@
 import { inTauri, invoke, listen } from "./bridge";
 
 import { h, qs, render } from "./dom";
+import { size } from "./format";
 import { guessCity, guessCountry, place } from "./geo";
 import {
   isRelayed,
@@ -12,6 +13,7 @@ import {
   type Spot,
 } from "./store";
 import { describe, parseShareLink, toShareLink, type Profile } from "./share";
+import { advance, firstDay, total, type Bytes } from "./usage";
 import { icon } from "./views/icons";
 import { BypassPanel } from "./views/bypass";
 import { DiagnosticsPanel } from "./views/diagnostics";
@@ -22,6 +24,7 @@ import { SettingsPanel } from "./views/settings";
 import { StatusCard, type ConnectionState, type PlaceLine } from "./views/status";
 import { ProfileEditor } from "./views/editor";
 import { qrCode, readQrCode } from "./views/qr";
+import { shortDate, usageBody } from "./views/usage";
 
 /** Mirrors the Rust `Readiness` struct. */
 interface Readiness {
@@ -54,6 +57,26 @@ let tunnelDevice: string | null = null;
 /** Cumulative counters from the previous poll, so the UI can show a rate rather than a total. */
 let lastCounters = { uplink: 0, downlink: 0, at: 0 };
 let shownRate = { uplink: 0, downlink: 0 };
+
+/**
+ * The config the running tunnel is carrying traffic for, fixed when it connected.
+ *
+ * Not `selectedServerId`: choosing another server while connected changes the selection first and
+ * reconnects after, and the last seconds of the old session belong to the old config.
+ */
+let usageServerId: string | null = null;
+/** Traffic counted since it was last written into the store. */
+let pendingUsage: Bytes = { up: 0, down: 0 };
+let usageSavedAt = 0;
+
+/**
+ * How often counted traffic is written into the store while connected.
+ *
+ * Not every poll: each write re-renders the list and queues a save of the whole data file, once a
+ * second for as long as the tunnel runs. The cost is that quitting while connected can lose up to
+ * this much of the session's count. Disconnecting, and the core going away, write at once.
+ */
+const USAGE_SAVE_MS = 15_000;
 
 const logLines: string[] = [];
 const MAX_LOG_LINES = 500;
@@ -121,6 +144,8 @@ const locations = new LocationsPanel(qs("#locations"), {
   onSelect: (server) => selectServer(server),
   onRefresh: (group) => void refreshSubscription(group),
   onCheck: (server) => void checkOne(server),
+  onUsage: (server) => openUsage({ server }),
+  onGroupUsage: (group) => openUsage({ group }),
   onShare: (server) => openShareServer(server),
   onEdit: (server) => openEditServer(server),
   onDelete: (server) => confirmDeleteServer(server),
@@ -743,9 +768,13 @@ async function connect() {
   refresh();
 
   try {
+    const running = store.selected()?.id ?? null;
     await invoke("start_tunnel", buildRequest());
     connectedAt = Date.now();
     lastCounters = { uplink: 0, downlink: 0, at: 0 };
+    usageServerId = running;
+    pendingUsage = { up: 0, down: 0 };
+    usageSavedAt = connectedAt;
     connection = "on";
     log("[ui] tunnel started");
     void locateExit();
@@ -782,6 +811,9 @@ async function applySystemProxy() {
 }
 
 async function disconnect() {
+  // One last reading before the counters go away with the tunnel, so the seconds since the last
+  // poll are counted too.
+  if (connection === "on") await sample();
   try {
     // Restores the system proxy too, on the Rust side, so it cannot outlive the listener.
     await invoke("stop_tunnel");
@@ -789,6 +821,8 @@ async function disconnect() {
   } catch (e) {
     log(`[ui] stop failed: ${String(e)}`);
   }
+  saveUsage();
+  usageServerId = null;
   systemProxyOn = false;
   systemProxyError = null;
   connection = "off";
@@ -816,7 +850,27 @@ async function poll() {
 
   // The uptime line ticks even when no bytes move.
   refresh();
+  // A slow reply is not queued behind: the next tick reads again.
+  if (!sampling) await sample();
+}
 
+/** The reading in flight, if any; see `sample`. */
+let sampling: Promise<void> | null = null;
+
+/**
+ * Takes one reading of the counters, after any already in flight.
+ *
+ * One at a time because two could land out of order, and a reading older than the last is
+ * indistinguishable from a core that restarted — whose traffic `advance` counts again in full.
+ */
+async function sample(): Promise<void> {
+  while (sampling) await sampling;
+  sampling = readCounters().finally(() => (sampling = null));
+  return sampling;
+}
+
+/** Reads the tunnel's counters: the rate the status card shows, and the traffic usage is made of. */
+async function readCounters() {
   try {
     const counters = await invoke<Throughput>("query_stats");
     const now = Date.now();
@@ -829,12 +883,26 @@ async function poll() {
         };
       }
     }
+    // The first reading counts in full: the counters start at zero when the tunnel comes up, and
+    // `lastCounters` is reset to zero with them.
+    const moved = advance(lastCounters, counters);
+    pendingUsage = { up: pendingUsage.up + moved.up, down: pendingUsage.down + moved.down };
     lastCounters = { ...counters, at: now };
+    if (now - usageSavedAt >= USAGE_SAVE_MS) saveUsage();
   } catch (e) {
     // One failed poll is not worth tearing the UI down over; the connection event handles a real
     // disconnect.
     log(`[ui] stats: ${String(e)}`);
   }
+}
+
+/** Writes counted traffic into the store, under the config the tunnel was running on. */
+function saveUsage() {
+  usageSavedAt = Date.now();
+  if (!usageServerId) return;
+  const bytes = pendingUsage;
+  pendingUsage = { up: 0, down: 0 };
+  store.recordUsage(usageServerId, usageSavedAt, bytes);
 }
 
 async function refreshReadiness() {
@@ -1578,6 +1646,103 @@ function isLive(server: Server): boolean {
   return connection !== "off" && store.get().selectedServerId === server.id;
 }
 
+/**
+ * The usage sheet, for one config or for every config in a group.
+ *
+ * It stays live while open — the numbers climb as the tunnel runs — by repainting on store
+ * changes; the listener drops itself the first time it fires after the sheet has gone. Clearing
+ * asks in the footer rather than in a second sheet, and says what goes: the history, never the
+ * configs.
+ */
+function openUsage(target: { server: Server } | { group: Group }) {
+  const configs = (): Server[] =>
+    "server" in target
+      ? [store.server(target.server.id)].filter((s): s is Server => Boolean(s))
+      : store.serversIn(target.group.id);
+
+  openSheet((close) => {
+    const body = h("div", { class: "share-body usage-host" });
+    const foot = h("div", { class: "sheet-foot" });
+    let confirming = false;
+
+    const paint = () => {
+      const servers = configs();
+      const group = "group" in target ? store.group(target.group.id) : store.group(servers[0]?.groupId ?? "");
+      const heading =
+        "server" in target
+          ? [target.server.profile.name, group?.name]
+          : [target.group.name, `${servers.length} config${servers.length === 1 ? "" : "s"}`];
+      render(
+        body,
+        h("p", { class: "share-name" }, heading[0], heading[1] ? h("span", { class: "usage-of" }, ` · ${heading[1]}`) : null),
+        usageBody({
+          servers,
+          quota: "group" in target ? group?.quota : null,
+          breakdown: "group" in target,
+          now: Date.now(),
+        }),
+      );
+
+      const histories = servers.map((s) => s.usage);
+      const since = firstDay(histories);
+      const recorded = total(histories);
+      if (confirming && since) {
+        render(
+          foot,
+          h(
+            "span",
+            { class: "gpick" },
+            `Clears ${size(recorded.up + recorded.down)} recorded since ${shortDate(since)}. The configs stay.`,
+          ),
+          h("button", { class: "ghost", onclick: () => ((confirming = false), paint()) }, "Cancel"),
+          h(
+            "button",
+            {
+              class: "btn danger",
+              onclick: () => {
+                confirming = false;
+                store.clearUsage(servers.map((s) => s.id));
+                log(`[ui] cleared the usage history of ${heading[0]}`);
+              },
+            },
+            "Clear",
+          ),
+        );
+      } else {
+        render(
+          foot,
+          h("span", { class: "gpick" }),
+          h(
+            "button",
+            { class: "ghost danger", disabled: !since, onclick: () => ((confirming = true), paint()) },
+            "Clear history",
+          ),
+          h("button", { class: "ghost", onclick: close }, "Done"),
+        );
+      }
+    };
+    paint();
+
+    // After insertion: `subscribe` calls the listener at once, and a sheet not yet in the document
+    // would read as already closed.
+    queueMicrotask(() => {
+      let off: (() => void) | null = null;
+      off = store.subscribe(() => {
+        if (!body.isConnected) off?.();
+        else paint();
+      });
+    });
+
+    return h(
+      "div",
+      { class: "app sheet usage", role: "dialog", "aria-label": "Usage" },
+      sheetHead("Usage", close),
+      body,
+      foot,
+    );
+  });
+}
+
 function confirmDeleteServer(server: Server) {
   const group = store.group(server.groupId);
   const live = isLive(server);
@@ -1859,6 +2024,9 @@ void listen<boolean>("core-connection", async (connected) => {
     // system proxy points at, which has to be put back now rather than at the next disconnect.
     connection = "off";
     tunnelEpoch++;
+    // What was counted before the core went is real traffic; only the last poll's worth is lost.
+    saveUsage();
+    usageServerId = null;
     if (systemProxyOn) void invoke("clear_system_proxy").catch(() => {});
     systemProxyOn = false;
     exitIps = null;

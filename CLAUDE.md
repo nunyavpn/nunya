@@ -36,6 +36,7 @@ npm run tauri dev
 | Lint Rust | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` |
 | Test Rust | `cargo test --manifest-path src-tauri/Cargo.toml` |
 | One test | `cargo test --manifest-path src-tauri/Cargo.toml <name>` |
+| Test frontend logic | `npm test` (Node's own `node --test`, no dependency) |
 | Frontend in a browser, no Rust | `VITE_MOCK=1 npm run dev` |
 | App with the list full | `VITE_MOCK=1 npm run tauri dev` |
 | Style guide | `npm run design` |
@@ -307,7 +308,7 @@ before the address is looked up. **The row's title is always the config's own na
 the flag and the subtitle. Titling rows by country made measured configs look renamed, and gave
 every config exiting in one country the same title.
 Editing a server's address or port clears both locations and re-checks it.
-`replaceSubscriptionServers` preserves `entry` and `exit` across a refresh.
+`replaceSubscriptionServers` preserves `entry`, `exit` and `usage` across a refresh.
 
 **The core cannot supply this.** `IPTest` and `SpeedTest` (with `only_country`) look up geo
 internally, against endpoints compiled in — `api.ip2location.io` and `speedtest.net` — both
@@ -414,6 +415,41 @@ The list shows `—` for both "never tested" and "unreachable", separated only b
 `Server.latencyError` carries the reason and the row states it on hover. Without it there is no way
 to tell a dead server from one the test endpoint could not reach.
 
+### Usage history
+
+Every config records what the tunnel carried on it, by local day, in `Server.usage`
+([usage.ts](src/usage.ts)). The source is the counters `query_stats` already returns for the status
+card's rate — cumulative since the tunnel came up — so `sample()` in `main.ts` files the difference
+between two readings (`advance`; a reading lower than the last means the core restarted, and the
+new reading is all new) under `usageServerId`, the config the tunnel was started on. That is **not**
+`selectedServerId`: choosing another server changes the selection before the reconnect, and the
+tail of the old session belongs to the old config.
+
+**The history lives on the config, so it lasts exactly as long as the config does.** Deleting a
+config, or a refresh dropping it, takes its history with it; a refresh that keeps it keeps the
+history, because the config keeps its id. That makes identity load-bearing: each config's id is a
+random UUID (`newId`), and a refresh hands the id to the incoming config that *is* the old one via
+`matchExisting` in [identity.ts](src/identity.ts) — protocol, host, port and credential (UUID,
+Trojan password or WireGuard key), never the name, path or SNI case, which BPB randomises per
+fetch — claiming each old config at most once. The earlier key was `server:port:uuid`, which gave
+every Trojan and WireGuard config on one host and port the same id.
+
+Counted traffic is written into the store every `USAGE_SAVE_MS` (15 s), not every poll — each write
+re-renders the list and queues a save of the data file — and at once on disconnect (after one last
+`sample()`) and when the core goes away. Quitting while connected can lose up to 15 s of count.
+
+The usage sheet (`openUsage`, drawn by [views/usage.ts](src/views/usage.ts)) opens from a group
+header's chart button or a row's **⋯ → Usage**: 30-day and all-time totals, the provider's
+`subscription-userinfo` figure beside ours (theirs counts every device, ours only this app), a
+stacked daily SVG chart, and for a group a per-config breakdown. It repaints on store changes while
+open, so the numbers climb during a session. **Clear history** confirms in the footer by saying
+what goes — the history, never the configs. No chart library: see *Frontend*.
+
+`npm test` runs `src/**/*.test.ts` under Node's built-in runner, which strips types itself. Tested
+modules must not import anything with a runtime value (type imports are erased), which is why
+`usage.ts` and `identity.ts` stand apart from the store. Test files are excluded from `tsc`, which
+would need `@types/node` to check them.
+
 ### Editing and deleting
 
 Every modal goes through `openSheet` in [main.ts](src/main.ts), which owns the scrim, the
@@ -449,8 +485,8 @@ whether the server returns on the next subscription update or is gone for good, 
 URL is a credential with no other copy, and whether the tunnel is currently running on the target
 (in which case it disconnects).
 
-A row has one action button, **⋯**, which opens a menu: Check, Share, Edit, then Delete… alone
-below a divider, in red. It used to be three buttons side by side, and Delete sat a misclick away
+A row has one action button, **⋯**, which opens a menu: Check, Usage, Share, Edit, then Delete…
+alone below a divider, in red. It used to be three buttons side by side, and Delete sat a misclick away
 from Edit. The menu is fixed to the viewport (the list clips its overflow) and closes on scroll.
 
 One CSS trap worth not repeating: the row action button is revealed with `opacity` on

@@ -35,6 +35,7 @@ import {
   type Server,
 } from "./store";
 import type { Profile, Protocol, TlsOptions, Transport, TransportKind } from "./share";
+import { dayKey, type Usage } from "./usage";
 
 /**
  * Whether the fixture is in use.
@@ -312,6 +313,39 @@ function groups(now: number): Group[] {
   ];
 }
 
+/**
+ * Usage history, so the usage sheet has bars to draw.
+ *
+ * Deterministic rather than random, for the same reason the ids are readable: a chart that changes
+ * on every reload cannot be compared with the last one. `days` is how far back it goes, `mb` a
+ * typical day's download; a share of days are quiet, as real use is. The Backup group has none,
+ * so its sheet shows the empty state.
+ */
+/*
+ * Keyed by host, not id: `store.ts` imports this module, so a top-level constant built from its
+ * `MANUAL_GROUP_ID` would read it before it exists.
+ */
+const USAGE: Record<string, { days: number; mb: number }> = {
+  "hel-01": { days: 45, mb: 900 },
+  "sto-01": { days: 20, mb: 300 },
+  "lon-03": { days: 9, mb: 120 },
+  "hkg-04": { days: 30, mb: 60 },
+  "fra-01": { days: 14, mb: 450 },
+};
+
+function usageFor(spec: { days: number; mb: number }, now: number): Usage {
+  const usage: Usage = {};
+  const today = new Date(now);
+  for (let back = 0; back < spec.days; back++) {
+    const wave = (Math.sin(back * 1.7 + spec.mb) + 1) / 2;
+    if (wave < 0.25) continue;
+    const down = Math.round(spec.mb * (0.3 + wave) * 1024 * 1024);
+    const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - back, 12);
+    usage[dayKey(day.getTime())] = { up: Math.round(down * 0.07), down };
+  }
+  return usage;
+}
+
 const BYPASS: BypassRule[] = [
   { id: "mock-bypass-1", kind: "domain", value: "*.example.net" },
   { id: "mock-bypass-2", kind: "domain", value: "intranet.example.org" },
@@ -336,7 +370,10 @@ export function mockData(): AppData {
       ...MANUAL.map((s) => serverFrom(MANUAL_GROUP_ID, s)),
       ...AURORA.map((s) => serverFrom(AURORA_ID, s)),
       ...BACKUP.map((s) => serverFrom(BACKUP_ID, s)),
-    ],
+    ].map((server) => {
+      const plan = USAGE[server.id.slice(server.groupId.length + 1)];
+      return plan ? { ...server, usage: usageFor(plan, now) } : server;
+    }),
     bypass: BYPASS,
     settings: { ...DEFAULT_SETTINGS },
     // Selected inside a subscription rather than the manual group, so the active row and the
