@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod core_proc;
+pub mod external;
 pub mod geo;
 pub mod rpc;
 pub mod storage;
@@ -586,6 +587,15 @@ async fn fetch_subscription(url: String) -> Result<subscription::Fetched, String
         .map_err(|e| e.to_string())
 }
 
+/// Opens a page in the system browser — only an `https` page on a host `external` allows.
+#[tauri::command]
+async fn open_external(url: String) -> Result<(), String> {
+    // The opener returns once it has handed the page off, but that is still a process to wait on.
+    tokio::task::spawn_blocking(move || external::open(&url))
+        .await
+        .map_err(|e| format!("opening the page panicked: {e}"))?
+}
+
 /// Renders the config without contacting the core, so the UI can show it even when the core is
 /// down.
 #[tauri::command]
@@ -731,6 +741,7 @@ pub fn run() {
             set_system_proxy,
             clear_system_proxy,
             fetch_subscription,
+            open_external,
             load_data,
             save_data,
             #[cfg(target_os = "linux")]

@@ -477,6 +477,28 @@ The prompt repaints on store changes while open, like the usage sheet.
 `quick.ts` is generic over the item and imports nothing, so `npm test` covers it on plain objects;
 the store turns servers into candidates (`quickCandidates`, `quickPicks`).
 
+### Support (donations)
+
+Donations have exactly **two channels, Buy Me a Coffee and crypto wallets**, written once in
+[support.ts](src/support.ts) (`SUPPORT`) and repeated in the README's Support section and
+`.github/FUNDING.yml` — keep all three in step. The panel says these are the only channels, so a
+payment request "for Nunya" anywhere else can be recognised as not ours; do not add a third
+channel without that sentence still being true.
+
+The panel ([views/support.ts](src/views/support.ts), the rail's heart) shows each wallet's
+address **whole** — a shortened address is what address-swapping scams count on nobody reading —
+with Copy, a QR code, and the network it is on: "Send only USDT on TRON (TRC-20)". USDT on TRON and
+on Ethereum look alike and are not interchangeable.
+
+Buy Me a Coffee is a plain link, never its widget (the CSP forbids it, and it would tell a third
+party whenever the panel opened). It opens in the **system browser** through `open_external` in
+[external.rs](src-tauri/src/external.rs), which opens only `https` pages whose host is exactly one
+of `ALLOWED_HOSTS` — the webview has no shell capability and gets no general opener. The frontend
+mirrors the hosts in `SUPPORT_HOSTS`; a link the Rust side refuses is a button that does nothing.
+
+`npm test` checks every shipped address against its network's format (`supportProblems`) — a typo
+in a donation address sends money to nobody — and fails if the build offers no channel at all.
+
 ### Editing and deleting
 
 Every modal goes through `openSheet` in [main.ts](src/main.ts), which owns the scrim, the

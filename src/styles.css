@@ -2677,3 +2677,105 @@ button:disabled {
   font-size: 11.5px;
   color: var(--warn);
 }
+
+/* ---------------------------------------------------------------- support
+
+   Buy Me a Coffee and the crypto wallets. Addresses are shown whole, in the monospace face and
+   wrapping, because a shortened address is what an address-swapping scam counts on nobody reading. */
+
+.support-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.support-intro {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* The group's heading style, without the side padding it has in Advanced: the body pads already. */
+.support-body .set-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+}
+
+.support-body .set-group h4 {
+  margin: 0;
+}
+
+.support-body .fnote {
+  margin: 0;
+}
+
+.support-coffee {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.wallet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+.wallet-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.wallet-net {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.wallet-addr {
+  display: block;
+  padding: 8px 9px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink);
+  word-break: break-all;
+  user-select: all;
+}
+
+.wallet-acts {
+  display: flex;
+  gap: 8px;
+}
+
+.wallet-acts .ghost {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.wallet-qr {
+  align-self: center;
+}
+
