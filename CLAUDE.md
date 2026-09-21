@@ -161,6 +161,25 @@ outside Tauri, which is what lets the UI be developed in a browser.
 rather than shipping plausible-looking servers. Every host in the fixture is under `example.net`
 (RFC 2606 reserved, unregistrable).
 
+### The application icon
+
+The artwork lives at `design/nonya.png`; everything under `src-tauri/icons/` is generated from it
+with `npm run tauri icon <master>` and should never be edited by hand.
+
+The source is not the master. It is 1254x1254, RGB with **no alpha**, and its rounded square is
+surrounded by pure black rather than transparency — which macOS renders as a black tile behind
+the icon in the Dock. Preparing a master means flood-filling that surround to transparent from
+the corners inward (a plain threshold eats the icon's own near-black navy body), then fitting the
+artwork to 824px inside a transparent 1024x1024 canvas, which is Apple's grid. Skipping the inset
+leaves the icon visibly larger than every other icon in the Dock.
+
+`bundle.icon` in `tauri.conf.json` lists the five files the desktop bundle uses. `tauri icon` also
+emits Android and iOS sets, which this project has no targets for and which are deleted after
+generating; the `Square*Logo.png` and `StoreLogo.png` files are part of the original scaffold and
+are kept.
+
+`public/favicon.png` is the same artwork at 64px, for the webview's tab and window.
+
 ### Modes
 
 `Settings.mode` is `proxy` or `vpn`, and it is **not** a preference between two equivalent things.
