@@ -515,6 +515,167 @@ function parseReserved(raw: string | null): number[] {
   }
 }
 
+// ---------------------------------------------------------------- wg-quick
+
+/**
+ * Keys a wg-quick config may carry that change what the tunnel is, which this build cannot honour.
+ *
+ * Refused by name rather than dropped: without its preshared key a handshake fails silently, and
+ * an AmneziaWG config stripped of its obfuscation connects as the plain WireGuard its network was
+ * blocking — either way a tunnel that comes up and carries nothing.
+ */
+const WG_QUICK_REFUSED: Record<string, string> = {
+  presharedkey: "a preshared key, which this build does not carry yet",
+  jc: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  jmin: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  jmax: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  s1: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  s2: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  h1: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  h2: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  h3: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+  h4: "AmneziaWG's obfuscation (Jc, Jmin, S1, H1…), and this build runs plain WireGuard",
+};
+
+/** Whether text is a wg-quick config rather than a link: it opens with an `[Interface]` section. */
+export function isWgQuick(text: string): boolean {
+  return /^\s*(#[^\n]*\n\s*)*\[interface\]/i.test(text);
+}
+
+/**
+ * Parses a wg-quick config — the `[Interface]` / `[Peer]` text the official WireGuard apps export
+ * and scan — into a WireGuard profile.
+ *
+ * The inverse of `toWgQuick`, so a config shared from here can be pasted or scanned back. Keys are
+ * case-insensitive, as wg-quick's are. Host-side settings a client has no use for (`ListenPort`,
+ * `Table`, `PostUp`…) are ignored, and so is `AllowedIPs`: this client carries everything through
+ * the tunnel whatever the peer allowed. `DNS` is ignored too — resolution follows the app's own
+ * DNS setting, as it does for every other protocol. A name comes from a `# Name = …` comment, which
+ * `toWgQuick` writes and wg-quick itself skips.
+ */
+export function parseWgQuick(text: string): Profile {
+  let section = "";
+  let name = "";
+  let privateKey = "";
+  let peerPublicKey = "";
+  let endpoint = "";
+  let peers = 0;
+  const localAddress: string[] = [];
+  let reserved: number[] = [];
+  let mtu = 0;
+  let keepalive = 0;
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const named = /^#\s*name\s*=\s*(.+)$/i.exec(line);
+    if (named) {
+      name ||= named[1].trim();
+      continue;
+    }
+    if (line.startsWith("#")) continue;
+
+    const header = /^\[(\w+)\]$/.exec(line);
+    if (header) {
+      section = header[1].toLowerCase();
+      if (section === "peer") peers += 1;
+      continue;
+    }
+
+    const at = line.indexOf("=");
+    if (at < 0) throw new ParseError(`The WireGuard config has a line that is not "key = value": ${line}`);
+    const key = line.slice(0, at).trim().toLowerCase();
+    const value = line.slice(at + 1).trim();
+
+    const refused = WG_QUICK_REFUSED[key];
+    if (refused) throw new ParseError(`This WireGuard config uses ${refused}.`);
+
+    if (section === "interface") {
+      if (key === "privatekey") privateKey = value;
+      else if (key === "address") localAddress.push(...value.split(",").map((a) => a.trim()).filter(Boolean));
+      else if (key === "mtu") mtu = Number(value) || 0;
+      // Not wg-quick's; some WARP exports add it so the client id survives. Accepted wherever it is.
+      else if (key === "reserved") reserved = parseReserved(value);
+    } else if (section === "peer") {
+      if (key === "publickey") peerPublicKey = value;
+      else if (key === "endpoint") endpoint = value;
+      else if (key === "persistentkeepalive") keepalive = Number(value) || 0;
+      else if (key === "reserved") reserved = parseReserved(value);
+    }
+  }
+
+  if (peers > 1) {
+    throw new ParseError("This WireGuard config has more than one peer. This build connects to one.");
+  }
+  if (!privateKey) throw new ParseError("The WireGuard config has no PrivateKey in [Interface].");
+  if (!peerPublicKey) throw new ParseError("The WireGuard config has no PublicKey in [Peer].");
+  if (!localAddress.length) throw new ParseError("The WireGuard config has no Address in [Interface].");
+  if (!endpoint) throw new ParseError("The WireGuard config has no Endpoint in [Peer].");
+
+  // `host:port`, where an IPv6 host is bracketed so its colons are not read as the port's.
+  const split = /^\[([^\]]+)\]:(\d+)$/.exec(endpoint) ?? /^([^:]+):(\d+)$/.exec(endpoint);
+  if (!split) throw new ParseError(`The WireGuard config's Endpoint "${endpoint}" is not host:port.`);
+  const server = split[1];
+
+  return {
+    protocol: "wireguard",
+    name: name || server,
+    server,
+    port: port(split[2]),
+    uuid: "",
+    flow: "",
+    security: "",
+    alterId: 0,
+    password: "",
+    tls: tlsFrom("none", {}),
+    transport: emptyTransport(),
+    wireguard: { privateKey, peerPublicKey, localAddress, reserved, mtu, keepalive },
+  };
+}
+
+/**
+ * Splits a paste into the wg-quick configs in it and everything else.
+ *
+ * The paste box reads links a word at a time, which would take a config apart into "[Interface]",
+ * "PrivateKey", "=" and so on. So configs are lifted out first: each runs from an `[Interface]`
+ * line to the last line that still belongs to one — a section, a `key = value`, a comment or a
+ * blank — and whatever else was pasted around them is left for the link reader.
+ */
+export function extractWgQuick(raw: string): { configs: string[]; rest: string } {
+  const configs: string[] = [];
+  const rest: string[] = [];
+  let current: string[] | null = null;
+  // Comments seen outside a config, held in case an `[Interface]` follows: `# Name = …` sits
+  // above the section it names.
+  let pending: string[] = [];
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^\[interface\]$/i.test(trimmed)) {
+      if (current) configs.push(current.join("\n"));
+      current = [...pending, trimmed];
+      pending = [];
+      continue;
+    }
+    const belongs =
+      !trimmed || trimmed.startsWith("#") || /^\[\w+\]$/.test(trimmed) || /^[A-Za-z0-9]+\s*=/.test(trimmed);
+    if (current && belongs) {
+      current.push(line);
+    } else if (!current && trimmed.startsWith("#")) {
+      pending.push(line);
+    } else {
+      if (current) configs.push(current.join("\n"));
+      current = null;
+      rest.push(...pending, line);
+      pending = [];
+    }
+  }
+  if (current) configs.push(current.join("\n"));
+  rest.push(...pending);
+  return { configs, rest: rest.join("\n") };
+}
+
 // ---------------------------------------------------------------- entry point
 
 /**
@@ -524,6 +685,9 @@ function parseReserved(raw: string | null): number[] {
  * someone with a working subscription unable to tell which of forty entries this build skipped.
  */
 export function parseShareLink(raw: string): Profile {
+  // A wg-quick config, pasted or scanned: the form the official WireGuard apps export.
+  if (isWgQuick(raw)) return parseWgQuick(raw);
+
   const link = raw.trim();
   const at = link.indexOf("://");
   if (at <= 0) throw new ParseError("That does not look like a share link.");
@@ -641,6 +805,82 @@ export function toShareLink(profile: Profile): string {
     profile.protocol === "trojan" ? profile.password : profile.uuid,
   );
   return `${profile.protocol}://${credential}@${host}:${profile.port}?${q}${name}`;
+}
+
+/**
+ * Why a profile cannot be shared as a wg-quick config, or `null` when it can.
+ *
+ * WARP is the one refusal. Its `reserved` client id has no place in wg-quick, and the official apps
+ * import the config without it — a tunnel that comes up and carries nothing, because the server
+ * drops the handshake instead of refusing it. Saying so beats handing over a config that silently
+ * does not work.
+ */
+export function wgQuickRefusal(profile: Profile): string | null {
+  if (profile.protocol !== "wireguard" || !profile.wireguard) return "Only a WireGuard server has a WireGuard config.";
+  if (profile.wireguard.reserved.length) {
+    return (
+      "This is a Cloudflare WARP config. Its client id (reserved) cannot be written into a WireGuard " +
+      "config, and the official WireGuard apps would connect and pass no traffic without it. Share " +
+      "the link instead, with a client that reads it, such as Hiddify."
+    );
+  }
+  return null;
+}
+
+/**
+ * Writes a WireGuard profile as a wg-quick config, which is what the official WireGuard apps scan
+ * — they cannot read a `wireguard://` link.
+ *
+ * `AllowedIPs` is everything, because that is what this client does with the tunnel. `dns` goes in
+ * the `DNS` line when given: without one, a phone keeps using its network's resolver, often a LAN
+ * address the tunnel cannot reach, and nothing resolves. The name rides in a `# Name =` comment,
+ * which wg-quick skips and `parseWgQuick` reads back.
+ */
+export function toWgQuick(profile: Profile, dns: string[] = []): string {
+  const refusal = wgQuickRefusal(profile);
+  if (refusal) throw new ParseError(refusal);
+  const wg = profile.wireguard!;
+  const host = profile.server.includes(":") ? `[${profile.server.replace(/^\[|\]$/g, "")}]` : profile.server;
+
+  const lines = [
+    profile.name ? `# Name = ${profile.name.replace(/[\r\n]+/g, " ")}` : null,
+    "[Interface]",
+    `PrivateKey = ${wg.privateKey}`,
+    `Address = ${wg.localAddress.join(", ")}`,
+    dns.length ? `DNS = ${dns.join(", ")}` : null,
+    wg.mtu ? `MTU = ${wg.mtu}` : null,
+    "",
+    "[Peer]",
+    `PublicKey = ${wg.peerPublicKey}`,
+    "AllowedIPs = 0.0.0.0/0, ::/0",
+    `Endpoint = ${host}:${profile.port}`,
+    wg.keepalive ? `PersistentKeepalive = ${wg.keepalive}` : null,
+  ];
+  return lines.filter((line): line is string => line !== null).join("\n") + "\n";
+}
+
+/**
+ * The resolver address in the app's DNS setting, for a wg-quick `DNS` line, or `null`.
+ *
+ * The setting is usually a DoH or DoT URL (`https://1.1.1.1/dns-query`); wg-quick wants a plain
+ * address, which is there when the URL's host is one. A host name (`dns.google`) is not usable —
+ * the phone would have to resolve it to resolve anything — so that gives `null`, and the sheet
+ * says so rather than picking a resolver on the user's behalf.
+ */
+export function dnsAddressOf(setting: string): string | null {
+  const value = setting.trim();
+  let host = value;
+  if (value.includes("://")) {
+    try {
+      host = new URL(value).hostname;
+    } catch {
+      return null;
+    }
+  }
+  host = host.replace(/^\[|\]$/g, "");
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (ipv4) return ipv4.slice(1).every((n) => Number(n) <= 255) ? host : null;
+  return /^[0-9a-f:]+$/i.test(host) && host.includes(":") ? host : null;
 }
 
 const PROTOCOL_LABELS: Record<Protocol, string> = {
