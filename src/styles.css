@@ -180,6 +180,8 @@ button:disabled {
   gap: 6px;
 }
 
+/* The rail's shield is the connection's state, on every screen: green working, amber connecting,
+   grey off, red not working (see shield.ts). Brand blue is only its colour before the first paint. */
 .logo {
   width: 34px;
   height: 34px;
@@ -190,6 +192,44 @@ button:disabled {
   margin-bottom: 14px;
   color: #fff;
   box-shadow: 0 4px 12px -3px var(--brand-glow);
+  transition:
+    background 0.25s ease,
+    box-shadow 0.25s ease,
+    color 0.25s ease;
+}
+
+.logo.on {
+  background: linear-gradient(145deg, var(--live-fill), var(--live));
+  box-shadow: 0 4px 12px -3px var(--live-glow);
+}
+
+.logo.connecting {
+  background: linear-gradient(145deg, var(--warn-fill), var(--warn));
+  box-shadow: none;
+  animation: logo-pulse 1.3s ease-in-out infinite;
+}
+
+.logo.off {
+  background: var(--sunk);
+  color: var(--faint);
+  box-shadow: none;
+}
+
+.logo.failed {
+  background: linear-gradient(145deg, var(--off-fill), var(--off));
+  box-shadow: 0 4px 12px -3px var(--off-glow);
+}
+
+@keyframes logo-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo.connecting {
+    animation: none;
+  }
 }
 
 .rail-btn {

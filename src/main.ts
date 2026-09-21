@@ -14,6 +14,7 @@ import {
 } from "./store";
 import { fastestFirst, type QuickKind } from "./quick";
 import { describe, parseShareLink, toShareLink, type Profile } from "./share";
+import { shieldState } from "./shield";
 import { advance, firstDay, total, type Bytes } from "./usage";
 import { icon } from "./views/icons";
 import { BypassPanel } from "./views/bypass";
@@ -55,6 +56,11 @@ let home: Whereabouts | null = null;
 /** Where the running tunnel comes out, once measured. */
 let exitPlace: Whereabouts | null = null;
 let tunnelDevice: string | null = null;
+/**
+ * Why the last attempt to connect failed, or why a running tunnel stopped: the rail shield's red.
+ * Cleared when a new attempt starts or the user disconnects, never by itself; see `shield.ts`.
+ */
+let tunnelFault: string | null = null;
 
 /** Cumulative counters from the previous poll, so the UI can show a rate rather than a total. */
 let lastCounters = { uplink: 0, downlink: 0, at: 0 };
@@ -492,6 +498,26 @@ function refresh() {
   const { pins, route } = buildMap(server);
   map.setPins(pins, route);
   syncTray(server, blockedReason() === null);
+  paintShield();
+}
+
+/** What the shield last showed, so the once-a-second refresh does not rebuild it. */
+let shieldShown = "";
+
+/**
+ * The shield at the top of the rail: whether the tunnel is working, on every screen, since the
+ * panels that replace the list hide the status card's detail. See `shield.ts` for the states.
+ */
+function paintShield() {
+  const shield = shieldState({ connection, mode: store.settings().mode, fault: tunnelFault, exit: exitIps });
+  const shown = `${shield.tone}|${shield.glyph}|${shield.label}`;
+  if (shown === shieldShown) return;
+  shieldShown = shown;
+  const logo = qs<HTMLElement>(".logo");
+  logo.className = `logo ${shield.tone}`;
+  logo.title = shield.label;
+  logo.setAttribute("aria-label", shield.label);
+  logo.replaceChildren(icon(shield.glyph, 19));
 }
 
 /** What was last sent to the tray, so the once-a-second uptime refresh does not resend it. */
@@ -872,6 +898,7 @@ async function connect() {
   }
 
   connection = "connecting";
+  tunnelFault = null;
   tunnelEpoch++;
   exitPlace = null;
   exitIps = null;
@@ -894,6 +921,7 @@ async function connect() {
     await applySystemProxy();
   } catch (e) {
     connection = "off";
+    tunnelFault = `the connection could not start (${String(e)})`;
     log(`[ui] start failed: ${String(e)}`);
     // Surface the core's own words; it knows more about the failure than we do.
     readiness = readiness ? { ...readiness, ready: false, detail: String(e) } : readiness;
@@ -936,6 +964,8 @@ async function disconnect() {
   }
   saveUsage();
   usageServerId = null;
+  // Asked for, so whatever went wrong before is no longer the state to report.
+  tunnelFault = null;
   systemProxyOn = false;
   systemProxyError = null;
   connection = "off";
@@ -2093,7 +2123,7 @@ function paintRail() {
     button.appendChild(icon(glyph, size));
     button.addEventListener("click", () => show(name));
   }
-  qs(".logo").appendChild(icon("shield-check", 19));
+  paintShield();
 }
 
 // ---------------------------------------------------------------- boot
@@ -2140,6 +2170,7 @@ void listen<boolean>("core-connection", async (connected) => {
     // What was counted before the core went is real traffic; only the last poll's worth is lost.
     saveUsage();
     usageServerId = null;
+    tunnelFault = "the core stopped while connected";
     if (systemProxyOn) void invoke("clear_system_proxy").catch(() => {});
     systemProxyOn = false;
     exitIps = null;
