@@ -103,14 +103,25 @@ VITE_MOCK=1 npm run dev         # the same UI in a browser, no Rust side at all
 
 It covers the states that are otherwise awkward to reach by clicking: every latency grade, an
 unreachable server, an untested one, a subscription whose last refresh failed, a quota past the
-amber threshold, a collapsed group, and a retired server — one a refresh dropped while the tunnel
-was running on it.
+amber threshold, a collapsed group, a retired server — one a refresh dropped while the tunnel
+was running on it — and weeks of usage history on a few configs, so the usage charts have
+something to draw.
 
 Two things keep it out of the way of real data. Writes are discarded, so clicking through the
 fixture cannot overwrite the data file that holds your actual credentials; and `VITE_MOCK` is
 substituted at build time, so an ordinary `npm run build` drops the module entirely rather than
 shipping a list of plausible-looking servers. Every host in it is under `example.net`, which RFC
 2606 reserves so it can never be registered.
+
+### Tests
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml   # the Rust side
+npm test                                          # frontend logic, on Node's built-in runner
+```
+
+`npm test` needs no dependency: Node runs the TypeScript directly. It covers the logic that decides
+whose traffic is whose — usage arithmetic, and which config a refreshed subscription entry is.
 
 ### The style guide
 
@@ -337,7 +348,8 @@ The subprocess transport is implemented and tested; the NetworkExtension one is 
 ## Status
 
 Working and tested: the toolchain, the split core build and its checksum-pinned install, the IPC codec with peer verification, config
-generation, config validation against a real core, connect/disconnect, throughput polling, VLESS and
+generation, config validation against a real core, connect/disconnect, throughput polling, per-config
+usage history with daily charts, VLESS and
 VMess, Trojan and WireGuard parsing over every transport the core implements, subscriptions in
 both formats below, the transport seam, and the core's Darwin TUN-descriptor support.
 

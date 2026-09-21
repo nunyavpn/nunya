@@ -29,6 +29,9 @@ export interface LocationsCallbacks {
   onRefresh: (group: Group) => void;
   /** Re-test one server: latency, entry and exit. */
   onCheck: (server: Server) => void;
+  /** What the tunnel has carried on one config, or on every config in a group. */
+  onUsage: (server: Server) => void;
+  onGroupUsage: (group: Group) => void;
   onShare: (server: Server) => void;
   onEdit: (server: Server) => void;
   onDelete: (server: Server) => void;
@@ -204,6 +207,7 @@ export class LocationsPanel {
   }
 
   private groupHeader(group: Group, count: number) {
+    const total = store.serversIn(group.id).length;
     const servers = `${count} server${count === 1 ? "" : "s"}`;
     const meta = group.lastError
       ? // `updatedAt` is only set by a successful refresh, so a subscription that has never had
@@ -241,6 +245,20 @@ export class LocationsPanel {
           meta,
         ),
       ),
+      // Nothing to chart in a group with no configs; the filter does not hide it, though, because
+      // the history is the group's whole, not what the search matched.
+      total
+        ? h(
+            "button",
+            {
+              class: "gsync",
+              "aria-label": `Usage of ${group.name}`,
+              title: "Usage",
+              onclick: () => this.callbacks.onGroupUsage(group),
+            },
+            icon("chart", 14),
+          )
+        : null,
       // Only a subscription has somewhere to refresh from.
       group.url
         ? h(
@@ -447,7 +465,7 @@ export class LocationsPanel {
   }
 
   /**
-   * Check, Share and Edit, then Delete on its own below a divider.
+   * Check, Usage, Share and Edit, then Delete on its own below a divider.
    *
    * Fixed to the viewport rather than placed inside the row, because the list scrolls and clips
    * its overflow — a menu inside it would be cut off at the bottom rows.
@@ -481,6 +499,7 @@ export class LocationsPanel {
         "refresh",
         () => this.callbacks.onCheck(server),
       ),
+      item("Usage", "chart", () => this.callbacks.onUsage(server)),
       item("Share", "share", () => this.callbacks.onShare(server)),
       item("Edit", "pencil", () => this.callbacks.onEdit(server)),
       h("div", { class: "rmenu-sep", role: "separator" }),

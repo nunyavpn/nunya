@@ -2386,3 +2386,179 @@ button:disabled {
 .loc.retired .flag {
   filter: saturate(0.35);
 }
+
+/* ---------------------------------------------------------------- usage
+
+   Totals, a daily chart and a per-config breakdown. The chart is SVG coloured from the theme, so
+   the same rules serve both themes; upload is the download colour at lower strength rather than a
+   second hue, because the two are one quantity split in two, not two things to compare. */
+
+.usage-of {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.usage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.usage-body .fnote {
+  margin: 0;
+}
+
+.usage-empty {
+  margin: 6px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.usage-sum {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.us-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+.us-cell .k,
+.us-cell .s {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.us-cell b {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.uc-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.uc-axis {
+  fill: var(--faint);
+  font-family: var(--ui);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.uc-hit {
+  fill: transparent;
+}
+
+.uc-day:hover .uc-hit {
+  fill: var(--brand-soft);
+}
+
+.uc-down,
+.usage-legend span::before {
+  fill: var(--brand-fill);
+  background: var(--brand-fill);
+}
+
+.uc-up,
+.usage-legend .up::before {
+  opacity: 0.42;
+}
+
+.uc-up {
+  fill: var(--brand-fill);
+}
+
+.usage-legend {
+  display: flex;
+  gap: 14px;
+  margin-top: -6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.usage-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+
+.usage-break h4 {
+  margin: 2px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.ub-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 64px;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.ub-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ub-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--sunk);
+}
+
+.ub-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--brand-fill);
+}
+
+.ub-val {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ub-row.rest {
+  color: var(--muted);
+}
+
+.ub-row.rest .ub-bar {
+  background: none;
+}
+
+.ghost.danger {
+  color: var(--off);
+}
+
+.ghost.danger:disabled {
+  color: var(--faint);
+}

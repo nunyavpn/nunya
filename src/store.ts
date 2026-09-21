@@ -6,8 +6,10 @@
  * persistence exists at all.
  */
 
+import { matchExisting } from "./identity";
 import { backend, DebouncedWriter } from "./persist";
 import type { Profile } from "./share";
+import { addUsage, type Bytes, type Usage } from "./usage";
 
 /** Where a server came from. Hand-added servers live in their own group, which sorts first. */
 export type GroupKind = "manual" | "subscription";
@@ -58,6 +60,14 @@ export interface Server {
    * reconstructed later.
    */
   renamed?: boolean;
+  /**
+   * What the tunnel has carried while running on this config, by local day; see `usage.ts`.
+   *
+   * On the config rather than in a table of its own, so it lasts exactly as long as the config
+   * does: kept across a subscription refresh that keeps the config, and gone with it when it is
+   * deleted or its subscription drops it.
+   */
+  usage?: Usage;
 }
 
 /** A place an address was found to be. Mirrors `geo::Spot`, plus when it was measured. */
@@ -431,11 +441,6 @@ class Store {
     incoming: Omit<Server, "id" | "groupId">[],
     protectedId: string | null,
   ): { added: number; removed: number; retired: number; kept: number } {
-    // Identity is the endpoint plus credentials, not the display name: providers rename servers
-    // constantly, and a rename should not read as "removed and re-added".
-    const key = (s: { profile: Profile }) =>
-      `${s.profile.server}:${s.profile.port}:${s.profile.uuid}`;
-
     let added = 0;
     let removed = 0;
     let retired = 0;
@@ -444,11 +449,13 @@ class Store {
     this.update((data) => {
       const existing = data.servers.filter((s) => s.groupId === groupId);
       const others = data.servers.filter((s) => s.groupId !== groupId);
-      const byKey = new Map(existing.map((s) => [key(s), s]));
-      const incomingKeys = new Set(incoming.map(key));
+      // Identity is the protocol, endpoint and credential, never the display name; see
+      // `identity.ts`. Each existing config is claimed once, so no two rows share an id.
+      const matches = matchExisting(existing, incoming);
+      const claimed = new Set(matches.filter(Boolean));
 
-      const next: Server[] = incoming.map((candidate) => {
-        const previous = byKey.get(key(candidate));
+      const next: Server[] = incoming.map((candidate, i) => {
+        const previous = matches[i];
         if (!previous) {
           added += 1;
           return { ...candidate, id: newId(), groupId };
@@ -470,12 +477,14 @@ class Store {
           entry: previous.entry,
           exit: previous.exit,
           renamed: previous.renamed,
+          // The history belongs to the config, and this is still the config.
+          usage: previous.usage,
           retired: false,
         };
       });
 
       for (const old of existing) {
-        if (incomingKeys.has(key(old))) continue;
+        if (claimed.has(old)) continue;
         if (old.id === protectedId) {
           // Kept alive, but marked so the UI can say why it is still there.
           next.push({ ...old, retired: true });
@@ -575,6 +584,28 @@ class Store {
       server.renamed = place.renamed || undefined;
       server.latency = null;
       server.testedAt = null;
+    });
+  }
+
+  /**
+   * Files traffic the tunnel carried on a config under today. A config deleted while the tunnel
+   * ran on it has nowhere to keep it, and the bytes are dropped with it.
+   */
+  recordUsage(id: string, at: number, bytes: Bytes) {
+    if (bytes.up <= 0 && bytes.down <= 0) return;
+    this.update((data) => {
+      const server = data.servers.find((s) => s.id === id);
+      if (server) server.usage = addUsage(server.usage, at, bytes);
+    });
+  }
+
+  /** Forgets the usage history of these configs; the configs themselves stay. */
+  clearUsage(ids: string[]) {
+    const clearing = new Set(ids);
+    this.update((data) => {
+      for (const server of data.servers) {
+        if (clearing.has(server.id)) delete server.usage;
+      }
     });
   }
 
