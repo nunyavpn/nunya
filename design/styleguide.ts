@@ -308,7 +308,7 @@ function traySection(tokens: Tokens) {
   const dark: TokenReader = (name) => darkValue(tokens, name);
   return section(
     "Tray icon",
-    "The rail shield as the menu bar and the top bar show it, drawn by trayicon.ts from the same glyphs and tokens: filled with the mark cut out when it means something, an outline when off. On macOS off is a template image, which the system draws in the menu bar's own colour — emulated here.",
+    "The app's mark as the menu bar and the top bar show it, drawn by trayicon.ts in the rail shield's colours: green, amber and red when it means something, dimmed when off. On macOS off is a template image, which the system draws in the menu bar's own colour — emulated here.",
     h(
       "div",
       { class: "sg-tray-big" },
