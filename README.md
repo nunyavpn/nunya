@@ -65,6 +65,9 @@ provider sent you, a subscription or a WireGuard config, and tells you plainly w
 
 ### The main window
 
+At launch Nunya shows its mark while it loads your servers, starts its engine and finds where you
+are, then gets out of the way. It finds where you are again whenever your network changes.
+
 The **server list** on the left groups your servers by where they came from: the ones you added
 yourself, then each subscription, with its data allowance and when it was last updated. Each row
 shows the server's flag and city (where its traffic really comes out), how it connects, and its

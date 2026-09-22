@@ -8,6 +8,10 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <!-- The launch cover (views/splash.ts): here, not added by the script, so the empty window
+         never shows before the script has run. The window can be dragged by it. -->
+    <div class="splash" id="splash" data-tauri-drag-region></div>
+
     <div class="window">
       <!-- macOS draws no title bar (titleBarStyle: Transparent), so the rail doubles as the drag
            handle and has to clear the traffic lights at the top left. -->

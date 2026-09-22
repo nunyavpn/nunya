@@ -506,6 +506,22 @@ Both halves are endpoint *chains*, for the same reason: a free tier is exhaustib
 of testing exhausted `ipinfo.io` for this machine entirely. Expect the resolvers to disagree
 sometimes — a Cloudflare anycast address has no single physical location.
 
+### The splash screen
+
+At launch a cover ([views/splash.ts](src/views/splash.ts)) waits for the three things the window
+needs to be worth looking at: the data file loaded, the core up, and this machine placed
+(`locate_me`). It leaves when all three are done, or after `MAX_MS` (6 s), whichever is first,
+and stays at least `MIN_MS` so the mark finishes being drawn. A slow geo lookup must not hold the
+app hostage, and a core that never comes up is the status card's to explain. A data file that
+will not load takes it down at once (`leave`), because that error is the window's to show now.
+The cover is in `index.html` from the first paint (a plain field in the page's colour, and a
+drag region), so the empty window never shows before the script runs.
+
+The animation is the mark being made, from the `mark` icon's own paths: the arch draws itself
+(`pathLength` 1, a dash offset), the road runs out of the tunnel, rings recede into it, a light
+passes over the finished mark, and leaving, it flies into the tunnel as it fades. The colours are
+the artwork's gradient. Reduced motion shows the finished mark, still.
+
 ### Where the user is (the map's route)
 
 The map starts from the user's own dot and, once connected, draws the route from it to the exit.
@@ -514,7 +530,12 @@ through `geo::whereabouts`, which returns coordinates rather than a country (a c
 puts everyone in Russia in Siberia) from a chain of endpoints, like the country lookup.
 
 `locate_me` asks directly, so it is only ever asked **with the tunnel down**: in VPN mode a direct
-request goes through the TUN and would put the user at their exit. `tunnelEpoch` in `main.ts` is
+request goes through the TUN and would put the user at their exit. It is asked at launch, after
+every disconnect, and **when the network changes**: [netwatch.rs](src-tauri/src/netwatch.rs) looks
+every 4 s at the address the system would send from to reach the internet (a UDP socket
+"connected" to a public address, which sends nothing), and emits `network-changed` when it moves.
+The webview's `online` event misses a move straight from one network to another. `locateHome`
+runs one lookup at a time, and a request made during one runs once more after it. `tunnelEpoch` in `main.ts` is
 bumped on every connect and disconnect so an answer that was in flight across one is discarded.
 `locate_exit` takes the same two steps as `geo::locate` in proxy mode — the address through the
 listener, the place from the user's own connection — to keep the rate-limited half off a shared
