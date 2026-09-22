@@ -9,11 +9,14 @@
  * is a property of the server you imported, not something to choose.
  */
 
+import { listLine, type BlockList, type ListState } from "../blocking";
 import { DEFAULT_SETTINGS, store, type Settings } from "../store";
 import { h, render } from "../dom";
 
 export interface SettingsCallbacks {
   onDisconnect: () => void;
+  /** Where a block list stands: on disk since when, being fetched, or failed. */
+  blockList: (list: BlockList) => ListState;
 }
 
 export class SettingsPanel {
@@ -106,6 +109,8 @@ export class SettingsPanel {
           : []),
       ]),
 
+      this.blockingGroup(s),
+
       // Only VPN mode builds a TUN, so its settings are noise the rest of the time.
       ...(s.mode === "vpn" ? [this.tunnelGroup(s)] : []),
 
@@ -149,6 +154,37 @@ export class SettingsPanel {
         ),
       ),
     ];
+  }
+
+  /**
+   * Each switch says where its list stands, because a switch can be on while blocking nothing:
+   * its list is left out of the config until it has been downloaded (`blocklists.rs`).
+   */
+  private blockingGroup(s: Settings) {
+    const now = Date.now();
+    const line = (list: BlockList, on: boolean) => listLine(on, this.callbacks.blockList(list), now);
+    return this.group("Blocking", [
+      this.toggle(
+        "Ad blocker",
+        `ad networks · ${line("ads", s.blockAds)}`,
+        s.blockAds,
+        (v) => store.updateSettings({ blockAds: v }),
+      ),
+      this.toggle(
+        "Anti-tracker",
+        `tracking built into systems, devices and apps · ${line("trackers", s.blockTrackers)}`,
+        s.blockTrackers,
+        (v) => store.updateSettings({ blockTrackers: v }),
+      ),
+      // What the switches reach follows the mode, like everything else that claims coverage.
+      h(
+        "p",
+        { class: "set-note" },
+        s.mode === "vpn"
+          ? "Applies to everything on this device while connected."
+          : "In proxy mode only apps set to use the proxy are filtered.",
+      ),
+    ]);
   }
 
   private tunnelGroup(s: Settings) {

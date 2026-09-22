@@ -1,3 +1,9 @@
+import {
+  LIST_NAMES,
+  listsToFetch,
+  type BlockList,
+  type ListState,
+} from "./blocking";
 import { hasBackend, inTauri, invoke, listen } from "./bridge";
 
 import { h, qs, render } from "./dom";
@@ -74,6 +80,12 @@ let tunnelDevice: string | null = null;
  */
 let tunnelFault: string | null = null;
 
+/** The block lists on disk, as the Rust side reports them; see `blocking.ts`. */
+const blockLists: Record<BlockList, ListState> = {
+  ads: { updatedAt: null, busy: false, error: null },
+  trackers: { updatedAt: null, busy: false, error: null },
+};
+
 /** Cumulative counters from the previous poll, so the UI can show a rate rather than a total. */
 let lastCounters = { uplink: 0, downlink: 0, at: 0 };
 let shownRate = { uplink: 0, downlink: 0 };
@@ -119,7 +131,10 @@ map.onViewChange = () => picker.close();
 
 const panelHost = qs<HTMLElement>("#panel");
 const bypass = new BypassPanel(panelHost);
-const settings = new SettingsPanel(panelHost, { onDisconnect: () => void disconnect() });
+const settings = new SettingsPanel(panelHost, {
+  onDisconnect: () => void disconnect(),
+  blockList: (list) => blockLists[list],
+});
 const diagnostics = new DiagnosticsPanel(panelHost, {
   onClear: () => {
     logLines.length = 0;
@@ -924,6 +939,8 @@ function buildRequest() {
       bypass,
       dns: settings.dns,
       logLevel: settings.logLevel,
+      // The switches only: which lists are on disk is the Rust side's to know.
+      block: { ads: settings.blockAds, trackers: settings.blockTrackers },
     },
   };
 }
@@ -957,6 +974,8 @@ async function connect() {
     connection = "on";
     log("[ui] tunnel started");
     void locateExit();
+    // A list that could not be fetched directly is fetched now, through the tunnel.
+    void syncBlockLists();
     await applySystemProxy();
   } catch (e) {
     connection = "off";
@@ -1015,6 +1034,87 @@ async function disconnect() {
   refresh();
   // Asked again rather than remembered: the tunnel may have been up across a change of network.
   void locateHome();
+}
+
+// ---------------------------------------------------------------- blocking
+
+/** Read once at startup, before anything decides a list is missing. */
+const blockStatusLoaded = (async () => {
+  try {
+    const found = await invoke<{ list: BlockList; updatedAt: number | null }[]>("blocklist_status");
+    for (const { list, updatedAt } of found) blockLists[list].updatedAt = updatedAt;
+  } catch {
+    // Outside Tauri: there are no lists, and nothing to fetch them with.
+  }
+})();
+
+/**
+ * Fetches every switched-on list that is missing or stale (`listsToFetch`).
+ *
+ * Through the tunnel when it is up — the lists come from GitHub, which many of the networks this
+ * client is for block — and directly otherwise. A list that replaces one already in use takes
+ * effect by itself, because the core reloads the file. One that arrives while connected and was
+ * missing at connect was left out of the running config, so the tunnel is restarted once to apply
+ * it.
+ */
+async function syncBlockLists() {
+  await blockStatusLoaded;
+  // The core checks every download, so there is nothing to fetch with until it is up.
+  if (!coreReady) return;
+  const current = store.settings();
+  const due = listsToFetch(current, blockLists, Date.now());
+  if (due.length === 0) return;
+
+  const epoch = tunnelEpoch;
+  const connected = connection === "on";
+  const proxyPort = connected && current.mode === "proxy" ? current.proxyPort : null;
+  let arrived = false;
+
+  await Promise.all(
+    due.map(async (list) => {
+      const state = blockLists[list];
+      const wasMissing = state.updatedAt === null;
+      state.busy = true;
+      paintBlocking();
+      try {
+        const found = await invoke<{ updatedAt: number | null }>("update_blocklist", {
+          list,
+          proxyPort,
+        });
+        state.updatedAt = found.updatedAt;
+        state.error = null;
+        log(`[ui] ${LIST_NAMES[list]} list ${wasMissing ? "downloaded" : "updated"}`);
+        if (wasMissing) arrived = true;
+      } catch (e) {
+        state.error = String(e);
+        log(`[ui] could not fetch the ${LIST_NAMES[list]} list: ${state.error}`);
+      } finally {
+        state.busy = false;
+        paintBlocking();
+      }
+    }),
+  );
+
+  // Only the tunnel the lists came through, and only if it is still up.
+  if (arrived && connected && epoch === tunnelEpoch && connection === "on") {
+    log("[ui] reconnecting so the new block list applies");
+    await reconnect();
+  }
+}
+
+function paintBlocking() {
+  if (settings.active) settings.render();
+}
+
+/** The switches as last seen, so a store change that is not one of them fetches nothing. */
+let blockSwitches = "";
+
+function watchBlockSwitches() {
+  const current = store.settings();
+  const key = `${current.blockAds}|${current.blockTrackers}`;
+  if (key === blockSwitches) return;
+  blockSwitches = key;
+  void syncBlockLists();
 }
 
 async function reconnect() {
@@ -2283,6 +2383,8 @@ paintRail();
 store.subscribe(() => refresh());
 // Nor do they hear the system switch between light and dark, which recolours the tray icon.
 darkScheme.addEventListener("change", () => refresh());
+// A blocker switched on fetches its list; so does the data file's first load.
+store.subscribe(watchBlockSwitches);
 
 void (async () => {
   // Rendering before the data arrives would flash an empty list on every launch.
@@ -2310,6 +2412,7 @@ void listen<boolean>("core-connection", async (connected) => {
 
   if (coreReady) {
     await refreshReadiness();
+    void syncBlockLists();
   } else if (connection !== "off") {
     // The core went away with the tunnel up, so the TUN went with it — and the listener the
     // system proxy points at, which has to be put back now rather than at the next disconnect.
@@ -2340,8 +2443,13 @@ void (async () => {
   // Independent of the core: it is a direct request from the Rust side.
   void locateHome();
   coreReady = await invoke<boolean>("core_connected").catch(() => false);
-  if (coreReady) await refreshReadiness();
+  if (coreReady) {
+    await refreshReadiness();
+    void syncBlockLists();
+  }
   refresh();
 })();
 
 setInterval(() => void poll(), 1000);
+// A list goes stale during a long session too; this fetches only the ones that have.
+setInterval(() => void syncBlockLists(), 60 * 60 * 1000);

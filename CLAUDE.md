@@ -265,6 +265,30 @@ whole machine, and only VPN mode may claim that.
 `the_gnome_proxy_is_set_and_then_put_back_exactly` runs the real cycle, but only against a throwaway
 keyfile backend (`GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME=$(mktemp -d)`); it refuses otherwise.
 
+### Ad blocker and anti-tracker
+
+`Settings.blockAds` and `Settings.blockTrackers` each switch on one list, which `config::build`
+names as a `local` rule set with a DNS rule answering NXDOMAIN and a `reject` route rule, both
+ahead of the bypass list. **Ads** is SagerNet/sing-geosite's `geosite-category-ads-all.srs`;
+**trackers** is HaGeZi's Native Tracker lists, merged by `blocklists.rs` into one source-format
+set (geosite has no tracker category: `category-public-tracker` is BitTorrent).
+
+**The app downloads the lists, not the core.** A `remote` rule set with nothing cached fails the
+core's Start when the download fails, which on a network that blocks GitHub means a Connect button
+that never works. `update_blocklist` fetches a list (through the listener in proxy mode; the TUN
+carries it in VPN mode), stages it beside the old one, has the core's `CheckConfig` read it, and
+renames it into place only if that passes. An error page or a truncated body never replaces a good
+list. `blocklists::on_disk` then names only the lists that exist, so a switch whose list has not
+arrived is left out of the config, and its row says "not blocking yet" (`listLine` in
+[blocking.ts](src/blocking.ts)).
+
+A running core reloads a replaced list by itself (it watches the directory: sagernet/fswatch), so
+refreshing one needs no reconnect. A list that arrives *while connected* after being missing at
+connect was left out of the running config, so `syncBlockLists` in `main.ts` reconnects once to
+apply it. Lists are fetched when a switch is turned on, after each connect (so one that could not
+come directly comes through the tunnel), and hourly; `STALE_MS` (a day) decides which are due.
+`core_link.rs` checks the published lists against a real core, and that an error page is refused.
+
 ### Settings are locked while connected
 
 Settings are read when the tunnel starts, so the Advanced panel is disabled (a `<fieldset disabled>`)

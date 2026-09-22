@@ -54,6 +54,8 @@ fn sample_request() -> BuildRequest {
         bypass: vec![],
         dns: "https://1.1.1.1/dns-query".into(),
         log_level: "warn".into(),
+        block: Default::default(),
+        block_lists: vec![],
     }
 }
 
@@ -567,6 +569,84 @@ async fn latency_testing_answers_for_every_server() {
 
 /// Minimal scratch directory that cleans up after itself, so the tests do not pull in a dependency
 /// for something this small.
+/// Asks the core to check a config, and returns its complaint if it has one.
+async fn core_check(link: &CoreLink, cfg: &serde_json::Value) -> Option<String> {
+    let resp: gen::ErrorResp = link
+        .call(
+            method::CHECK_CONFIG,
+            &gen::LoadConfigReq {
+                core_config: Some(cfg.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("CheckConfig round trip");
+    resp.error.filter(|e| !e.is_empty())
+}
+
+/// The tunnel config with both block lists on disk, in VPN and proxy mode.
+///
+/// Both lists are source files here, which needs no download; the binary ad list's shape differs
+/// only in `format`, and `the_published_block_lists_download_and_the_core_reads_them` covers it.
+#[tokio::test]
+#[ignore = "needs a built core; set NUNYA_CORE_PATH"]
+async fn a_config_with_block_lists_is_accepted_by_the_core() {
+    let (link, proc, dir) = connect_core().await;
+
+    let mut lists = Vec::new();
+    for tag in ["block-ads", "block-trackers"] {
+        let path = dir.path().join(format!("{tag}.json"));
+        std::fs::write(
+            &path,
+            r#"{"version":2,"rules":[{"domain_suffix":["ads.example.net","metrics.example.net"]}]}"#,
+        )
+        .unwrap();
+        lists.push(config::BlockList {
+            tag,
+            format: "source",
+            path: path.to_string_lossy().into_owned(),
+        });
+    }
+
+    for mode in [Mode::Vpn, Mode::Proxy] {
+        let mut req = sample_request();
+        req.mode = mode;
+        req.block = config::BlockOptions { ads: true, trackers: true };
+        req.block_lists = lists.clone();
+        let complaint = core_check(&link, &config::build(&req)).await;
+        assert_eq!(complaint, None, "{mode:?}");
+    }
+
+    proc.stop().await;
+}
+
+/// The lists as published today: downloaded, and read by the core the way `update_blocklist` has
+/// it read them. Also that an error page in their place is refused rather than installed.
+#[tokio::test]
+#[ignore = "needs a built core and the network; set NUNYA_CORE_PATH"]
+async fn the_published_block_lists_download_and_the_core_reads_them() {
+    use nunya_lib::blocklists::{self, List};
+
+    let (link, proc, dir) = connect_core().await;
+
+    for list in List::ALL {
+        let bytes = tokio::task::spawn_blocking(move || blocklists::download(list, None))
+            .await
+            .unwrap()
+            .unwrap_or_else(|e| panic!("{} list: {e}", list.name()));
+        eprintln!("{} list: {} bytes", list.name(), bytes.len());
+        let staged = blocklists::stage(dir.path(), list, &bytes).unwrap();
+        let complaint = core_check(&link, &blocklists::check_config(list, &staged)).await;
+        assert_eq!(complaint, None, "{} list", list.name());
+
+        let page = blocklists::stage(dir.path(), list, b"<html>429 Too Many Requests</html>").unwrap();
+        let complaint = core_check(&link, &blocklists::check_config(list, &page)).await;
+        assert!(complaint.is_some(), "an error page passed as the {} list", list.name());
+    }
+
+    proc.stop().await;
+}
+
 mod tempdir {
     use std::path::{Path, PathBuf};
 

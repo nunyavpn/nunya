@@ -1,6 +1,7 @@
 //! Application library. `main.rs` is a shim over `run()` so that integration tests can use
 //! the same modules the binary does.
 
+pub mod blocklists;
 pub mod config;
 pub mod core_proc;
 pub mod external;
@@ -120,7 +121,12 @@ async fn tunnel_readiness(
 /// Returns the generated JSON so it can be inspected; a config that cannot be explained is a
 /// config nobody can trust.
 #[tauri::command]
-async fn check_config(state: State<'_, AppState>, req: BuildRequest) -> Result<String, String> {
+async fn check_config(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    mut req: BuildRequest,
+) -> Result<String, String> {
+    with_block_lists(&app, &mut req)?;
     let cfg = config::build(&req);
     let pretty = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
 
@@ -153,8 +159,69 @@ async fn request_permission(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn start_tunnel(state: State<'_, AppState>, req: BuildRequest) -> Result<(), String> {
+async fn start_tunnel(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    mut req: BuildRequest,
+) -> Result<(), String> {
+    with_block_lists(&app, &mut req)?;
     state.tunnel.start(&req).await.map_err(|e| e.to_string())
+}
+
+/// Names the block lists that are on disk for the switches the request has on; see
+/// `blocklists::on_disk`.
+fn with_block_lists(app: &tauri::AppHandle, req: &mut BuildRequest) -> Result<(), String> {
+    req.block_lists = blocklists::on_disk(&data_dir(app)?, &req.block);
+    Ok(())
+}
+
+/// Downloads a block list, has the core check it, and puts it in place of the old one.
+///
+/// Through the proxy listener on `proxy_port` when given, which is how a list reaches a network
+/// that blocks GitHub once proxy mode is up. A download the core cannot read is discarded, and the
+/// list already on disk stays in use.
+#[tauri::command]
+async fn update_blocklist(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    list: blocklists::List,
+    proxy_port: Option<u16>,
+) -> Result<blocklists::Status, String> {
+    let dir = data_dir(&app)?;
+    let bytes = tokio::task::spawn_blocking(move || blocklists::download(list, proxy_port))
+        .await
+        .map_err(|e| format!("block list download panicked: {e}"))??;
+
+    let staged = blocklists::stage(&dir, list, &bytes)?;
+    let checked = state
+        .link
+        .call::<_, gen::ErrorResp>(
+            method::CHECK_CONFIG,
+            &gen::LoadConfigReq {
+                core_config: Some(blocklists::check_config(list, &staged).to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(or_err);
+    if let Err(e) = checked {
+        blocklists::discard(&staged);
+        return Err(format!("the core could not read the new {} list: {e}", list.name()));
+    }
+    blocklists::install(&dir, list, &staged)?;
+    log::info!("{} list updated", list.name());
+    Ok(blocklists::status(&dir, list))
+}
+
+/// Which block lists are on disk, and since when.
+#[tauri::command]
+fn blocklist_status(app: tauri::AppHandle) -> Result<Vec<blocklists::Status>, String> {
+    let dir = data_dir(&app)?;
+    Ok(blocklists::List::ALL
+        .into_iter()
+        .map(|list| blocklists::status(&dir, list))
+        .collect())
 }
 
 #[tauri::command]
@@ -599,7 +666,8 @@ async fn open_external(url: String) -> Result<(), String> {
 /// Renders the config without contacting the core, so the UI can show it even when the core is
 /// down.
 #[tauri::command]
-fn preview_config(req: BuildRequest) -> Result<String, String> {
+fn preview_config(app: tauri::AppHandle, mut req: BuildRequest) -> Result<String, String> {
+    with_block_lists(&app, &mut req)?;
     serde_json::to_string_pretty(&config::build(&req)).map_err(|e| e.to_string())
 }
 
@@ -721,6 +789,8 @@ pub fn run() {
             set_system_proxy,
             clear_system_proxy,
             fetch_subscription,
+            update_blocklist,
+            blocklist_status,
             open_external,
             load_data,
             save_data,

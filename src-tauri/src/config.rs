@@ -256,6 +256,24 @@ pub enum BypassRule {
     Range(String),
 }
 
+/// The ad blocker's and the anti-tracker's switches, as the settings have them.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct BlockOptions {
+    #[serde(default)]
+    pub ads: bool,
+    #[serde(default)]
+    pub trackers: bool,
+}
+
+/// A block list on disk, which the core reads for itself (`blocklists.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockList {
+    pub tag: &'static str,
+    /// `binary` for a `.srs` file, `source` for JSON.
+    pub format: &'static str,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildRequest {
@@ -273,6 +291,14 @@ pub struct BuildRequest {
     pub dns: String,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Which blockers are switched on.
+    #[serde(default)]
+    pub block: BlockOptions,
+    /// The lists those switches name that are on disk, filled in on this side by
+    /// `blocklists::on_disk`: the frontend knows the switches, only this side knows which lists
+    /// have arrived. A switch whose list has not is left out rather than failing the connection.
+    #[serde(skip)]
+    pub block_lists: Vec<BlockList>,
 }
 
 fn default_dns() -> String {
@@ -541,8 +567,20 @@ fn partition_bypass(rules: &[BypassRule]) -> (Vec<String>, Vec<String>) {
 pub fn build(req: &BuildRequest) -> Value {
     let (bypass_domains, bypass_cidrs) = partition_bypass(&req.bypass);
 
+    let block_tags: Vec<&str> = req.block_lists.iter().map(|l| l.tag).collect();
+
     // ---------------------------------------------------------------- dns
     let mut dns_rules: Vec<Value> = Vec::new();
+    if !block_tags.is_empty() {
+        // First, so a blocked name is refused even when the bypass list would resolve it. NXDOMAIN
+        // rather than the REFUSED a plain `reject` answers: a resolver told the name does not
+        // exist stops there, one told REFUSED goes on to ask its next server.
+        dns_rules.push(json!({
+            "rule_set": block_tags,
+            "action": "predefined",
+            "rcode": "NXDOMAIN",
+        }));
+    }
     if !bypass_domains.is_empty() {
         // A bypassed domain must also RESOLVE outside the tunnel. Route it direct but resolve it
         // through the proxy and the query itself leaks the very name being kept local.
@@ -610,6 +648,13 @@ pub fn build(req: &BuildRequest) -> Value {
         route_rules.push(json!({ "protocol": "dns", "action": "hijack-dns" }));
     }
 
+    // By the sniffed name, for connections made without asking the resolver: an address cached or
+    // hard-coded, or a name handed straight to the proxy listener. Before the bypass list, which
+    // decides how traffic leaves, not whether it may.
+    if !block_tags.is_empty() {
+        route_rules.push(json!({ "rule_set": block_tags, "action": "reject" }));
+    }
+
     // The tunnel carries everything, so without this the LAN becomes unreachable. Harmless in
     // proxy mode, and it keeps a browser configured to use the proxy able to reach a local
     // service through it.
@@ -662,8 +707,25 @@ pub fn build(req: &BuildRequest) -> Value {
             .expect("the config is an object")
             .insert("endpoints".into(), json!(endpoints));
     }
+    if !req.block_lists.is_empty() {
+        config["route"]["rule_set"] = json!(req
+            .block_lists
+            .iter()
+            .map(block_rule_set)
+            .collect::<Vec<_>>());
+    }
 
     config
+}
+
+/// A list on disk as `route.rule_set` names it. Local, not `remote`: see `blocklists.rs`.
+pub fn block_rule_set(list: &BlockList) -> Value {
+    json!({
+        "type": "local",
+        "tag": list.tag,
+        "format": list.format,
+        "path": list.path,
+    })
 }
 
 /// Tag for the nth server in a latency-test config.
@@ -824,6 +886,8 @@ mod tests {
             bypass: vec![],
             dns: default_dns(),
             log_level: default_log_level(),
+            block: BlockOptions::default(),
+            block_lists: vec![],
         }
     }
 
@@ -906,6 +970,65 @@ mod tests {
             .position(|r| r.get("domain_suffix").is_some())
             .unwrap();
         assert!(sniff < domain, "domain rules cannot match before sniffing");
+    }
+
+    fn with_lists(mut req: BuildRequest) -> BuildRequest {
+        req.block = BlockOptions { ads: true, trackers: true };
+        req.block_lists = vec![
+            BlockList { tag: "block-ads", format: "binary", path: "/data/blocklists/ads.srs".into() },
+            BlockList {
+                tag: "block-trackers",
+                format: "source",
+                path: "/data/blocklists/trackers.json".into(),
+            },
+        ];
+        req
+    }
+
+    #[test]
+    fn a_blocked_name_is_refused_by_the_resolver_and_by_the_router() {
+        let cfg = build(&with_lists(sample()));
+
+        let sets = cfg["route"]["rule_set"].as_array().unwrap();
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0]["type"], "local", "never `remote`: a failed download would fail Start");
+        assert_eq!(sets[0]["format"], "binary");
+        assert_eq!(sets[1]["path"], "/data/blocklists/trackers.json");
+
+        let dns = &cfg["dns"]["rules"][0];
+        assert_eq!(dns["rule_set"], json!(["block-ads", "block-trackers"]));
+        assert_eq!(dns["action"], "predefined");
+        assert_eq!(dns["rcode"], "NXDOMAIN");
+
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        let sniff = rules.iter().position(|r| r["action"] == "sniff").unwrap();
+        let reject = rules.iter().position(|r| r["action"] == "reject").unwrap();
+        assert!(sniff < reject, "the rule matches sniffed names, so it must follow the sniff");
+    }
+
+    #[test]
+    fn blocking_wins_over_the_bypass_list() {
+        let mut req = with_lists(sample());
+        req.bypass = vec![BypassRule::Domain("ads.example.ir".into())];
+        let cfg = build(&req);
+
+        let dns = cfg["dns"]["rules"].as_array().unwrap();
+        assert_eq!(dns[0]["action"], "predefined", "refused before it could be resolved directly");
+
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        let reject = rules.iter().position(|r| r["action"] == "reject").unwrap();
+        let bypass = rules.iter().position(|r| r.get("domain_suffix").is_some()).unwrap();
+        assert!(reject < bypass);
+    }
+
+    #[test]
+    fn a_switch_with_no_list_on_disk_adds_nothing() {
+        let mut req = sample();
+        req.block = BlockOptions { ads: true, trackers: true };
+        let cfg = build(&req);
+        assert!(cfg["route"].get("rule_set").is_none());
+        assert!(!cfg["route"]["rules"].as_array().unwrap().iter().any(|r| r["action"] == "reject"));
+        assert!(cfg["dns"]["rules"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -1241,6 +1364,8 @@ mod tests {
             bypass: vec![],
             dns: default_dns(),
             log_level: "info".into(),
+            block: BlockOptions::default(),
+            block_lists: vec![],
         });
 
         let endpoint = &cfg["endpoints"][0];
@@ -1332,6 +1457,8 @@ mod tests {
             bypass: vec![],
             dns: default_dns(),
             log_level: "info".into(),
+            block: BlockOptions::default(),
+            block_lists: vec![],
         });
         assert!(cfg.get("endpoints").is_none());
     }
@@ -1356,6 +1483,8 @@ mod tests {
             bypass: vec![],
             dns: default_dns(),
             log_level: "info".into(),
+            block: BlockOptions::default(),
+            block_lists: vec![],
         });
 
         let proxy = &cfg["outbounds"][0];

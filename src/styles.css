@@ -2070,6 +2070,14 @@ button:disabled {
   line-height: 1.4;
 }
 
+/* A line about a whole group, under its rows: what its switches can and cannot reach. */
+.set-note {
+  margin: 2px 0 9px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .val {
   font-family: var(--mono);
   font-size: 11.5px;
