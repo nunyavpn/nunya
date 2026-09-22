@@ -314,22 +314,30 @@ mode it names what the listener covers, never the device.
 
 ### The tray icon
 
-The rail shield is also the tray icon, in the macOS menu bar and the Linux top bar — the way
-OpenVPN's changes colour — with, on Linux, a menu of the server, the status, Connect/Disconnect,
-Show and Quit, and on macOS the popover below ([tray.rs](src-tauri/src/tray.rs)). The menu owns no connection logic: Connect emits
-`tray-toggle` and the frontend runs `toggleConnection`; the frontend reports every change through
+The tray icon is the app's mark in the rail shield's colours, in the macOS menu bar and the Linux
+top bar — the way OpenVPN's changes colour — with, on Linux, a menu of the server, the status,
+Connect/Disconnect, Show and Quit, and on macOS the popover below
+([tray.rs](src-tauri/src/tray.rs)). The menu owns no connection logic: Connect emits `tray-toggle`
+and the frontend runs `toggleConnection`; the frontend reports every change through
 `set_tray_status` (`syncTray` in `main.ts`).
 
-**The frontend paints the icon.** `trayIcon` in [trayicon.ts](src/trayicon.ts) draws the shield's
-own paths (`iconPaths`) with `Path2D` in the `.logo` tokens and sends RGBA with the status — a
-Rust or PNG copy would drift from the rail. Coloured tones are a filled shield with the mark cut
-out, the only form legible at 18pt; **off is the outline**, since a filled grey shield is the
-loudest icon in the bar, and on macOS a *template* (the system tints it to the menu bar). 36px on
-macOS (18pt at 2x), 44px elsewhere. A theme change repaints it (`darkScheme` in `main.ts`). The
-status line agrees with the icon: a red tone says "Not working", never "Connected".
+**The frontend paints the icon.** `trayIcon` in [trayicon.ts](src/trayicon.ts) fills the `mark`
+icon's paths (`iconPaths`) with `Path2D` in `.logo`'s tokens — green, amber, red by the shield's
+tone — and sends RGBA with the status; a Rust or PNG copy would drift. **Off is the mark at 55%**,
+and on macOS a *template* (the system tints it to the menu bar). A thin stroke in the same colour
+(`WEIGHT`) thickens it for 18pt. 36px on macOS (18pt at 2x), 44px elsewhere. A theme change
+repaints it (`darkScheme` in `main.ts`). The status line agrees with the icon: a red tone says
+"Not working", never "Connected". With the shield's check and "!" gone, colour alone tells
+connected from not working in the bar; the tooltip and the popover say it in words.
 
-**The first status creates the tray**, not `setup`, so the app icon never flashes in the bar
-before the shield. Closing the window hides it only once the tray is up (`tray::is_up` in
+**The mark is the artwork's silhouette**, not the artwork: at 18pt the painting's gradients and
+dark inner rings turn to mud, so only the bright arch and road are kept. `scripts/trace-mark.py`
+traces them out of `design/nonya.png` into `MARK_ARCH` and `MARK_ROAD` in `views/icons.ts` (a
+brightness threshold, outlines, simplification, fitted to the 24-unit grid). Run it again when the
+artwork changes; do not edit the path data by hand.
+
+**The first status creates the tray**, not `setup`, so the full-colour app icon never flashes in
+the bar before the tinted mark. Closing the window hides it only once the tray is up (`tray::is_up` in
 `hide_on_close`); until then — or with no tray library on Linux — closing quits as before, because
 a hidden window with no icon leaves a tunnel nobody can reach. The Dock icon (`RunEvent::Reopen`)
 brings the window back on macOS. The style guide shows all four states in both appearances.

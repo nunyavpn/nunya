@@ -80,8 +80,9 @@ off, red not working), then the server list, bypass rules, settings, support, an
 
 <p align="center"><img src="docs/screenshots/popover.png" width="340" alt="The menu-bar popover: Proxy running on FI-1 Helsinki with a Disconnect button, a search box, Quick Connect's three choices, and the mode, ad blocker and anti-tracker switches"></p>
 
-The same shield sits in the macOS menu bar and the Linux top bar, in the same colours, so you can
-see the connection with the window closed.
+Nunya's mark sits in the macOS menu bar and the Linux top bar in the status shield's colours
+(green connected, amber connecting, red not working, dimmed off), so you can see the connection
+with the window closed.
 
 On a **Mac**, click it to open a panel with everything you need day to day: the connection and a
 big button to turn it on or off, the server you're on, **Quick Connect** (fastest, most used, most

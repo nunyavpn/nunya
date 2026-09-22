@@ -5,12 +5,11 @@
 //! choice between leaving that window open all day and closing it — which, before this, quit the
 //! app and tore the tunnel down with it. The icon lets the window go away while the tunnel stays.
 //!
-//! **The icon is the state**, as OpenVPN's is: the rail's shield, green with a check when
-//! connected, amber while connecting, red with an exclamation mark when not working, an outline
-//! with a slash when off. The frontend paints it (`trayicon.ts`) from the rail's own glyphs and
-//! colour tokens and sends the pixels with every status, so the bar and the window cannot
-//! disagree. Off comes marked as a template, which macOS tints to the menu bar like the icons
-//! beside it.
+//! **The icon is the state**, as OpenVPN's is: the app's mark in the rail shield's colours — green
+//! when connected, amber while connecting, red when not working, dimmed when off. The frontend
+//! paints it (`trayicon.ts`) from the mark's path and the rail's colour tokens and sends the pixels
+//! with every status, so the bar and the window cannot disagree. Off comes marked as a template,
+//! which macOS tints to the menu bar like the icons beside it.
 //!
 //! The menu owns no connection logic. Connecting needs the selected server, the bypass rules and
 //! the settings, all of which live in the frontend store, so "Connect" only emits `tray-toggle` and
