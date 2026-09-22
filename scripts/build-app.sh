@@ -36,8 +36,13 @@ fi
 
 # 2. Frontend and bundle. scripts/fetch-core.sh already staged the core as a Tauri sidecar, which
 #    is what puts it in Contents/MacOS/nunya-core beside the app binary.
+#
+#    With the NetworkExtension entitlements merged in, which the default build leaves out: they need
+#    an Apple Developer team's signature, and macOS kills an app that claims them without one. That
+#    is why they live in tauri.networkextension.conf.json and not tauri.conf.json — the CI release,
+#    with no team, is ad-hoc signed without them and runs its core as a child process.
 echo "==> building the app bundle"
-npm run tauri build -- --bundles app
+npm run tauri build -- --bundles app --config src-tauri/tauri.networkextension.conf.json
 
 # 3. The packet tunnel extension, embedded into the bundle just built.
 if [[ "$(uname -s)" == "Darwin" ]]; then

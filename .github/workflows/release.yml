@@ -1,0 +1,175 @@
+name: release
+
+# A release is a tag. Push `vX.Y.Z` (or `vX.Y.Z-beta.1`) on a commit that is on main, and this builds
+# the macOS and Linux bundles and publishes them, with their checksums, as a GitHub release:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The macOS build is ad-hoc signed and carries no NetworkExtension entitlements: those need an Apple
+# Developer team, and macOS kills an app that claims them without one. Until there is a team it runs
+# its core as a child process, which is everything proxy mode needs. scripts/build-app.sh is the
+# signed build, with the packet tunnel extension, for when there is.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A tag on a branch nobody merged is not a release, and a tag that disagrees with the version
+      # the app reports would put the wrong number on every installer.
+      - name: The tag is on main and matches the app's version
+        id: version
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          base="${version%%-*}"
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$tag points at a commit that is not on main"
+            exit 1
+          fi
+          for file in package.json src-tauri/tauri.conf.json; do
+            found="$(node -p "require('./$file').version")"
+            [ "$found" = "$base" ] || { echo "::error::$file says $found, the tag says $base"; exit 1; }
+          done
+          found="$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)"
+          [ "$found" = "$base" ] || { echo "::error::src-tauri/Cargo.toml says $found, the tag says $base"; exit 1; }
+          # Below 1.0, or with a suffix, it is a pre-release.
+          prerelease=false
+          case "$version" in 0.*|*-*) prerelease=true ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            label: macos-arm64
+            bundles: app,dmg
+          # 22.04 rather than the newest image: a bundle built against an older glibc runs on more
+          # distributions.
+          - runner: ubuntu-22.04
+            label: linux-x86_64
+            bundles: deb,appimage
+          - runner: ubuntu-22.04-arm
+            label: linux-arm64
+            bundles: deb,appimage
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev protobuf-compiler patchelf file
+
+      - uses: arduino/setup-protoc@v3
+        if: runner.os == 'macOS'
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: release-${{ matrix.label }}
+
+      # The pinned release core, verified against core.lock. A core built from source has its parent
+      # check off and is refused for bundling; this one is the published release build.
+      - name: Fetch the pinned core
+        run: ./scripts/fetch-core.sh
+
+      - name: Build
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+        env:
+          # linuxdeploy is itself an AppImage, and the runners have no FUSE to mount it with.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+
+      - name: Collect the bundles
+        run: |
+          mkdir -p out
+          bundle=src-tauri/target/release/bundle
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "$bundle"/dmg/*.dmg out/
+            # The app itself too, for anyone who would rather not mount a disk image.
+            ditto -c -k --keepParent "$bundle/macos/Nunya.app" "out/Nunya_${{ needs.verify.outputs.version }}_aarch64.app.zip"
+          else
+            cp "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage out/
+          fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.label }}
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundles-*
+          path: out
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          cat > notes.md <<NOTES
+          ## Installing
+
+          **macOS (Apple Silicon)**: open \`Nunya_${VERSION}_aarch64.dmg\` and drag Nunya into Applications.
+          This build is not yet signed by an Apple Developer account, so the first time you open it macOS will
+          refuse. Open **System Settings → Privacy & Security** and choose **Open Anyway**. (Or, in Terminal:
+          \`xattr -dr com.apple.quarantine /Applications/Nunya.app\`.)
+
+          **Linux (x86-64 or arm64)**: install the \`.deb\` with \`sudo apt install ./Nunya_${VERSION}_<arch>.deb\`,
+          or make the \`.AppImage\` executable and run it.
+
+          Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
+
+          ## In this build
+
+          **Proxy mode** on macOS and Linux: a local SOCKS/HTTP listener, which can also be set as the system proxy
+          while connected. VPN mode on macOS needs the signed packet tunnel extension, which comes with an Apple
+          Developer account.
+          NOTES
+          flags=(--title "Nunya $VERSION" --notes-file notes.md --generate-notes --verify-tag)
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" out/* "${flags[@]}"
