@@ -1,10 +1,11 @@
 import {
   LIST_NAMES,
   listsToFetch,
+  SWITCH,
   type BlockList,
   type ListState,
 } from "./blocking";
-import { hasBackend, inTauri, invoke, listen } from "./bridge";
+import { emitTo, hasBackend, inTauri, invoke, listen } from "./bridge";
 
 import { h, qs, render } from "./dom";
 import { size } from "./format";
@@ -29,6 +30,8 @@ import {
   wgQuickRefusal,
   type Profile,
 } from "./share";
+import { popoverModel } from "./popover-build";
+import type { PopoverIntent } from "./popover-model";
 import { shieldState, type Shield } from "./shield";
 import { SUPPORT } from "./support";
 import { trayIcon } from "./trayicon";
@@ -212,19 +215,63 @@ const QUICK_RETEST = 3;
  * Most used and Most recent connect to exactly the config they name. If it fails, that is
  * reported where any failed connection is; nothing else is tried behind the user's back.
  */
+/** The Quick Connect choice being worked on — Fastest, re-testing — for the prompt and the popover. */
+let quickBusy: QuickKind | null = null;
+/** Why the last pick of a choice did not connect; cleared by the next pick of it. */
+const quickNotes: Partial<Record<QuickKind, string>> = {};
+
+/**
+ * Connects to what a Quick Connect choice names, re-testing a stale Fastest first. The prompt and
+ * the menu-bar popover both pick through this, so they cannot disagree about what "Fastest" is.
+ *
+ * `stillWanted` is asked after a re-test, which takes seconds: a prompt closed meanwhile is a
+ * choice withdrawn. `beforeConnect` lets the prompt close itself once the choice is settled.
+ */
+async function quickConnect(
+  kind: QuickKind,
+  opts: { stillWanted?: () => boolean; beforeConnect?: () => void } = {},
+): Promise<void> {
+  if (quickBusy) return;
+  let server = store.quickPicks(Date.now())[kind]?.item;
+  if (!server) return;
+  delete quickNotes[kind];
+
+  if (kind === "fastest" && isStale(server)) {
+    quickBusy = kind;
+    refresh();
+    try {
+      server = await retestFastest();
+    } finally {
+      quickBusy = null;
+    }
+    if (opts.stillWanted && !opts.stillWanted()) {
+      refresh();
+      return;
+    }
+    if (!server) {
+      quickNotes.fastest = `None of the ${QUICK_RETEST} fastest answered just now. Pick another, or check the list.`;
+      refresh();
+      return;
+    }
+  }
+
+  opts.beforeConnect?.();
+  await connectTo(server);
+}
+
 function openQuickConnect() {
+  // A note is about the last try; opening the prompt is the start of a new one.
+  for (const kind of Object.keys(quickNotes) as QuickKind[]) delete quickNotes[kind];
   openSheet((close) => {
     const body = h("div", { class: "share-body" });
-    let busy: QuickKind | null = null;
-    const notes: Partial<Record<QuickKind, string>> = {};
 
     const paint = () =>
       render(
         body,
         quickOptions({
           picks: store.quickPicks(Date.now()),
-          busy,
-          notes,
+          busy: quickBusy,
+          notes: quickNotes,
           current: connection === "on" ? store.get().selectedServerId : null,
           groupName: (server) => store.group(server.groupId)?.name ?? "",
           onPick: (kind) => void choose(kind),
@@ -232,29 +279,14 @@ function openQuickConnect() {
       );
 
     const choose = async (kind: QuickKind) => {
-      if (busy) return;
-      let server = store.quickPicks(Date.now())[kind]?.item;
-      if (!server) return;
-
-      if (kind === "fastest" && isStale(server)) {
-        busy = kind;
-        delete notes.fastest;
-        paint();
-        try {
-          server = await retestFastest();
-        } finally {
-          busy = null;
-        }
-        if (!body.isConnected) return;
-        if (!server) {
-          notes.fastest = `None of the ${QUICK_RETEST} fastest answered just now. Pick another, or check the list.`;
-          paint();
-          return;
-        }
-      }
-
-      close();
-      await connectTo(server);
+      const picking = quickConnect(kind, {
+        stillWanted: () => body.isConnected,
+        beforeConnect: close,
+      });
+      // Shows "Re-testing…" at once when Fastest has to measure first.
+      paint();
+      await picking;
+      if (body.isConnected) paint();
     };
 
     paint();
@@ -534,6 +566,7 @@ function refresh() {
   const shield = currentShield();
   paintShield(shield);
   syncTray(server, blockedReason() === null, shield);
+  syncPopover(shield, blockedReason() === null);
 }
 
 function currentShield(): Shield {
@@ -602,6 +635,105 @@ function syncTray(server: Server | undefined, canConnect: boolean, shield: Shiel
   invoke("set_tray_status", { ...args, icon }).catch(() => {
     // Outside Tauri, or a desktop with no tray: the window is the whole UI.
   });
+}
+
+// ---------------------------------------------------------------- popover
+
+/**
+ * Whether the menu-bar popover is showing (`popover.rs`). Its model is only built while it is: a
+ * Quick Connect pick is worked out over the whole list, and doing that every second for a hidden
+ * panel would be work nobody sees.
+ */
+let popoverVisible = false;
+/** What was last sent to it, so an unchanged model is not sent again; see `syncTray`. */
+let popoverShown = "";
+/** What its search box last asked for. */
+let popoverQuery = "";
+/** A model owed to a hidden popover that asked for one; see `PopoverIntent`'s `hello`. */
+let popoverOwed = false;
+
+/** Sends the popover the connection as it now is (`popover-build.ts`). */
+function syncPopover(shield: Shield, canConnect: boolean) {
+  if (!popoverVisible && !popoverOwed) return;
+  popoverOwed = false;
+  const problem =
+    connection === "on" && exitIps?.failed
+      ? `Connected, but nothing comes out through it (${exitIps.failed}).`
+      : connection === "off"
+        ? tunnelFault
+          ? `Not working: ${tunnelFault}.`
+          : blockedReason()
+        : null;
+  const model = popoverModel({
+    connection,
+    shield,
+    connectedAt,
+    exit: exitIps?.ipv4 ?? exitIps?.ipv6 ?? null,
+    problem,
+    canConnect,
+    quickBusy,
+    quickNotes,
+    blockLists,
+    query: popoverQuery,
+  });
+  const key = JSON.stringify(model);
+  if (key === popoverShown) return;
+  popoverShown = key;
+  void emitTo("popover", "popover-model", model);
+}
+
+/**
+ * What the popover asks for. Each goes through the path the window's own control takes — the
+ * status card's toggle, Quick Connect's prompt, a row's selection — so the two cannot drift.
+ */
+async function onPopoverIntent(intent: PopoverIntent) {
+  switch (intent.kind) {
+    case "hello":
+      popoverVisible = intent.shown;
+      popoverOwed = true;
+      // Sent again even if nothing changed: the popover may have reloaded.
+      popoverShown = "";
+      refresh();
+      return;
+    case "toggle":
+      await toggleConnection();
+      return;
+    case "quick":
+      await quickConnect(intent.pick);
+      return;
+    case "select": {
+      const server = store.get().servers.find((s) => s.id === intent.id);
+      if (server) await connectTo(server);
+      return;
+    }
+    case "mode":
+      if (connection === "connecting" || intent.mode === store.settings().mode) return;
+      store.updateSettings({ mode: intent.mode });
+      // Settings apply when the tunnel starts, so a running one starts again with the new mode.
+      if (connection === "on") await reconnect();
+      return;
+    case "block":
+      await setBlocker(intent.list, intent.on);
+      return;
+    case "search":
+      popoverQuery = intent.query;
+      refresh();
+      return;
+  }
+}
+
+/**
+ * A blocker switched from the popover, which unlike the Advanced panel is not locked while
+ * connected: the tunnel starts again so the change applies. Except for a list not yet on disk —
+ * `syncBlockLists` fetches it through the running tunnel and reconnects when it lands, and a
+ * reconnect now would only start a tunnel still without it.
+ */
+async function setBlocker(list: BlockList, on: boolean) {
+  if (connection === "connecting") return;
+  store.updateSettings({ [SWITCH[list]]: on });
+  if (connection !== "on") return;
+  if (on && blockLists[list].updatedAt === null) return;
+  await reconnect();
 }
 
 /** The name the server list shows for a row: the config's own; see `LocationsPanel`. */
@@ -1115,6 +1247,23 @@ function watchBlockSwitches() {
   if (key === blockSwitches) return;
   blockSwitches = key;
   void syncBlockLists();
+}
+
+/** The mode as last seen; see `watchMode`. */
+let readinessMode: string | null = null;
+
+/**
+ * Asks readiness again when the mode changes — from Advanced or from the popover. The answer is
+ * about one mode (privilege for a TUN, a free port for a listener), so an answer kept across a
+ * switch would offer, or refuse, Connect for the wrong reason.
+ */
+function watchMode() {
+  const mode = store.settings().mode;
+  if (mode === readinessMode) return;
+  const first = readinessMode === null;
+  readinessMode = mode;
+  // The first sighting is the data file's load; readiness is asked once the core is up anyway.
+  if (!first && coreReady) void refreshReadiness();
 }
 
 async function reconnect() {
@@ -2385,6 +2534,7 @@ store.subscribe(() => refresh());
 darkScheme.addEventListener("change", () => refresh());
 // A blocker switched on fetches its list; so does the data file's first load.
 store.subscribe(watchBlockSwitches);
+store.subscribe(watchMode);
 
 void (async () => {
   // Rendering before the data arrives would flash an empty list on every launch.
@@ -2405,6 +2555,11 @@ void listen<string>("core-log", (line) => {
 
 // The tray menu's Connect/Disconnect; it runs exactly what the status card's button does.
 void listen<null>("tray-toggle", () => void toggleConnection());
+// The menu-bar popover's controls, and its going away (`popover.rs`).
+void listen<PopoverIntent>("popover-intent", (intent) => void onPopoverIntent(intent));
+void listen<null>("popover-hidden", () => {
+  popoverVisible = false;
+});
 
 void listen<boolean>("core-connection", async (connected) => {
   coreReady = connected;

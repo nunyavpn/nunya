@@ -11,6 +11,8 @@ pub mod storage;
 pub mod subscription;
 pub mod sysproxy;
 pub mod transport;
+#[cfg(target_os = "macos")]
+mod popover;
 mod tray;
 
 use std::path::PathBuf;
@@ -795,6 +797,12 @@ pub fn run() {
             load_data,
             save_data,
             tray::set_tray_status,
+            #[cfg(target_os = "macos")]
+            popover::hide_popover,
+            #[cfg(target_os = "macos")]
+            popover::show_main_window,
+            #[cfg(target_os = "macos")]
+            popover::quit,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the application")

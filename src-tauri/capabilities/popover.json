@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "popover",
+  "description": "The menu-bar popover: it only talks to the main window through events, and hides itself, so it needs the event permissions and nothing more.",
+  "windows": ["popover"],
+  "permissions": ["core:default", "core:event:default"]
+}

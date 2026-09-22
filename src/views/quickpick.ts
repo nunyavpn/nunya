@@ -29,7 +29,8 @@ export interface QuickOptionsView {
   onPick: (kind: QuickKind) => void;
 }
 
-const OPTION: Record<
+/** Each choice's name, glyph and wording; the popover's Quick Connect row says the same. */
+export const OPTION: Record<
   QuickKind,
   {
     label: string;

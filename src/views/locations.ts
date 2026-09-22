@@ -77,16 +77,7 @@ export class LocationsPanel {
   }
 
   private matches(server: Server): boolean {
-    if (!this.filter) return true;
-    const needle = this.filter.toLowerCase();
-    const where = located(server);
-    const country = place(where.country);
-    return (
-      server.profile.name.toLowerCase().includes(needle) ||
-      where.city.toLowerCase().includes(needle) ||
-      country.name.toLowerCase().includes(needle) ||
-      where.country.toLowerCase().includes(needle)
-    );
+    return !this.filter || serverMatches(server, this.filter);
   }
 
   render() {
@@ -544,4 +535,20 @@ export class LocationsPanel {
           : "This subscription has no servers yet.",
     );
   }
+}
+
+/**
+ * Whether a config answers a search: by its name, or by where it is — city, country name or code
+ * — as `located` places it. The list's search box and the popover's use this one rule.
+ */
+export function serverMatches(server: Server, query: string): boolean {
+  const needle = query.toLowerCase();
+  const where = located(server);
+  const country = place(where.country);
+  return (
+    server.profile.name.toLowerCase().includes(needle) ||
+    where.city.toLowerCase().includes(needle) ||
+    country.name.toLowerCase().includes(needle) ||
+    where.country.toLowerCase().includes(needle)
+  );
 }

@@ -1,0 +1,437 @@
+/* The menu-bar popover (popover.html, views/popover.ts).
+
+   The window is transparent, so the panel — its rounded corners and its shadow — is drawn here,
+   inside a margin that leaves the shadow room. `--margin` must match MARGIN in popover.rs, which
+   sizes and places the window around it.
+
+   Colours are the app's tokens and the controls its own classes (.seg, .sw, .flag, .bars), so the
+   popover follows light and dark with the window and cannot drift from it. */
+
+.popover {
+  --margin: 14px;
+}
+
+html.popover,
+.popover body {
+  background: transparent;
+}
+
+.popover body {
+  padding: var(--margin);
+}
+
+.pv-panel {
+  height: calc(100vh - 2 * var(--margin));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- head and foot */
+
+.pv-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 12px 9px 16px;
+}
+
+.pv-brand {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.pv-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.pv-icon-btn:hover {
+  color: var(--ink);
+  background: var(--raised);
+}
+
+.pv-foot {
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--raised);
+}
+
+.pv-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.pv-link:hover {
+  color: var(--ink);
+}
+
+.pv-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---------------------------------------------------------------- the connection */
+
+.pv-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+}
+
+/* Tinted by the shield's state, so the panel's largest area says it before any word does. */
+.pv-hero.on {
+  background: var(--live-soft);
+  border-color: transparent;
+}
+
+.pv-hero.connecting {
+  background: var(--warn-soft);
+  border-color: transparent;
+}
+
+.pv-hero.failed {
+  background: var(--off-soft);
+  border-color: transparent;
+}
+
+.pv-state {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+/* The rail's shield (.logo), without the rail's spacing. */
+.pv-shield.logo {
+  margin: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  flex: none;
+}
+
+.pv-state-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pv-headline {
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.pv-hero.on .pv-headline {
+  color: var(--live);
+}
+
+.pv-hero.failed .pv-headline {
+  color: var(--off);
+}
+
+.pv-covers {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-timer {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-server,
+.pv-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pv-server {
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.pv-server.empty {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pv-server-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pv-name {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-place {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-lat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.pv-problem {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--off);
+}
+
+.pv-problem svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* One big switch, the way a VPN's main control is: green to connect, red to stop. */
+.pv-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+}
+
+.pv-toggle.on {
+  background: linear-gradient(145deg, var(--live-fill), var(--live));
+  box-shadow: 0 6px 16px -8px var(--live-glow);
+}
+
+.pv-toggle.off {
+  background: linear-gradient(145deg, var(--off-fill), var(--off));
+  box-shadow: 0 6px 16px -8px var(--off-glow);
+}
+
+.pv-toggle:disabled {
+  background: var(--sunk);
+  color: var(--faint);
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------------------- search */
+
+.pv-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+  color: var(--faint);
+}
+
+.pv-search:focus-within {
+  border-color: var(--brand-fill);
+}
+
+.pv-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.pv-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pv-result {
+  padding: 8px 9px;
+  border-radius: 9px;
+}
+
+.pv-result:hover {
+  background: var(--raised);
+}
+
+.pv-result.current {
+  background: var(--brand-soft);
+}
+
+.pv-empty {
+  padding: 10px 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- sections */
+
+.pv-section h4 {
+  margin: 2px 2px 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.pv-quick {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.pv-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.pv-tile:hover:not(:disabled) {
+  border-color: var(--brand-fill);
+  background: var(--brand-soft);
+}
+
+.pv-tile:disabled {
+  opacity: 0.55;
+}
+
+.pv-tile.current {
+  opacity: 1;
+  border-color: var(--live-fill);
+  background: var(--live-soft);
+}
+
+.pv-tile-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 3px;
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.pv-tile.busy .pv-tile-icon {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.pv-tile-label {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pv-tile-sub {
+  max-width: 100%;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+
+.pv-row-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--ink-2);
+  background: var(--raised);
+}
+
+.pv-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pv-row-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pv-row-sub {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.pv-note {
+  margin: 8px 2px 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}

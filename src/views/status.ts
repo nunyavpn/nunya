@@ -72,7 +72,7 @@ export interface StatusCallbacks {
  * this wrong is not a copy nit; it is the difference between a user believing their traffic is
  * covered and it not being.
  */
-const HEADLINE: Record<Mode, Record<ConnectionState, string>> = {
+export const HEADLINE: Record<Mode, Record<ConnectionState, string>> = {
   vpn: {
     on: "You're protected",
     connecting: "Connecting…",
