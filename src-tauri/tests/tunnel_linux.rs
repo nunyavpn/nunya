@@ -178,6 +178,8 @@ fn tunnel_request() -> BuildRequest {
         bypass: vec![],
         dns: "https://1.1.1.1/dns-query".into(),
         log_level: "warn".into(),
+        block: Default::default(),
+        block_lists: vec![],
     }
 }
 

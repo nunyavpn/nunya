@@ -212,6 +212,10 @@ export interface Settings {
   /** Resolver for names that are not bypassed. Queries go through the tunnel. */
   dns: string;
   logLevel: "trace" | "debug" | "info" | "warn" | "error";
+  /** Refuse ad networks (geosite `category-ads-all`); see `blocklists.rs`. */
+  blockAds: boolean;
+  /** Refuse the telemetry built into systems, devices and apps (HaGeZi Native Tracker). */
+  blockTrackers: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -234,6 +238,10 @@ export const DEFAULT_SETTINGS: Settings = {
   ipv6: false,
   dns: "https://1.1.1.1/dns-query",
   logLevel: "info",
+  // Off: a list downloaded from a third party that decides what may load is something to opt
+  // into, and a site it breaks should not be a mystery to someone who never turned it on.
+  blockAds: false,
+  blockTrackers: false,
 };
 
 export interface AppData {

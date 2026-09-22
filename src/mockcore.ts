@@ -148,6 +148,17 @@ export async function mockInvoke<T>(command: string, args: Record<string, unknow
         ),
       );
 
+    // No list on disk at first, so turning a blocker on shows the download it causes.
+    case "blocklist_status":
+      return answer([
+        { list: "ads", updatedAt: null },
+        { list: "trackers", updatedAt: null },
+      ]);
+
+    case "update_blocklist":
+      await wait(900);
+      return answer({ list: args.list, updatedAt: Date.now() });
+
     case "set_system_proxy":
     case "clear_system_proxy":
     case "set_tray_status":

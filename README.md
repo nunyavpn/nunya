@@ -57,6 +57,8 @@ provider sent you, a subscription or a WireGuard config, and tells you plainly w
   official WireGuard apps can scan.
 - **Bypass rules.** Keep chosen domains, addresses and ranges off the tunnel. Your local network
   always is.
+- **Ad blocker and anti-tracker.** Refuse ad networks, and the tracking built into operating
+  systems, devices and apps, while you're connected.
 - **Light and dark**, following your system.
 
 ## A tour
@@ -139,7 +141,7 @@ you'd give access to.
 
 ### Settings: VPN or proxy
 
-<p align="center"><img src="docs/screenshots/settings.png" width="720" alt="The Advanced settings in proxy mode: port, Allow LAN, Set system proxy, and the DNS resolver"></p>
+<p align="center"><img src="docs/screenshots/settings.png" width="720" alt="The Advanced settings in proxy mode: port, Allow LAN, Set system proxy, and the ad blocker and anti-tracker switches"></p>
 
 - **Proxy mode** (the default) opens a SOCKS and HTTP port on your machine (2080 unless you change
   it). Apps you point at it go through the connection. Turn on **Set system proxy** to point your
@@ -150,6 +152,11 @@ you'd give access to.
   network-admin rights for the engine. Both are coming in later releases.
 - **Allow LAN** lets other devices on your network use the proxy. **DNS** sets the resolver used
   inside the connection.
+- **Ad blocker** refuses ad networks (the `category-ads-all` list published by sing-box's authors).
+  **Anti-tracker** refuses the tracking built into operating systems, devices and apps (HaGeZi's
+  Native Tracker lists). Each list is downloaded when you turn its switch on, through the
+  connection if you're connected, and kept up to date. Until a list has arrived its switch says
+  it isn't blocking yet. In proxy mode they only filter apps that use the proxy.
 
 Settings apply when you connect, so they're locked while a connection is running.
 
