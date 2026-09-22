@@ -23,22 +23,35 @@
 //! the window hides it only once the tray is up (`is_up`), so a frontend that never reports leaves
 //! the old behaviour — closing quits — rather than a hidden window with nothing to bring it back.
 //!
-//! Everything is a menu item because a Linux tray (StatusNotifierItem via libayatana-appindicator)
-//! delivers no click events on the icon itself: a left click opens the menu, and that is all. On
-//! macOS a left click opens the popover instead (`popover.rs`), and the menu moves to a right
-//! click, where it stays as the quick way to Show or Quit.
+//! On Linux everything is a menu item, because a tray there (StatusNotifierItem via
+//! libayatana-appindicator) delivers no click events on the icon itself: a click opens the menu,
+//! and that is all. On macOS the icon carries no menu at all; a click opens the popover
+//! (`popover.rs`), which has everything the menu has. The macOS `install` says why there is no
+//! menu as well.
 
 use std::sync::OnceLock;
 
 use serde::Deserialize;
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::MenuItem;
+#[cfg(not(target_os = "macos"))]
+use tauri::menu::{Menu, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+#[cfg(not(target_os = "macos"))]
+use tauri::Emitter;
+use tauri::{AppHandle, Manager, Wry};
 
-/// The icon and the items whose text changes, in managed state once the first status built them.
+/// The icon, and the menu's lines where there is a menu; in managed state once the first status
+/// built them.
 pub struct Tray {
     icon: TrayIcon<Wry>,
+    /// `None` on macOS, where the popover takes the menu's place.
+    menu: Option<MenuLines>,
+}
+
+/// The menu items whose text changes. Never built on macOS, where `Tray::menu` is always `None`.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+struct MenuLines {
     server: MenuItem<Wry>,
     status: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
@@ -55,8 +68,11 @@ pub struct Pixels {
     template: bool,
 }
 
+#[cfg(not(target_os = "macos"))]
 const TOGGLE: &str = "toggle";
+#[cfg(not(target_os = "macos"))]
 const SHOW: &str = "show";
+#[cfg(not(target_os = "macos"))]
 const QUIT: &str = "quit";
 
 /// Whether the tray is up, and closing the window can therefore hide it rather than quit.
@@ -97,6 +113,43 @@ fn desktop_has_tray() -> bool {
     true
 }
 
+fn base(icon: Image<'static>, template: bool) -> TrayIconBuilder<Wry> {
+    TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .icon_as_template(template)
+        .tooltip("Nunya")
+}
+
+/// A status item with no menu, whose clicks open the popover.
+///
+/// No menu, rather than one moved to the right click: on macOS 27 a menu attached to the status
+/// item takes every click, the left one included, before tray-icon sees it — so the popover never
+/// opened and the menu did, whatever `show_menu_on_left_click` said. tray-icon 0.25.1 fixes it by
+/// attaching the menu only while showing it, but Tauri 2 is held to 0.24. The popover carries all
+/// the menu did (the status, Connect/Disconnect, Open Nunya, Quit), so either button opens it, as
+/// NordVPN's does.
+#[cfg(target_os = "macos")]
+fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Result<Tray> {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+
+    crate::popover::create(app)?;
+    let icon = base(icon, template)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left | MouseButton::Right,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = event
+            {
+                crate::popover::toggle(tray.app_handle(), rect);
+            }
+        })
+        .build(app)?;
+    Ok(Tray { icon, menu: None })
+}
+
+#[cfg(not(target_os = "macos"))]
 fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Result<Tray> {
     // Disabled: these are labels, and a clickable line invites a click that does nothing.
     // The server is its own line because it matters most when disconnected — it is what
@@ -121,11 +174,8 @@ fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Resu
         ],
     )?;
 
-    let builder = TrayIconBuilder::with_id("main")
-        .icon(icon)
-        .icon_as_template(template)
+    let icon = base(icon, template)
         .menu(&menu)
-        .tooltip("Nunya")
         .on_menu_event(|app, event| match event.id().as_ref() {
             TOGGLE => {
                 let _ = app.emit("tray-toggle", ());
@@ -135,34 +185,16 @@ fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Resu
             // exactly as when the last window closes.
             QUIT => app.exit(0),
             _ => {}
-        });
-
-    #[cfg(target_os = "macos")]
-    let builder = {
-        crate::popover::create(app)?;
-        builder
-            .show_menu_on_left_click(false)
-            .on_tray_icon_event(|tray, event| {
-                use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    rect,
-                    ..
-                } = event
-                {
-                    crate::popover::toggle(tray.app_handle(), rect);
-                }
-            })
-    };
-
-    let icon = builder.build(app)?;
+        })
+        .build(app)?;
 
     Ok(Tray {
         icon,
-        server,
-        status,
-        toggle,
+        menu: Some(MenuLines {
+            server,
+            status,
+            toggle,
+        }),
     })
 }
 
@@ -257,19 +289,21 @@ pub fn set_tray_status(
         }
     };
 
-    let lines = Lines::new(
-        &state,
-        &tone,
-        server.as_deref(),
-        detail.as_deref(),
-        can_connect,
-    );
-    tray.server.set_text(&lines.server).map_err(|e| e.to_string())?;
-    tray.status.set_text(&lines.status).map_err(|e| e.to_string())?;
-    tray.toggle.set_text(lines.toggle).map_err(|e| e.to_string())?;
-    tray.toggle
-        .set_enabled(lines.toggle_enabled)
-        .map_err(|e| e.to_string())?;
+    if let Some(menu) = &tray.menu {
+        let lines = Lines::new(
+            &state,
+            &tone,
+            server.as_deref(),
+            detail.as_deref(),
+            can_connect,
+        );
+        menu.server.set_text(&lines.server).map_err(|e| e.to_string())?;
+        menu.status.set_text(&lines.status).map_err(|e| e.to_string())?;
+        menu.toggle.set_text(lines.toggle).map_err(|e| e.to_string())?;
+        menu.toggle
+            .set_enabled(lines.toggle_enabled)
+            .map_err(|e| e.to_string())?;
+    }
     // Unsupported by the Linux tray, which shows the status line instead.
     let _ = tray.icon.set_tooltip(Some(format!("Nunya — {label}")));
     Ok(())
