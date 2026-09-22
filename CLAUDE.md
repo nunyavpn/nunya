@@ -288,6 +288,28 @@ being *ready* (core starting, no permission) is grey, not red: the status card e
 at every launch would teach users to ignore red. The tooltip follows the modes' rule — in proxy
 mode it names what the listener covers, never the device.
 
+### The tray icon
+
+The rail shield is also the tray icon, in the macOS menu bar and the Linux top bar — the way
+OpenVPN's changes colour — with a menu of the server, the status, Connect/Disconnect, Show and
+Quit ([tray.rs](src-tauri/src/tray.rs)). The menu owns no connection logic: Connect emits
+`tray-toggle` and the frontend runs `toggleConnection`; the frontend reports every change through
+`set_tray_status` (`syncTray` in `main.ts`).
+
+**The frontend paints the icon.** `trayIcon` in [trayicon.ts](src/trayicon.ts) draws the shield's
+own paths (`iconPaths`) with `Path2D` in the `.logo` tokens and sends RGBA with the status — a
+Rust or PNG copy would drift from the rail. Coloured tones are a filled shield with the mark cut
+out, the only form legible at 18pt; **off is the outline**, since a filled grey shield is the
+loudest icon in the bar, and on macOS a *template* (the system tints it to the menu bar). 36px on
+macOS (18pt at 2x), 44px elsewhere. A theme change repaints it (`darkScheme` in `main.ts`). The
+status line agrees with the icon: a red tone says "Not working", never "Connected".
+
+**The first status creates the tray**, not `setup`, so the app icon never flashes in the bar
+before the shield. Closing the window hides it only once the tray is up (`tray::is_up` in
+`hide_on_close`); until then — or with no tray library on Linux — closing quits as before, because
+a hidden window with no icon leaves a tunnel nobody can reach. The Dock icon (`RunEvent::Reopen`)
+brings the window back on macOS. The style guide shows all four states in both appearances.
+
 ### Locating servers (the flags)
 
 The flag beside a server used to be guessed from the share link's name — whatever the provider
@@ -648,9 +670,10 @@ is an unknown field the core refuses outright, so `proxy_outbound` sets the cred
 Blocked on Xcode and an Apple Developer account: the Swift packet tunnel provider, the
 `.xcframework` build, the `.appex` target, `NETunnelProviderManager` wiring.
 
-Not yet built: bypass rules in the UI, the menu-bar popover, protocols beyond VLESS and VMess
-(Trojan, Shadowsocks, Hysteria2, TUIC are separate outbound types, not more transports), and bundled
-fonts — the CSP forbids remote font hosts, so Manrope must ship in the bundle.
+Not yet built: bypass rules in the UI, a menu-bar popover in place of the tray's plain menu,
+protocols beyond VLESS and VMess (Trojan, Shadowsocks, Hysteria2, TUIC are separate outbound types,
+not more transports), and bundled fonts — the CSP forbids remote font hosts, so Manrope must ship in
+the bundle.
 
 ### Subscriptions
 

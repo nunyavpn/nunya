@@ -10,7 +10,6 @@ pub mod storage;
 pub mod subscription;
 pub mod sysproxy;
 pub mod transport;
-#[cfg(target_os = "linux")]
 mod tray;
 
 use std::path::PathBuf;
@@ -604,47 +603,28 @@ fn preview_config(req: BuildRequest) -> Result<String, String> {
     serde_json::to_string_pretty(&config::build(&req)).map_err(|e| e.to_string())
 }
 
-/// Puts the icon in the top bar and makes closing the window hide it rather than quit.
+/// Makes closing the window hide it rather than quit — once there is a tray icon to bring it back.
 ///
-/// The tray library is loaded at runtime and panics when it is missing, so its presence is checked
-/// first: without it the app keeps the old behaviour, where the window is the whole UI and closing
-/// it quits. Hiding a window with no icon to bring it back would leave a tunnel nobody can reach.
-#[cfg(target_os = "linux")]
-fn install_tray(app: &tauri::AppHandle) {
-    let available = ["libayatana-appindicator3.so.1", "libappindicator3.so.1"]
-        .iter()
-        .any(|name| {
-            let name = std::ffi::CString::new(*name).expect("no interior nul");
-            // SAFETY: a nul-terminated name; the handle is released again immediately.
-            let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_LAZY) };
-            if handle.is_null() {
-                return false;
-            }
-            unsafe { libc::dlclose(handle) };
-            true
-        });
-    if !available {
-        log::warn!("no appindicator library; running without a tray icon");
+/// The tunnel is the point of the app and the window is only its controls, so closing the controls
+/// leaves the tunnel as it was; "Quit Nunya" really quits. The tray is created by the frontend's
+/// first status (see `tray.rs`), and until it exists closing quits as it always did: hiding a
+/// window with no icon to bring it back would leave a tunnel nobody can reach.
+fn hide_on_close(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
         return;
-    }
-    if let Err(e) = tray::install(app) {
-        log::warn!("could not create the tray icon: {e}");
-        return;
-    }
-
-    if let Some(window) = app.get_webview_window("main") {
-        let handle = app.clone();
-        window.on_window_event(move |event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // The tunnel is the point of the app and the window is only its controls, so
-                // closing the controls leaves the tunnel as it was. "Quit Nunya" really quits.
-                api.prevent_close();
-                if let Some(w) = handle.get_webview_window("main") {
-                    let _ = w.hide();
-                }
+    };
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if !tray::is_up(&handle) {
+                return;
             }
-        });
-    }
+            api.prevent_close();
+            if let Some(w) = handle.get_webview_window("main") {
+                let _ = w.hide();
+            }
+        }
+    });
 }
 
 pub fn run() {
@@ -720,8 +700,7 @@ pub fn run() {
                 system_proxy,
             });
 
-            #[cfg(target_os = "linux")]
-            install_tray(app.handle());
+            hide_on_close(app.handle());
 
             Ok(())
         })
@@ -745,12 +724,20 @@ pub fn run() {
             open_external,
             load_data,
             save_data,
-            #[cfg(target_os = "linux")]
             tray::set_tray_status,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the application")
         .run(|app, event| {
+            // The Dock icon brings back a window closed to the menu bar, as in any Mac app.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                tray::show_window(app);
+            }
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // A core left running would keep the TUN interface and its routes installed, so
                 // the machine would lose connectivity after the UI disappeared.

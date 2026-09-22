@@ -97,6 +97,17 @@ const RECTS: Record<string, [number, number, number, number, number][]> = {
  */
 export const ICON_NAMES: readonly string[] = Object.keys(ICONS);
 
+/**
+ * An icon's path data, for drawing it where an SVG element cannot go: the tray takes pixels
+ * (`trayicon.ts`). Every `shield-*` icon draws the shield first and its mark after, which is what
+ * lets the tray fill the one and cut out the other.
+ */
+export function iconPaths(name: string): readonly string[] {
+  const spec = ICONS[name];
+  if (!spec) throw new Error(`unknown icon: ${name}`);
+  return spec.paths;
+}
+
 export function icon(name: string, size = 16): SVGElement {
   const spec = ICONS[name];
   if (!spec) throw new Error(`unknown icon: ${name}`);

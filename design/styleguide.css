@@ -176,6 +176,70 @@ body {
   word-break: break-all;
 }
 
+/* ------------------------------------------------------------------ tray */
+
+.sg-tray-big {
+  display: flex;
+  gap: 28px;
+  margin-bottom: 16px;
+}
+
+/* Enlarged as pixels, not smoothed: this row is for seeing exactly what the bar is given. */
+.sg-tray-big canvas {
+  image-rendering: pixelated;
+}
+
+.sg-tray-big figcaption {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--faint);
+  text-align: center;
+}
+
+.sg-tray-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* Stand-ins for the system's menu bar, not colours of ours, so not tokens. */
+.sg-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 24px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-family: var(--ui);
+  font-size: 13px;
+}
+
+.sg-bar.light {
+  background: #e8e8ea;
+  color: #000;
+}
+
+.sg-bar.dark {
+  background: #1f1f22;
+  color: #fff;
+}
+
+/* What macOS does to a template image: drops its colour and draws the bar's through its alpha. */
+.sg-bar.light .template {
+  filter: brightness(0);
+  opacity: 0.85;
+}
+
+.sg-bar.dark .template {
+  filter: brightness(0) invert(1);
+}
+
 /* ------------------------------------------------------------------ specimens */
 
 .sg-specimens {
