@@ -510,8 +510,10 @@ sometimes — a Cloudflare anycast address has no single physical location.
 
 At launch a cover ([views/splash.ts](src/views/splash.ts)) waits for the three things the window
 needs to be worth looking at: the data file loaded, the core up, and this machine placed
-(`locate_me`). It leaves when all three are done, or after `MAX_MS` (6 s), whichever is first,
-and stays at least `MIN_MS` so the mark finishes being drawn. A slow geo lookup must not hold the
+(`locate_me`) — the answer, not the attempt, since on a filtered network the first tries fail and
+`retryHome` keeps asking. It leaves when all three are done, or after `MAX_MS` (20 s), whichever
+is first, and stays at least `MIN_MS` so the mark finishes being drawn. A machine that will not be
+placed at all is not trapped: after `SKIP_AFTER_MS` (6 s) the splash offers a way past. A slow geo lookup must not hold the
 app hostage, and a core that never comes up is the status card's to explain. A data file that
 will not load takes it down at once (`leave`), because that error is the window's to show now.
 The cover is in `index.html` from the first paint (a plain field in the page's colour, and a
@@ -529,13 +531,24 @@ The map starts from the user's own dot and, once connected, draws the route from
 through `geo::whereabouts`, which returns coordinates rather than a country (a country's centroid
 puts everyone in Russia in Siberia) from a chain of endpoints, like the country lookup.
 
-`locate_me` asks directly, so it is only ever asked **with the tunnel down**: in VPN mode a direct
-request goes through the TUN and would put the user at their exit. It is asked at launch, after
-every disconnect, and **when the network changes**: [netwatch.rs](src-tauri/src/netwatch.rs) looks
+`locate_me` asks directly, so it is only ever asked when a direct request still answers for this
+machine: with the tunnel down, or **connected in proxy mode**, where only what is pointed at the
+listener goes through it and these requests are the Rust side's own (`canLocateHome`). In VPN mode
+a direct request goes through the TUN and would put the user at their exit. It is asked at launch, after every
+disconnect, and **when the network changes**: [netwatch.rs](src-tauri/src/netwatch.rs) looks
 every 4 s at the address the system would send from to reach the internet (a UDP socket
 "connected" to a public address, which sends nothing), and emits `network-changed` when it moves.
 The webview's `online` event misses a move straight from one network to another. `locateHome`
-runs one lookup at a time, and a request made during one runs once more after it. `tunnelEpoch` in `main.ts` is
+runs one lookup at a time, and a request made during one runs once more after it.
+
+**On a filtered network the services that place an address are the problem**, so three things
+answer it. `geo::whereabouts(None)` asks **every endpoint at once** and takes the first answer:
+asked in turn, two blocked endpoints cost ten seconds before a reachable one is tried, because a
+blocked service hangs rather than refusing. (Placing a *server's* exit stays one at a time — dozens
+of addresses, and free tiers to spare.) `api.ip.sb` is in the list for its Cloudflare front, which
+such networks cannot block wholesale. And a failed lookup is tried again on a growing delay
+(`HOME_RETRY_MS`, up to a minute), starting over on a network change or a disconnect, so a machine
+that could not be placed at launch still gets placed later. `tunnelEpoch` in `main.ts` is
 bumped on every connect and disconnect so an answer that was in flight across one is discarded.
 `locate_exit` takes the same two steps as `geo::locate` in proxy mode — the address through the
 listener, the place from the user's own connection — to keep the rate-limited half off a shared

@@ -26,8 +26,17 @@ import { iconPaths } from "./icons";
 /** The least time on screen, so the mark is finished before it goes rather than cut off. */
 const MIN_MS = 1700;
 
-/** The most: past this, what is still missing is the window's to say. */
-const MAX_MS = 6000;
+/**
+ * The most: past this, what is still missing is the window's to say.
+ *
+ * Long enough for several tries at placing this machine, which is the step that fails on a
+ * filtered network — the services are blocked one launch and not the next — and the one the map
+ * cannot do without. A machine with no network at all waits this out, so there is `SKIP_AFTER_MS`.
+ */
+const MAX_MS = 20000;
+
+/** When to offer a way past it, for a machine that is not going to be placed at all. */
+const SKIP_AFTER_MS = 6000;
 
 /** How long leaving takes; must match the `.splash` transition in `styles.css`. */
 const LEAVE_MS = 450;
@@ -53,12 +62,26 @@ export interface SplashStep {
 
 export class Splash {
   private line: HTMLElement;
+  private skip: HTMLButtonElement;
   private leaving = false;
 
   constructor(private root: HTMLElement) {
     this.line = h("span", { class: "splash-line", role: "status" });
-    render(root, art(), h("span", { class: "splash-word" }, "Nunya"), this.line);
+    this.skip = h(
+      "button",
+      { class: "splash-skip", hidden: true, onclick: () => this.leave() },
+      "Continue without it",
+    ) as HTMLButtonElement;
+    render(root, art(), h("span", { class: "splash-word" }, "Nunya"), this.line, this.skip);
     root.setAttribute("aria-busy", "true");
+    setTimeout(() => {
+      if (!this.leaving) this.skip.hidden = false;
+    }, SKIP_AFTER_MS);
+  }
+
+  /** Says what is happening now, for a step that is taking longer than it should. */
+  say(line: string) {
+    if (!this.leaving) this.line.textContent = line;
   }
 
   /** Waits for each step in turn — saying which one it is on — then leaves. */
@@ -81,6 +104,7 @@ export class Splash {
   leave() {
     if (this.leaving) return;
     this.leaving = true;
+    this.skip.hidden = true;
     this.root.removeAttribute("aria-busy");
     this.root.classList.add("gone");
     setTimeout(() => this.root.remove(), LEAVE_MS + 50);

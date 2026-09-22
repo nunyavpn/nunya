@@ -3059,3 +3059,19 @@ button:disabled {
     transform: none;
   }
 }
+
+/* Offered only once the wait has gone on, for a machine that will not be placed at all. */
+.splash-skip {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.splash-skip:hover {
+  color: var(--ink);
+  border-color: var(--line-2);
+}
