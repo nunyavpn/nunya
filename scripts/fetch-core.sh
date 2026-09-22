@@ -145,7 +145,16 @@ fi
 ASSET_CORE="nunya-core-$(host_triple_os)-$(host_arch)"
 [[ "$(host_triple_os)" == "windows" ]] && ASSET_CORE="$ASSET_CORE.exe"
 ASSETS=("$ASSET_CORE" "nunya.proto")
-[[ "$(uname -s)" == "Darwin" ]] && ASSETS+=("NunyaCore.xcframework.zip")
+# The xcframework is only for the packet tunnel extension, which needs an Apple Developer account to
+# build at all. A release that does not publish one is still a complete release for everything else
+# — the app, its proxy mode, and a subprocess tunnel — so it is fetched when listed and skipped when not.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if grep -qF "  NunyaCore.xcframework.zip" "$TMP/SHA256SUMS"; then
+    ASSETS+=("NunyaCore.xcframework.zip")
+  else
+    echo "==> $TAG publishes no NunyaCore.xcframework.zip; the packet tunnel extension cannot be built from it"
+  fi
+fi
 
 for asset in "${ASSETS[@]}"; do
   echo "==> $asset"

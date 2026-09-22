@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "macOS": {
+      "entitlements": "../Nunya.entitlements",
+      "signingIdentity": null
+    }
+  }
+}

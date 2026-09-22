@@ -371,14 +371,15 @@ async fn latency_of(link: &CoreLink, profile: &config::Profile, timeout_ms: i32)
             )
             .await;
         match resp {
-            Ok(resp) => match resp.results.into_iter().next() {
-                Some(item) => match item.error.filter(|e| !e.is_empty()) {
-                    // A failure reports 0ms, which would otherwise read as the fastest server.
-                    None => return (item.latency_ms.unwrap_or(0), None),
-                    Some(e) => last = e,
-                },
-                None => {}
-            },
+            Ok(resp) => {
+                if let Some(item) = resp.results.into_iter().next() {
+                    match item.error.filter(|e| !e.is_empty()) {
+                        // A failure reports 0ms, which would otherwise read as the fastest server.
+                        None => return (item.latency_ms.unwrap_or(0), None),
+                        Some(e) => last = e,
+                    }
+                }
+            }
             // The link itself failed; another endpoint will not fix that.
             Err(e) => return (-1, Some(e.to_string())),
         }

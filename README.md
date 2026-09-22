@@ -85,6 +85,13 @@ npm run tauri dev
 `fetch-core.sh` also stages the core as a Tauri sidecar, which is what lets `cargo check` and
 `tauri dev` run at all — Tauri refuses to build while the binary named in `externalBin` is missing.
 
+For a local bundle without the packet tunnel extension, as the CI release builds it:
+
+```bash
+npm run tauri build -- --bundles app,dmg        # macOS
+npm run tauri build -- --bundles deb,appimage   # Linux
+```
+
 For a release bundle with the packet tunnel extension:
 
 ```bash
@@ -257,11 +264,17 @@ without validation would be passed to sing-box as a real interface name.
 
 ```bash
 ./scripts/fetch-core.sh                # installs NunyaCore.xcframework into vendor/core/apple/
-npm run tauri build -- --bundles app   # the app bundle
+npm run tauri build -- --bundles app --config src-tauri/tauri.networkextension.conf.json
 ./scripts/build-extension.sh           # the .appex, embedded into the bundle
 ```
 
 `./scripts/build-app.sh` runs all three in order.
+
+The NetworkExtension entitlements (`Nunya.entitlements`) are merged in only here, from
+`src-tauri/tauri.networkextension.conf.json`. They need an Apple Developer team's signature, and
+macOS kills an app that claims them without one, so the default build (and the CI release) is
+ad-hoc signed without them and runs its core as a child process. The xcframework is fetched only
+when the pinned core release publishes one.
 
 `build-extension.sh` generates the Xcode project from `project.yml` (via XcodeGen — do not edit the
 `.xcodeproj`, it is generated and gitignored), builds the extension, and copies it into
@@ -417,6 +430,27 @@ Each transport is validated against a real core in
 client emits and the shape sing-box accepts differ in ways unit tests here cannot see — `host` is a
 string for HTTPUpgrade and a list for HTTP/2, and plain TCP means *no* `transport` key rather than
 an empty one.
+
+
+## Releasing
+
+A release is a tag. Bump the version in `package.json`, `src-tauri/tauri.conf.json` and
+`src-tauri/Cargo.toml`, merge that to `main`, then:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+[`release.yml`](.github/workflows/release.yml) refuses a tag that isn't on `main` or doesn't match
+the version. It builds a **macOS arm64** `.dmg` (and a zipped `.app`) plus **Linux x86-64 and arm64**
+`.deb` and `.AppImage`, each against the core pinned in `core.lock`, and publishes them with a
+`SHA256SUMS` as a GitHub release. Versions below 1.0, and tags with a suffix (`v0.2.0-beta.1`), are
+marked pre-release.
+
+The macOS build is ad-hoc signed, not notarised: the first time it's opened, macOS asks the user to
+allow it in **System Settings → Privacy & Security → Open Anyway**. A signed, notarised build with
+the packet tunnel extension (VPN mode on macOS) needs an Apple Developer account; that's
+`build-app.sh`. Windows isn't built yet (#34).
 
 ## Supporting Nunya
 

@@ -43,13 +43,13 @@
     ],
     "category": "Utility",
     "copyright": "",
-    "shortDescription": "TUN-only client for the Nunya core",
+    "shortDescription": "A safe, fast, reliable VPN client for the Nunya core",
     "externalBin": [
       "binaries/nunya-core"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0",
-      "entitlements": "../Nunya.entitlements"
+      "signingIdentity": "-"
     }
   }
 }

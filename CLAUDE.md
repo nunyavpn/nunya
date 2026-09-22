@@ -40,7 +40,9 @@ npm run tauri dev
 | Frontend in a browser, no Rust | `VITE_MOCK=1 npm run dev` |
 | App with the list full | `VITE_MOCK=1 npm run tauri dev` |
 | Style guide | `npm run design` |
-| Release bundle | `./scripts/build-app.sh` |
+| Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `deb,appimage` (Linux) |
+| Signed bundle with the packet tunnel | `./scripts/build-app.sh` (needs an Apple Developer team) |
+| Release | bump the version in three places, merge, `git tag vX.Y.Z && git push origin vX.Y.Z` |
 
 There is no JS linter and **no `cargo fmt` gate** — the tree is not rustfmt-clean, so do not
 reformat files you are not otherwise editing.
@@ -89,6 +91,19 @@ This repo never builds the core. `core.lock` pins a nunya-core release plus the 
 release's `SHA256SUMS`, so pinning one digest makes the whole artefact set tamper-evident;
 `fetch-core.sh` verifies every asset against it. A re-cut release fails the check instead of
 installing. Repin with `./scripts/fetch-core.sh --update <tag>` and commit the lockfile.
+
+**A release core's parent must be a binary named exactly `Nunya` in the same directory**
+(`Nunya.exe` on Windows) — nunya-core's `internal/parentcheck`. That is why `mainBinaryName` is
+`Nunya`: the bundles put the core beside it (`Contents/MacOS/`, `/usr/bin/`, the AppImage's
+`usr/bin/`), and a renamed binary would leave the app unable to start its own core. It also means
+`npm run tauri dev` cannot run a *release* core (its parent is `target/debug/nunya`); develop against
+one built with `--source`.
+
+**Releases** are tags: `release.yml` builds and publishes on `vX.Y.Z` (see the README's
+*Releasing*). The default macOS build is ad-hoc signed and carries **no** entitlements; the
+NetworkExtension ones need an Apple Developer team, and macOS kills an app that claims them without
+one — they are merged in only by `build-app.sh`, from `tauri.networkextension.conf.json`.
+`fetch-core.sh` fetches `NunyaCore.xcframework.zip` only when the release lists it.
 
 A core built with `--source` carries the `noparentcheck` build tag (during development the parent
 process is `cargo`, not `Nunya`). `build-app.sh` refuses to bundle one, and none is ever published —
