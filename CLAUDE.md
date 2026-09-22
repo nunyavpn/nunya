@@ -15,8 +15,12 @@ for machines where a TUN cannot be had; see **Modes** for what that costs the UI
 Deliberately out of scope: OTP, global hotkeys, speed tests, WARP registration, the dashboard
 installer, diagnostics capture.
 
-`README.md` is the long-form rationale and is unusually complete — read it before any substantial
-change, and keep it current when you change behaviour it describes.
+`README.md` is for users: what the app does and how to use it, with screenshots from the mock
+fixture (`docs/screenshots/`). `CONTRIBUTING.md` is the developer's long-form rationale — building,
+dev and mock modes, the core link, macOS privilege, releasing and the issue → branch → PR flow —
+read it before any substantial change. Keep both current when you change behaviour they describe,
+and retake a screenshot when its screen changes (`VITE_MOCK=1 npm run dev`; `mockcore.ts` lets the
+browser connect).
 
 ## Setup and commands
 
@@ -99,7 +103,7 @@ installing. Repin with `./scripts/fetch-core.sh --update <tag>` and commit the l
 `npm run tauri dev` cannot run a *release* core (its parent is `target/debug/nunya`); develop against
 one built with `--source`.
 
-**Releases** are tags: `release.yml` builds and publishes on `vX.Y.Z` (see the README's
+**Releases** are tags: `release.yml` builds and publishes on `vX.Y.Z` (see CONTRIBUTING.md's
 *Releasing*). The default macOS build is ad-hoc signed and carries **no** entitlements; the
 NetworkExtension ones need an Apple Developer team, and macOS kills an app that claims them without
 one — they are merged in only by `build-app.sh`, from `tauri.networkextension.conf.json`.
@@ -146,7 +150,7 @@ nothing runs as root, nothing is setuid. The app side is only the control plane 
 
 `main.rs` is a five-line shim. **All Tauri commands and the startup sequence are in
 [lib.rs](src-tauri/src/lib.rs)**, as a library so integration tests use the same modules the binary
-does. (The README's layout table still says `main.rs` — it is wrong on that one point.)
+does.
 
 - [config.rs](src-tauri/src/config.rs) — the only file that assumes *which* core is running. It
   emits sing-box JSON, always validated by the core's `CheckConfig` before anything starts. The
@@ -211,7 +215,7 @@ new user a Connect button that fails. `TunnelTransport::availability` takes the 
 reason — proxy mode binds an unprivileged port and must not be refused for want of a permission it
 never uses.
 
-This repository's README was written around a TUN-only thesis: "with no proxy mode there is no
+The project was first written around a TUN-only thesis: "with no proxy mode there is no
 partial coverage, so *the device is in the tunnel* is a claim the UI can make honestly." Proxy mode
 gives that claim up, so the status card must not make it. `HEADLINE` is keyed by mode — "You're
 protected" exists only for VPN — and in proxy mode the chips lead with the listen address and say
