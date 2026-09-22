@@ -289,6 +289,31 @@ apply it. Lists are fetched when a switch is turned on, after each connect (so o
 come directly comes through the tunnel), and hourly; `STALE_MS` (a day) decides which are due.
 `core_link.rs` checks the published lists against a real core, and that an error page is refused.
 
+### Connecting and disconnecting
+
+`ConnectionState` is `off`, `connecting`, `on` and **`disconnecting`**. Both transitions take
+seconds (the core, then the system proxy), and each half has an inverse that must not run in the
+middle of it. A Disconnect that ran while Connect was still setting the system proxy once put the
+user's settings back and then had ours land on top, pointing every browser at a port nothing
+listened on. So:
+
+- **One at a time.** `connect`, `disconnect` and `reconnect` in `main.ts` run through one `Serial`
+  queue ([serial.ts](src/serial.ts)). Each checks the state when its turn comes, so a Connect
+  queued behind a Connect is nothing, and a reconnect (`once("reconnect")`) only restarts a tunnel
+  that is up. Several reconnects asked for while one waits are one reconnect. Disabled buttons are
+  not enough on their own: the map, the popover, the tray menu and a block list arriving can all ask.
+- **"On" means the system proxy is set.** `connectNow` applies it *before* switching to `on`.
+  `disconnectNow` switches to `disconnecting` before awaiting anything, puts the system proxy back
+  *before* stopping the tunnel (so apps go direct instead of at a closing listener), then stops it.
+- **The step is on screen** (`transitionStep`: "Setting the system proxy…"): on the status card in
+  place of its subtitle, and in the popover. The button stays amber with a spinner, *working* rather
+  than the grey of *unavailable*, and disabled. Everything that could start another transition is
+  disabled while one runs (`working()`).
+- **In Rust the lock covers the whole operation.** `set_system_proxy` holds the slot's lock until
+  ours are applied, and `release_system_proxy` until the user's are back (`restore_held` for a
+  caller already holding it). They used to hold it only to read or write the slot, which is what
+  let a restore overtake an apply, and deleted the saved copy the next launch would have used.
+
 ### Settings are locked while connected
 
 Settings are read when the tunnel starts, so the Advanced panel is disabled (a `<fieldset disabled>`)

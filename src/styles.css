@@ -1290,9 +1290,11 @@ button:disabled {
   color: var(--live-fill);
 }
 
+/* Connecting and disconnecting alike: under way, whichever way. It pulses like the rail's shield. */
 .st-badge.connecting {
   background: var(--warn-soft);
   color: var(--warn-fill);
+  animation: logo-pulse 1.3s ease-in-out infinite;
 }
 
 .st-text {
@@ -1386,6 +1388,33 @@ button:disabled {
   background: var(--line-2);
   color: var(--surface);
   box-shadow: none;
+}
+
+/* Working, not unavailable: amber like the badge beside it, with a spinner, rather than the grey
+   of a button that cannot be used. Still disabled — a second click is what this state prevents. */
+.btn.busy:disabled {
+  background: var(--warn-fill);
+  color: #fff;
+  cursor: progress;
+}
+
+.btn-spin {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 7px;
+  vertical-align: -1px;
+  border-radius: 50%;
+  border: 2px solid rgb(255 255 255 / 40%);
+  border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .st-badge.connecting,
+  .btn-spin {
+    animation: none;
+  }
 }
 
 .st-more {

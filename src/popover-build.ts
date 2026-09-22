@@ -18,11 +18,13 @@ import type { Shield } from "./shield";
 import { located, store, type Server } from "./store";
 import { serverMatches } from "./views/locations";
 import { OPTION } from "./views/quickpick";
-import { HEADLINE } from "./views/status";
+import { HEADLINE, type ConnectionState } from "./views/status";
 
 /** What only the main window knows: the connection, and what is in flight. */
 export interface PopoverState {
-  connection: "off" | "connecting" | "on";
+  connection: ConnectionState;
+  /** While connecting or disconnecting, the step under way. */
+  step: string | null;
   shield: Shield;
   connectedAt: number | null;
   exit: string | null;
@@ -107,7 +109,8 @@ export function popoverModel(state: PopoverState): PopoverModel {
     // The address first: in proxy mode it is the one thing the user has to act on, and the line
     // is cut at the end when it does not fit.
     covers:
-      settings.mode === "vpn" ? "Everything on this device" : `${address} · only apps set to use it`,
+      state.step ??
+      (settings.mode === "vpn" ? "Everything on this device" : `${address} · only apps set to use it`),
     connectedAt: state.connection === "on" ? state.connectedAt : null,
     exit: state.exit,
     server: selected ? serverLine(selected) : null,

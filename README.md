@@ -71,7 +71,9 @@ shows the server's flag and city (where its traffic really comes out), how it co
 latency. The **map** shows you, your servers, and the route of your connection. The **status card**
 at the bottom shows the connection, live traffic, and the public address the internet sees.
 
-**To connect:** pick a server in the list (or a dot on the map) and press **Connect**.
+**To connect:** pick a server in the list (or a dot on the map) and press **Connect**. Connecting
+and disconnecting take a few seconds; the card says what it is doing ("Setting the system proxy…")
+and waits for it to finish before taking another click.
 
 The icons down the left edge are the **status shield** (green connected, amber connecting, grey
 off, red not working), then the server list, bypass rules, settings, support, and diagnostics.

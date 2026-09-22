@@ -69,7 +69,10 @@ export async function mockInvoke<T>(command: string, args: Record<string, unknow
       emit("core-log", "INFO inbound/mixed[mixed-in]: tcp server started at 127.0.0.1:2080");
       return answer(null);
 
+    // Stopping and the system proxy take real time too, so the connecting and disconnecting steps
+    // are on screen long enough to see.
     case "stop_tunnel":
+      await wait(500);
       running = false;
       return answer(null);
 
@@ -161,6 +164,9 @@ export async function mockInvoke<T>(command: string, args: Record<string, unknow
 
     case "set_system_proxy":
     case "clear_system_proxy":
+      await wait(600);
+      return answer(null);
+
     case "set_tray_status":
     case "open_external":
       return answer(null);

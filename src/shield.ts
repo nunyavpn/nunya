@@ -23,7 +23,7 @@
 export type ShieldTone = "on" | "connecting" | "off" | "failed";
 
 export interface ShieldInput {
-  connection: "off" | "connecting" | "on";
+  connection: "off" | "connecting" | "on" | "disconnecting";
   mode: "vpn" | "proxy";
   /** Why the last attempt failed, or why a running tunnel stopped; `null` for neither. */
   fault: string | null;
@@ -42,6 +42,10 @@ export interface Shield {
 export function shieldState(input: ShieldInput): Shield {
   if (input.connection === "connecting") {
     return { tone: "connecting", glyph: "shield", label: "Connecting…" };
+  }
+  // Amber too: something is under way, and nothing is to be clicked until it is done.
+  if (input.connection === "disconnecting") {
+    return { tone: "connecting", glyph: "shield", label: "Disconnecting…" };
   }
 
   if (input.connection === "on") {

@@ -482,8 +482,9 @@ function componentsSection() {
       statusSpecimen("state: off · blocked", "off", {
         blockedReason: "Waiting for the core to start",
       }),
-      statusSpecimen("state: connecting", "connecting"),
+      statusSpecimen("state: connecting", "connecting", { step: "Setting the system proxy…" }),
       statusSpecimen("state: on", "on"),
+      statusSpecimen("state: disconnecting", "disconnecting", { step: "Restoring the system proxy…" }),
       // The mode is not a skin on the same card: it changes what the card is allowed to claim.
       // Side by side is the only way to see that "You're protected" has no proxy-mode equivalent.
       statusSpecimen("proxy · off", "off", { mode: "proxy", blockedReason: null }),

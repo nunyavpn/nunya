@@ -120,9 +120,14 @@ export class PopoverView {
 
   private hero(model: PopoverModel) {
     const { shield } = model;
-    const busy = model.connection === "connecting";
+    const busy = model.connection === "connecting" || model.connection === "disconnecting";
     const on = model.connection === "on";
-    const button = on ? "Disconnect" : busy ? "Connecting…" : "Connect";
+    const button = {
+      off: "Connect",
+      connecting: "Connecting…",
+      on: "Disconnect",
+      disconnecting: "Disconnecting…",
+    }[model.connection];
 
     return h(
       "section",
@@ -180,11 +185,12 @@ export class PopoverView {
       h(
         "button",
         {
-          class: `pv-toggle ${on ? "off" : "on"}`,
+          class: `pv-toggle ${on || model.connection === "disconnecting" ? "off" : "on"}`,
           disabled: busy || (!on && !model.canConnect),
+          "aria-busy": busy ? "true" : undefined,
           onclick: () => this.callbacks.onToggle(),
         },
-        icon("power", 16),
+        busy ? h("span", { class: "btn-spin", "aria-hidden": "true" }) : icon("power", 16),
         button,
       ),
     );
@@ -255,7 +261,8 @@ export class PopoverView {
   }
 
   private quick(model: PopoverModel) {
-    const busy = model.quick.some((q) => q.busy);
+    // A pick while connecting or disconnecting would only queue behind it; wait, and say so.
+    const busy = model.quick.some((q) => q.busy) || working(model);
     return h(
       "section",
       { class: "pv-section" },
@@ -309,7 +316,7 @@ export class PopoverView {
                 class: mode === model.mode ? "on" : "",
                 role: "radio",
                 "aria-checked": String(mode === model.mode),
-                disabled: model.connection === "connecting",
+                disabled: working(model),
                 onclick: () => mode !== model.mode && this.callbacks.onMode(mode),
               },
               mode === "vpn" ? "VPN" : "Proxy",
@@ -332,7 +339,7 @@ export class PopoverView {
             type: "checkbox",
             class: "sw-input",
             checked: b.on,
-            disabled: model.connection === "connecting",
+            disabled: working(model),
             onchange: (e: Event) =>
               this.callbacks.onBlock(b.list, (e.target as HTMLInputElement).checked),
           }),
@@ -356,6 +363,11 @@ export class PopoverView {
       ),
     );
   }
+}
+
+/** Connecting or disconnecting: nothing that would start another is offered until it is done. */
+function working(model: PopoverModel): boolean {
+  return model.connection === "connecting" || model.connection === "disconnecting";
 }
 
 function flag(country: string) {
