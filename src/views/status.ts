@@ -17,7 +17,12 @@ import { place } from "../geo";
 import { icon } from "./icons";
 import { CDN_NAMES, cdnOf, located, type Mode, type Server } from "../store";
 
-export type ConnectionState = "off" | "connecting" | "on";
+/**
+ * Where the tunnel is. Connecting and disconnecting are states of their own because each takes
+ * seconds — the core, then the system proxy — and nothing is to be clicked until it is done; see
+ * `serial.ts`.
+ */
+export type ConnectionState = "off" | "connecting" | "on" | "disconnecting";
 
 /** A measured place, as the card shows it: city, country, and who runs the data center. */
 export interface PlaceLine {
@@ -29,6 +34,8 @@ export interface PlaceLine {
 
 export interface StatusModel {
   state: ConnectionState;
+  /** While connecting or disconnecting, the step under way: "Setting the system proxy…". */
+  step?: string | null;
   /** Which mode is running, because it changes what the card may truthfully claim. */
   mode: Mode;
   /** Proxy mode: where the listener is, so the user can point something at it. */
@@ -77,12 +84,21 @@ export const HEADLINE: Record<Mode, Record<ConnectionState, string>> = {
     on: "You're protected",
     connecting: "Connecting…",
     off: "Not connected",
+    disconnecting: "Disconnecting…",
   },
   proxy: {
     on: "Proxy running",
     connecting: "Starting…",
     off: "Proxy off",
+    disconnecting: "Stopping…",
   },
+};
+
+const TOGGLE_LABEL: Record<ConnectionState, string> = {
+  off: "Connect",
+  connecting: "Connecting…",
+  on: "Disconnect",
+  disconnecting: "Disconnecting…",
 };
 
 export class StatusCard {
@@ -113,20 +129,28 @@ export class StatusCard {
 
     const where = at ? [country?.name, at.city].filter(Boolean).join(" · ") : "No server selected";
 
-    const subtitle =
-      model.state === "on" ? `${where} · ${elapsed(model.connectedAt)}` : where;
+    const busy = model.state === "connecting" || model.state === "disconnecting";
+    // While it works, the card says what it is doing: a step that takes seconds and says nothing
+    // reads as a click that did not register, and invites the second click this is here to stop.
+    const subtitle = busy && model.step
+      ? model.step
+      : model.state === "on"
+        ? `${where} · ${elapsed(model.connectedAt)}`
+        : where;
+    // Amber for both: under way, whichever way.
+    const tone = busy ? "connecting" : model.state;
 
     return [
       h(
         "span",
-        { class: `st-badge ${model.state}` },
+        { class: `st-badge ${tone}` },
         icon(model.state === "on" ? "shield-check" : "shield", 21),
       ),
       h(
         "span",
         { class: "st-text" },
-        h("span", { class: `s ${model.state}` }, HEADLINE[model.mode][model.state]),
-        h("span", { class: "m" }, subtitle),
+        h("span", { class: `s ${tone}` }, HEADLINE[model.mode][model.state]),
+        h("span", { class: "m", "aria-live": "polite" }, subtitle),
       ),
       // Throughput is meaningless with the tunnel down, and an empty pair of zeroes reads as broken.
       model.state === "on"
@@ -151,11 +175,13 @@ export class StatusCard {
       h(
         "button",
         {
-          class: `btn${model.state === "on" ? "" : " go"}`,
-          disabled: model.state === "connecting" || (!model.server && model.state === "off"),
+          class: `btn${model.state === "on" || model.state === "disconnecting" ? "" : " go"}${busy ? " busy" : ""}`,
+          disabled: busy || (!model.server && model.state === "off"),
+          "aria-busy": busy ? "true" : undefined,
           onclick: () => this.callbacks.onToggle(),
         },
-        model.state === "on" ? "Disconnect" : "Connect",
+        busy ? h("span", { class: "btn-spin", "aria-hidden": "true" }) : null,
+        TOGGLE_LABEL[model.state],
       ),
     ].filter(Boolean) as Node[];
   }

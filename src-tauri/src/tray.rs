@@ -225,6 +225,8 @@ impl Lines {
         let (word, toggle, toggle_enabled) = match state {
             "on" => ("Connected", "Disconnect", true),
             "connecting" => ("Connecting…", "Connect", false),
+            // Not a second stop on top of the first; see `connect`/`disconnect` in `main.ts`.
+            "disconnecting" => ("Disconnecting…", "Disconnect", false),
             _ => ("Disconnected", "Connect", can_connect),
         };
         // The icon is red for a tunnel that is up and carries nothing, and after an attempt that
@@ -248,12 +250,12 @@ impl Lines {
 
 /// Mirrors the frontend's connection state into the tray, creating it the first time.
 ///
-/// `state` is the frontend's `ConnectionState` (`off`, `connecting`, `on`) and `tone` the rail
-/// shield's (`off`, `connecting`, `on`, `failed`); `server` is the selected server's name as the
-/// list shows it, `detail` is anything the status line must add (proxy mode's listen address),
-/// `label` is the shield's own description, used as the tooltip, and `can_connect` is false
-/// whenever the status card would refuse Connect — no server, no core — so the menu never offers
-/// a button the window would turn down.
+/// `state` is the frontend's `ConnectionState` (`off`, `connecting`, `on`, `disconnecting`) and
+/// `tone` the rail shield's (`off`, `connecting`, `on`, `failed`); `server` is the selected
+/// server's name as the list shows it, `detail` is anything the status line must add (proxy mode's
+/// listen address), `label` is the shield's own description, used as the tooltip, and
+/// `can_connect` is false whenever the status card would refuse Connect — no server, no core — so
+/// the menu never offers a button the window would turn down.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn set_tray_status(
@@ -332,8 +334,9 @@ mod tests {
     fn connect_is_offered_only_when_the_window_would_accept_it() {
         assert!(Lines::new("off", "off", Some("a"), None, true).toggle_enabled);
         assert!(!Lines::new("off", "off", Some("a"), None, false).toggle_enabled);
-        // Not a second attempt on top of the first.
+        // Not a second attempt on top of the first, nor a second stop.
         assert!(!Lines::new("connecting", "connecting", Some("a"), None, true).toggle_enabled);
+        assert!(!Lines::new("disconnecting", "connecting", Some("a"), None, true).toggle_enabled);
     }
 
     #[test]

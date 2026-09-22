@@ -28,6 +28,12 @@ export function preview(show: (model: PopoverModel) => void): (intent: PopoverIn
     show(
       popoverModel({
         connection,
+        step:
+          connection === "connecting"
+            ? "Starting the tunnel…"
+            : connection === "disconnecting"
+              ? "Stopping the tunnel…"
+              : null,
         shield: shieldState({ connection, mode, fault: null, exit }),
         connectedAt,
         exit: exit?.ipv4 ?? null,
@@ -60,9 +66,13 @@ export function preview(show: (model: PopoverModel) => void): (intent: PopoverIn
         break;
       case "toggle":
         if (connection === "on") {
-          connection = "off";
-          connectedAt = null;
-        } else connect();
+          connection = "disconnecting";
+          setTimeout(() => {
+            connection = "off";
+            connectedAt = null;
+            paint();
+          }, 600);
+        } else if (connection === "off") connect();
         break;
       case "quick": {
         const pick = store.quickPicks(Date.now())[intent.pick];

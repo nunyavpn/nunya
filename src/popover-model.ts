@@ -14,6 +14,7 @@
 import type { BlockList } from "./blocking";
 import type { QuickKind } from "./quick";
 import type { Shield } from "./shield";
+import type { ConnectionState } from "./views/status";
 
 /** A config as the popover lists it. */
 export interface ServerLine {
@@ -53,14 +54,14 @@ export interface BlockLine {
 }
 
 export interface PopoverModel {
-  connection: "off" | "connecting" | "on";
+  connection: ConnectionState;
   mode: "proxy" | "vpn";
   shield: Shield;
   /** The status card's headline, which is held to the modes' rule. */
   headline: string;
   /** Why Connect is refused, or why the last attempt failed. */
   problem: string | null;
-  /** What the running connection covers, in the modes' words. */
+  /** What the running connection covers, in the modes' words; the step under way while it works. */
   covers: string;
   connectedAt: number | null;
   /** The public address the tunnel comes out of, once measured. */

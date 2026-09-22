@@ -31,6 +31,7 @@ import {
   type Profile,
 } from "./share";
 import { popoverModel } from "./popover-build";
+import { Serial } from "./serial";
 import type { PopoverIntent } from "./popover-model";
 import { shieldState, type Shield } from "./shield";
 import { SUPPORT } from "./support";
@@ -335,11 +336,11 @@ async function retestFastest(): Promise<Server | undefined> {
 
 /** Connects to a config Quick Connect chose, or switches to it when the tunnel is up. */
 async function connectTo(server: Server) {
-  if (connection === "connecting") return;
   if (connection === "on" && store.get().selectedServerId === server.id) return;
-  // Selecting reconnects when the tunnel is up; otherwise it only selects, and this connects.
+  // Selecting reconnects when the tunnel is up or coming up; otherwise it only selects, and this
+  // connects — after a disconnect under way, if there is one: this is an explicit "connect to X".
   selectServer(server);
-  if (connection === "off") await connect();
+  if (connection === "off" || connection === "disconnecting") await connect();
 }
 
 /**
@@ -544,6 +545,7 @@ function refresh() {
 
   status.render({
     state: connection,
+    step: transitionStep,
     mode: settings.mode,
     proxyAddress:
       settings.mode === "proxy"
@@ -666,6 +668,7 @@ function syncPopover(shield: Shield, canConnect: boolean) {
         : null;
   const model = popoverModel({
     connection,
+    step: transitionStep,
     shield,
     connectedAt,
     exit: exitIps?.ipv4 ?? exitIps?.ipv6 ?? null,
@@ -707,7 +710,7 @@ async function onPopoverIntent(intent: PopoverIntent) {
       return;
     }
     case "mode":
-      if (connection === "connecting" || intent.mode === store.settings().mode) return;
+      if (working() || intent.mode === store.settings().mode) return;
       store.updateSettings({ mode: intent.mode });
       // Settings apply when the tunnel starts, so a running one starts again with the new mode.
       if (connection === "on") await reconnect();
@@ -729,7 +732,7 @@ async function onPopoverIntent(intent: PopoverIntent) {
  * reconnect now would only start a tunnel still without it.
  */
 async function setBlocker(list: BlockList, on: boolean) {
-  if (connection === "connecting") return;
+  if (working()) return;
   store.updateSettings({ [SWITCH[list]]: on });
   if (connection !== "on") return;
   if (on && blockLists[list].updatedAt === null) return;
@@ -945,8 +948,10 @@ function pickFromMap(key: string, at: PickPoint) {
 /** Selecting from the list and from the map are the same act, so they share one path. */
 function selectServer(server: Server) {
   store.select(server.id);
-  // Switching server while connected would silently leave you on the old one.
-  if (connection === "on") void reconnect();
+  // Switching server while connected would silently leave you on the old one, and so would
+  // switching while connecting: the tunnel coming up is the old one's. Either way it starts again
+  // on the new one, once what is under way is done.
+  if (connection === "on" || connection === "connecting") void reconnect();
 }
 
 /** Mirrors `geo::Exit` without its place: what the status card shows. */
@@ -1077,7 +1082,50 @@ function buildRequest() {
   };
 }
 
-async function connect() {
+/**
+ * Connecting and disconnecting, one at a time; see `serial.ts` for why a queue and not only
+ * disabled buttons. Each checks the state when its turn comes, so a Connect queued behind a
+ * Connect is nothing, and a reconnect queued behind a Disconnect does not start the tunnel again.
+ */
+const tunnel = new Serial();
+
+/** The step under way while connecting or disconnecting, for the status card and the popover. */
+let transitionStep: string | null = null;
+
+/** Connecting or disconnecting: nothing that would start another is offered until it is done. */
+function working(): boolean {
+  return connection === "connecting" || connection === "disconnecting";
+}
+
+function connect(): Promise<void> {
+  return tunnel.run(connectNow);
+}
+
+function disconnect(): Promise<void> {
+  return tunnel.run(disconnectNow);
+}
+
+/**
+ * Starts the tunnel again so a change applies — a server, a mode, a block list — if it is up when
+ * its turn comes. Asked for several times while one waits, it is one reconnect: the settings it
+ * reads are the latest.
+ */
+function reconnect(): Promise<void> {
+  return tunnel.once("reconnect", async () => {
+    if (connection !== "on") return;
+    await disconnectNow();
+    await connectNow();
+  });
+}
+
+async function toggleConnection() {
+  if (working()) return;
+  if (connection === "on") await disconnect();
+  else await connect();
+}
+
+async function connectNow() {
+  if (connection !== "off") return;
   const blocked = blockedReason();
   if (blocked) {
     log(`[ui] refusing to connect: ${blocked}`);
@@ -1086,6 +1134,7 @@ async function connect() {
   }
 
   connection = "connecting";
+  transitionStep = "Starting the tunnel…";
   tunnelFault = null;
   tunnelEpoch++;
   exitPlace = null;
@@ -1103,20 +1152,34 @@ async function connect() {
     // Quick Connect's "Latest". Only once the tunnel is really up: a connect that failed was not
     // a connection, and should not become the thing offered first next time.
     if (running) store.markConnected(running, connectedAt);
-    connection = "on";
     log("[ui] tunnel started");
+    // Part of connecting, not something after it. Until it is set, "on" would claim the browsers
+    // are covered when they are not, and a Disconnect would have nothing it could safely undo.
+    if (wantsSystemProxy()) {
+      transitionStep = "Setting the system proxy…";
+      refresh();
+    }
+    await applySystemProxy();
+    connection = "on";
     void locateExit();
     // A list that could not be fetched directly is fetched now, through the tunnel.
     void syncBlockLists();
-    await applySystemProxy();
   } catch (e) {
     connection = "off";
     tunnelFault = `the connection could not start (${String(e)})`;
     log(`[ui] start failed: ${String(e)}`);
     // Surface the core's own words; it knows more about the failure than we do.
     readiness = readiness ? { ...readiness, ready: false, detail: String(e) } : readiness;
+  } finally {
+    transitionStep = null;
   }
   refresh();
+}
+
+/** Proxy mode, with the user's say-so to point the desktop's proxy setting at the listener. */
+function wantsSystemProxy(): boolean {
+  const current = store.settings();
+  return current.mode === "proxy" && current.systemProxy;
 }
 
 /**
@@ -1141,12 +1204,33 @@ async function applySystemProxy() {
   }
 }
 
-async function disconnect() {
+async function disconnectNow() {
+  if (connection !== "on") return;
+  // Said at once, before anything else is awaited: a button still reading Disconnect is a button
+  // clicked again.
+  connection = "disconnecting";
+  transitionStep = systemProxyOn ? "Restoring the system proxy…" : "Stopping the tunnel…";
+  refresh();
   // One last reading before the counters go away with the tunnel, so the seconds since the last
   // poll are counted too.
-  if (connection === "on") await sample();
+  await sample();
+
+  // The system proxy first. Pointed at a listener that is about to close, every app that follows
+  // it would lose the network for as long as stopping takes; put back, they go direct at once.
+  if (systemProxyOn) {
+    transitionStep = "Restoring the system proxy…";
+    refresh();
+    try {
+      await invoke("clear_system_proxy");
+    } catch (e) {
+      log(`[ui] could not restore the system proxy: ${String(e)}`);
+    }
+  }
+  transitionStep = "Stopping the tunnel…";
+  refresh();
   try {
-    // Restores the system proxy too, on the Rust side, so it cannot outlive the listener.
+    // Restores the system proxy too, on the Rust side, if it is still ours: no way of stopping
+    // may leave it pointing at a listener that is gone.
     await invoke("stop_tunnel");
     log("[ui] tunnel stopped");
   } catch (e) {
@@ -1159,6 +1243,7 @@ async function disconnect() {
   systemProxyOn = false;
   systemProxyError = null;
   connection = "off";
+  transitionStep = null;
   tunnelEpoch++;
   exitIps = null;
   exitPlace = null;
@@ -1264,16 +1349,6 @@ function watchMode() {
   readinessMode = mode;
   // The first sighting is the data file's load; readiness is asked once the core is up anyway.
   if (!first && coreReady) void refreshReadiness();
-}
-
-async function reconnect() {
-  await disconnect();
-  await connect();
-}
-
-async function toggleConnection() {
-  if (connection === "on") await disconnect();
-  else if (connection === "off") await connect();
 }
 
 async function poll() {

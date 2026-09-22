@@ -263,6 +263,17 @@ html.popover,
   box-shadow: none;
 }
 
+/* Working, not unavailable; see `.btn.busy` in styles.css. */
+.pv-toggle[aria-busy="true"]:disabled {
+  background: linear-gradient(145deg, var(--warn-fill), var(--warn));
+  color: #fff;
+  cursor: progress;
+}
+
+.pv-toggle .btn-spin {
+  margin-right: 0;
+}
+
 /* ---------------------------------------------------------------- search */
 
 .pv-search {

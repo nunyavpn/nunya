@@ -52,6 +52,13 @@ test("connecting again is not red", () => {
   assert.equal(shieldState(input({ connection: "connecting", fault: "earlier failure" })).tone, "connecting");
 });
 
+/** Stopping takes seconds too; the shield says it is under way rather than still green. */
+test("disconnecting is amber and says so", () => {
+  const shield = shieldState(input({ connection: "disconnecting" }));
+  assert.equal(shield.tone, "connecting");
+  assert.equal(shield.label, "Disconnecting…");
+});
+
 /** CLAUDE.md, Modes: only VPN mode speaks for the whole device. */
 test("proxy mode never claims the device", () => {
   const label = shieldState(input({ connection: "on", mode: "proxy", exit: { ipv4: "203.0.113.7", ipv6: null } })).label;

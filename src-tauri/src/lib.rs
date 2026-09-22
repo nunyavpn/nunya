@@ -46,8 +46,19 @@ struct AppState {
 ///
 /// Blocking — it runs the desktop's own tools — and safe to call when nothing was set, which is
 /// what lets every way out (disconnect, quit, a dead core) call it without keeping score.
+///
+/// The lock is held for the whole restore, as `set_system_proxy` holds it for the whole apply, so
+/// the two cannot interleave whoever calls them. They once could: each held it only to read or
+/// write the slot, and a restore that overtook an apply put the user's settings back and then had
+/// ours land on top — with the saved copy already deleted, so not even the next launch undid it.
 fn release_system_proxy(dir: &std::path::Path, slot: &std::sync::Mutex<Option<sysproxy::Saved>>) -> Result<(), String> {
-    let Some(saved) = slot.lock().unwrap_or_else(|p| p.into_inner()).take() else {
+    let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
+    restore_held(dir, &mut held)
+}
+
+/// The restore itself, for a caller that already holds the lock.
+fn restore_held(dir: &std::path::Path, held: &mut Option<sysproxy::Saved>) -> Result<(), String> {
+    let Some(saved) = held.take() else {
         return Ok(());
     };
     let result = sysproxy::restore(&saved);
@@ -251,16 +262,16 @@ async fn set_system_proxy(
     let dir = data_dir(&app)?;
     let slot = state.system_proxy.clone();
     tokio::task::spawn_blocking(move || {
-        {
-            let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
-            if held.is_none() {
-                let saved = sysproxy::capture()?;
-                sysproxy::write_saved(&dir, &saved)?;
-                *held = Some(saved);
-            }
+        // Held until ours are applied, not only while the user's are recorded; see
+        // `release_system_proxy`.
+        let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
+        if held.is_none() {
+            let saved = sysproxy::capture()?;
+            sysproxy::write_saved(&dir, &saved)?;
+            *held = Some(saved);
         }
         if let Err(e) = sysproxy::apply(port) {
-            let _ = release_system_proxy(&dir, &slot);
+            let _ = restore_held(&dir, &mut held);
             return Err(e);
         }
         log::info!("system proxy set to 127.0.0.1:{port}");
