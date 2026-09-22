@@ -1,4 +1,4 @@
-import { inTauri, invoke, listen } from "./bridge";
+import { hasBackend, inTauri, invoke, listen } from "./bridge";
 
 import { h, qs, render } from "./dom";
 import { size } from "./format";
@@ -265,7 +265,7 @@ function openQuickConnect() {
 
 /** Whether a Fastest pick's result is too old to trust without measuring again. */
 function isStale(server: Server): boolean {
-  return Date.now() - (server.testedAt ?? 0) > QUICK_STALE_MS && inTauri && coreReady;
+  return Date.now() - (server.testedAt ?? 0) > QUICK_STALE_MS && hasBackend && coreReady;
 }
 
 /**
@@ -372,7 +372,7 @@ async function checkBatch(snapshot: Server[]) {
   // Snapshotted: results come back by position, and a list that changed underneath would pin
   // measurements on the wrong servers.
   const servers = [...snapshot];
-  if (!servers.length || !inTauri) return;
+  if (!servers.length || !hasBackend) return;
   const ids = servers.map((s) => s.id);
   let done = 0;
   locations.setChecking(ids, true);
@@ -816,7 +816,7 @@ let tunnelEpoch = 0;
  * would be the exit dressed up as the user.
  */
 async function locateHome() {
-  if (!inTauri || connection !== "off") return;
+  if (!hasBackend || connection !== "off") return;
   const epoch = tunnelEpoch;
   try {
     const found = await invoke<Whereabouts>("locate_me");
@@ -2307,8 +2307,9 @@ void listen<boolean>("core-connection", async (connected) => {
 });
 
 void (async () => {
-  if (!inTauri) {
-    // Browser preview: no backend, so the UI renders in its "core not running" state.
+  if (!hasBackend) {
+    // Browser preview: no backend, so the UI renders in its "core not running" state. With
+    // VITE_MOCK=1 there is a simulated one instead (mockcore.ts), and this is skipped.
     log("[ui] running outside Tauri; the tunnel backend is unavailable");
     refresh();
     return;

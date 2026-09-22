@@ -2843,3 +2843,10 @@ button:disabled {
   align-self: flex-start;
 }
 
+
+/* The Add servers footer: "Add to Personal" keeps its width, and when the button's label is long
+   ("Add 1 subscription and 2 servers") the buttons move to a row of their own instead of squeezing
+   the destination into them. Scoped here: other sheets put whole sentences in the same slot. */
+.sheet.add .sheet-foot .gpick {
+  min-width: max-content;
+}

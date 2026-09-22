@@ -1,461 +1,223 @@
-# Nunya
+<p align="center">
+  <img src="docs/logo.png" width="112" height="112" alt="Nunya">
+</p>
 
-A TUN-only desktop VPN client for [nunya-core](https://github.com/nunyavpn/nunya-core), built as a
-Tauri v2 app.
+<h1 align="center">Nunya</h1>
 
-## What this is, and what it deliberately is not
+<p align="center">
+  <strong>A VPN client that is safe, fast, reliable, secure and easy to use.</strong><br>
+  One app for your VPN and proxy configs, from a single link to a subscription of hundreds.
+</p>
 
-Nunya supports one transport — TUN — and a small set of protocols. That constraint is the point:
-with no proxy mode there is no partial coverage, so "the device is in the tunnel" is a claim the UI
-can make honestly.
+<p align="center">
+  <a href="https://github.com/nunyavpn/nunya/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/nunyavpn/nunya/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="macOS and Linux" src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux-4c6ef5">
+  <img alt="Beta" src="https://img.shields.io/badge/status-beta-f59f00">
+  <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-2f9e44"></a>
+</p>
 
-It does not implement OTP, global hotkeys, speed tests, WARP registration, the dashboard installer,
-or diagnostics capture.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/main-dark.png">
+    <img src="docs/screenshots/main.png" width="880" alt="Nunya connected through a server in Helsinki: the server list, the route from the user to the exit on the map, and the status card with live traffic and the exit's address">
+  </picture>
+</p>
 
-Proxy mode has since been added alongside TUN — a local SOCKS/HTTP listener, optionally set as the
-desktop's system proxy while connected — for machines where a TUN cannot be had. It gives up the
-whole-device claim, and the UI says so rather than making it.
+<p align="center"><sub>Screenshots show made-up example servers.</sub></p>
 
-Both this repository and the core are forks of [Throne](https://github.com/throneproj/Throne),
-which is GPL-3.0; so is this.
+## Why Nunya
 
-## The two repositories
+Nunya connects you through the VPN and proxy servers you already have, whether that's links a
+provider sent you, a subscription or a WireGuard config, and tells you plainly what it's doing.
 
 | | |
 | --- | --- |
-| [nunyavpn/nunya](https://github.com/nunyavpn/nunya) | this one: the UI, config generation, share links, the transports |
-| [nunyavpn/nunya-core](https://github.com/nunyavpn/nunya-core) | the sing-box / Xray engine and its RPC surface |
-
-This repository does **not** build the core. It pins a core release in [`core.lock`](core.lock) and
-`scripts/fetch-core.sh` downloads that release's assets, verifying each one against a `SHA256SUMS`
-whose own digest is pinned in the lockfile. So a bad or re-cut release fails the check instead of
-being installed, and the RPC contract between the two repos is a published, versioned interface
-rather than a relative path into a sibling checkout.
-
-## Layout
-
-```text
-.
-├── core.lock             the nunya-core release this client builds against
-├── src/                  frontend (TypeScript, no framework)
-├── design/               the style guide, rendered from src/ (dev only, never bundled)
-├── src-tauri/
-│   ├── src/
-│   │   ├── main.rs           Tauri commands and startup sequence
-│   │   ├── config.rs         builds the sing-box config
-│   │   ├── core_proc.rs      spawns and supervises the core
-│   │   ├── transport/        the TunnelTransport seam
-│   │   └── rpc/              IPC client: codec, link, peer verification
-│   └── build.rs          generates prost types from vendor/core/proto/nunya.proto
-├── NunyaTunnel/          the macOS packet tunnel extension (Swift)
-├── project.yml           XcodeGen spec for that extension
-├── docker/               a Linux box for exercising the tunnel in its own netns
-├── scripts/
-│   ├── fetch-core.sh         install the pinned core (or build one from source)
-│   ├── build-app.sh          the full release build
-│   ├── build-extension.sh    the .appex, embedded into the bundle
-│   ├── dev-linux.sh          core + tunnel tests in a container, no root on the host
-│   └── dev-tunnel.sh         a tunnel that comes up without an Apple account
-└── vendor/core/          installed by fetch-core.sh, gitignored
-```
-
-## Prerequisites
-
-| Tool | Why |
-| --- | --- |
-| Rust (rustup) | the Tauri shell |
-| `protoc` | the Rust bindings generate from the core's proto |
-| Node 20+ | the frontend |
-| Go 1.26+ | only to build a core from source (`--source`); not needed to use a release |
-| XcodeGen + full Xcode | only for the macOS packet tunnel extension |
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-brew install protobuf xcodegen
-```
-
-## Building
-
-```bash
-npm install
-./scripts/fetch-core.sh     # installs the pinned core into vendor/core/
-npm run tauri dev
-```
-
-`fetch-core.sh` also stages the core as a Tauri sidecar, which is what lets `cargo check` and
-`tauri dev` run at all — Tauri refuses to build while the binary named in `externalBin` is missing.
-
-For a local bundle without the packet tunnel extension, as the CI release builds it:
-
-```bash
-npm run tauri build -- --bundles app,dmg        # macOS
-npm run tauri build -- --bundles deb,appimage   # Linux
-```
-
-For a release bundle with the packet tunnel extension:
-
-```bash
-./scripts/build-app.sh
-```
-
-### Filling the UI with test data
-
-Every screen is a list of things a provider gave you, so an empty store shows almost nothing. A
-fixture in `src/mock.ts` stands in:
-
-```bash
-VITE_MOCK=1 npm run tauri dev   # the app, with the list full
-VITE_MOCK=1 npm run dev         # the same UI in a browser, no Rust side at all
-```
-
-It covers the states that are otherwise awkward to reach by clicking: every latency grade, an
-unreachable server, an untested one, a subscription whose last refresh failed, a quota past the
-amber threshold, a collapsed group, a retired server — one a refresh dropped while the tunnel
-was running on it — and weeks of usage history on a few configs, so the usage charts have
-something to draw.
-
-Two things keep it out of the way of real data. Writes are discarded, so clicking through the
-fixture cannot overwrite the data file that holds your actual credentials; and `VITE_MOCK` is
-substituted at build time, so an ordinary `npm run build` drops the module entirely rather than
-shipping a list of plausible-looking servers. Every host in it is under `example.net`, which RFC
-2606 reserves so it can never be registered.
-
-### Tests
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml   # the Rust side
-npm test                                          # frontend logic, on Node's built-in runner
-```
+| **Safe** | Nunya never claims more than it covers. In VPN mode the whole device goes through the tunnel; in proxy mode it tells you exactly which apps are covered, and which aren't. |
+| **Fast** | Every server is tested end to end: how quickly it answers, and where your traffic really comes out. Quick Connect takes you to the fastest, the most used or the most recent. |
+| **Reliable** | A server only counts as working if traffic actually gets through it, and the shield in the corner turns red when a connection is up but nothing comes out of it. |
+| **Secure** | No account and no telemetry. Your servers stay on your device, the connection engine is a verified release, and the app and the engine check each other's identity. |
+| **Easy to use** | Paste a link or a subscription, scan a QR code, and connect. |
 
-`npm test` needs no dependency: Node runs the TypeScript directly. It covers the logic that decides
-whose traffic is whose — usage arithmetic, and which config a refreshed subscription entry is.
+## Features
 
-### The style guide
+- **Two ways to connect.** *VPN mode* carries the whole device. *Proxy mode* opens a local SOCKS and
+  HTTP port, and can set it as your system proxy while you're connected (macOS, GNOME and KDE),
+  putting your own settings back exactly when you disconnect.
+- **Every kind of link, in one box.** VLESS, VMess, Trojan and WireGuard links; subscriptions,
+  including Xray, sing-box and Clash configurations; import links; WireGuard configs; QR codes.
+- **Servers you can trust at a glance.** Each server is tested for latency and located by where its
+  traffic really exits, not by its name. Relays and CDN-fronted servers are marked as such.
+- **A live map.** Your location, the servers, and the route your connection takes.
+- **Quick Connect.** Choose the fastest server, the one you use most, or the one you used last.
+- **Usage.** How much each server and subscription has carried, day by day, beside what your
+  provider reports.
+- **Sharing.** Send a server to another device as a link or a QR code, or as a WireGuard config the
+  official WireGuard apps can scan.
+- **Bypass rules.** Keep chosen domains, addresses and ranges off the tunnel. Your local network
+  always is.
+- **Light and dark**, following your system.
 
-```bash
-npm run design
-```
+## A tour
 
-A page that renders the design system out of the app rather than describing it: the tokens are read
-from `src/styles.css` through the browser's own CSSOM, the icons are enumerated from
-`views/icons.ts`, and the status card is the real component mounted with a plain model. Both themes
-are shown side by side, because the app follows the system setting and has no switch of its own.
+### The main window
 
-It is dev-only — `vite build` takes just the root `index.html`, so nothing under `design/` is
-bundled. See [design/README.md](design/README.md).
+The **server list** on the left groups your servers by where they came from: the ones you added
+yourself, then each subscription, with its data allowance and when it was last updated. Each row
+shows the server's flag and city (where its traffic really comes out), how it connects, and its
+latency. The **map** shows you, your servers, and the route of your connection. The **status card**
+at the bottom shows the connection, live traffic, and the public address the internet sees.
 
-### Testing the tunnel without root
+**To connect:** pick a server in the list (or a dot on the map) and press **Connect**.
 
-```bash
-brew install colima docker && colima start --cpu 4 --memory 8   # once
-./scripts/dev-linux.sh
-```
+The icons down the left edge are the **status shield** (green connected, amber connecting, grey
+off, red not working), then the server list, bypass rules, settings, support, and diagnostics.
 
-Bringing a TUN up on your own machine means `sudo`, and it means rewriting the routing table you are
-currently using in order to assert something about routing. A container avoids both: the tunnel gets
-its own network namespace, so the table it takes over is the container's and it disappears when the
-container does. The privilege budget is `CAP_NET_ADMIN` plus `/dev/net/tun` — not `--privileged`,
-not root on the host, and nothing that outlives the process.
+### Adding servers
 
-The boundary is deliberately placed so that **the core stays a child process of the Rust side**,
-both inside the container. That keeps the unix socket local and means `rpc/peer.rs` verification is
-exercised unchanged on every run. Splitting GUI-here/core-there would have broken it: peer identity
-is a pid over a unix socket, and nothing survives being forwarded across a VM boundary.
+<p align="center"><img src="docs/screenshots/add-servers.png" width="420" alt="The Add servers sheet, having found a subscription, a WireGuard config and a VLESS server in pasted text"></p>
 
-`src-tauri/tests/tunnel_linux.rs` holds what this makes possible — that the tunnel takes the default
-route *and gives it back*, that a private range is not swallowed, that stopping a tunnel that never
-started leaves nothing behind. None of those can run on a developer's macOS machine without root.
+Press **+** above the list and paste whatever your provider gave you. One paste can hold several
+things at once, and Nunya sorts them before anything is added:
 
-This does not run the UI. Tauri on Linux renders through WebKitGTK, and forwarding that to macOS
-over X11 is a worse loop than the browser one already available — work on the interface with
-`VITE_MOCK=1 npm run tauri dev` on the host.
+- **Share links**: `vless://`, `vmess://`, `trojan://`, `wireguard://`
+- **Subscriptions**: an `https://` address, or a panel's *import to sing-box / Clash* link. Each
+  gets its own group, which you can update later.
+- **WireGuard configs**: the `[Interface]` / `[Peer]` text the WireGuard apps export
 
-### Working on the core at the same time
+Anything Nunya can't run yet is named, with the reason, rather than silently dropped. The **QR
+code** tab reads a code from a screenshot or an image, and **Manual** lets you fill in a server by
+hand. New servers are tested and located straight away.
 
-```bash
-./scripts/fetch-core.sh --source ../nunya-core
-```
+### Quick Connect
 
-This builds the core from a local checkout instead of downloading it, and needs Go. The result is a
-**development** core: its parent-process check is compiled out, because the parent of a dev build is
-`cargo` rather than `Nunya`. `build-app.sh` refuses to put one in a bundle, and no such build is
-ever published — a downloadable core with its parent check off is a root-capable binary anything on
-the machine could drive.
+<p align="center"><img src="docs/screenshots/quick-connect.png" width="420" alt="The Quick Connect prompt offering the fastest, the most used and the most recent server"></p>
 
-### Moving to a new core release
+**Quick Connect**, at the top of the list, lets you choose by what matters this time:
 
-```bash
-./scripts/fetch-core.sh --update v0.2.0    # rewrites core.lock; commit it
-```
+- **Fastest**: the lowest latency among servers that passed their last test. If that result is
+  old, the fastest few are tested again first.
+- **Most used**: the server that carried the most data in the last 30 days.
+- **Most recent**: the server you were last connected to.
 
-## How the client talks to the core
+### Checking servers
 
-Despite the `service NunyaCoreService` block in the core's `proto/nunya.proto`, **nothing on the
-wire is gRPC**. `rpc.Serve` in the core's `internal/rpc/dispatch.go` reads two little-endian frames
-over a unix socket and dispatches through a `map[string]handlerFn`:
+Servers are tested when they're added and whenever their subscription updates. To test one again,
+use its **⋯** menu → **Check**. A test measures latency *and* makes a real request through the
+server, so the flag shows where your traffic actually comes out. A server that relays through
+another country shows both, as in "via NL". A dash means untested or unreachable; hover over it to
+see why.
 
-```text
-request   [u32 id][u16 method_len][method][u32 payload_len][protobuf]
-response  [u32 id][u8  status    ][u32 payload_len][protobuf or error text]
-```
+### Usage
 
-The proto file exists to generate message types for both sides. `src-tauri/src/rpc/codec.rs`
-implements the framing and is unit-tested against the layout above.
+<p align="center"><img src="docs/screenshots/usage.png" width="420" alt="The usage of a subscription: totals for 30 days and all time, a daily chart, and a breakdown by server"></p>
 
-### The link is backwards from what you would expect
+Press the chart button on a subscription, or choose **⋯ → Usage** on a server, to see what it has
+carried: the last 30 days and all time, a daily chart, and, for a subscription, each server's
+share. Where the provider reports your allowance, its figure is shown too. Usage is counted on your
+device only, and is kept for as long as the server is in your list.
 
-The GUI **listens** and the core **dials in**. `RunCore` in the core's `main.go` reads
-`NUNYA_CORE_SOCKET` and connects. So startup order is bind → spawn → accept, and the core is a
-child process of the app.
+### Sharing a server
 
-### Both ends verify each other
+<p align="center"><img src="docs/screenshots/share.png" width="420" alt="The Share sheet with a QR code and the server's share link"></p>
 
-The core refuses to talk to a listener whose owning process is not its own parent, by reading
-`LOCAL_PEERPID` off the socket (the core's `internal/ipc/ipc_unix.go`). It also refuses to run at all
-unless its parent executable is named `Nunya` and sits in the same directory
-(the core's `internal/parentcheck`).
+**⋯ → Share** shows a server as a QR code and a link, ready to scan on a phone or import in Nunya on
+another device. A WireGuard server can also be shared as a WireGuard config, which the official
+WireGuard apps scan. A share link contains the server's credentials, so share it only with people
+you'd give access to.
 
-Nothing checked the other direction, so this client adds the symmetric check in
-`src-tauri/src/rpc/peer.rs`: on accept, the peer's uid must be ours or root, and its pid must be the
-core we spawned. Without it, any local process that won the race to the socket could impersonate the
-core and report a healthy tunnel that did not exist.
+### Settings: VPN or proxy
 
-The socket is created inside a `0700` directory and set to `0600`.
+<p align="center"><img src="docs/screenshots/settings.png" width="720" alt="The Advanced settings in proxy mode: port, Allow LAN, Set system proxy, and the DNS resolver"></p>
 
-### Development builds disable the parent check
+- **Proxy mode** (the default) opens a SOCKS and HTTP port on your machine (2080 unless you change
+  it). Apps you point at it go through the connection. Turn on **Set system proxy** to point your
+  desktop's proxy setting at it while you're connected; your previous setting comes back when you
+  disconnect. Apps that ignore the system proxy aren't covered, and Nunya says so.
+- **VPN mode** carries all of the device's traffic through the tunnel. It needs system privileges
+  this beta doesn't set up for you yet: on macOS, the signed system extension, and on Linux,
+  network-admin rights for the engine. Both are coming in later releases.
+- **Allow LAN** lets other devices on your network use the proxy. **DNS** sets the resolver used
+  inside the connection.
 
-A core built with `fetch-core.sh --source` carries the `noparentcheck` tag, because during
-development the parent is `cargo` rather than `Nunya`. Every published core enforces the check.
+Settings apply when you connect, so they're locked while a connection is running.
 
-## Privilege: the macOS tunnel is a real system VPN
+### Bypass rules
 
-Nunya uses Apple's NetworkExtension framework, the same mechanism WireGuard, Mullvad, NordVPN and
-Tailscale use. The system creates the utun and launches a bundled packet tunnel extension; nothing
-runs as root, nothing is setuid, and the VPN appears in System Settings > VPN beside every other
-VPN. The user approves it once, through the standard system prompt.
+<p align="center"><img src="docs/screenshots/rules.png" width="720" alt="Bypass rules for domains, an address and a range, beside the local network ranges that are always bypassed"></p>
 
-```text
-Nunya.app/Contents/
-├── MacOS/Nunya                     UI only, unprivileged
-└── PlugIns/NunyaTunnel.appex/      system-launched, holds the utun
-    └── NunyaCore.xcframework       the core's mobile package, linked in
-```
+Anything matching a bypass rule leaves on your normal connection: a domain (with or without
+`*.`), an address, or a range such as `10.0.0.0/8`. Your local network is always bypassed.
 
-This replaces the Qt client's approach, which makes the core setuid-root by way of an `osascript`
-call that opens Terminal.app (`src/sys/macos/MacOS.cpp`). A setuid-root binary any local process can
-exec is a privilege-escalation surface, and it is why that build's README carries an apology about
-quarantine attributes.
+### Diagnostics
 
-### How the core takes a TUN it did not create
+The pulse icon at the bottom of the left edge shows the engine's log, the state of the connection
+and your data, and the exact configuration a server would run with. It's the place to look first
+when something doesn't connect, and what to include in a bug report.
 
-`PlatformInterface.OpenTun` in the core's `mobile/platform.go` returns a *file descriptor*, and
-its `mobile/service.go` dups it into `options.FileDescriptor`. That is exactly the
-NEPacketTunnelProvider contract, and it is already how the Android build works. The Darwin half of
-it lives in the core's `mobile/sys_darwin.go`.
-
-Finding the descriptor is indirect: `NEPacketTunnelFlow` exposes no fd, so the provider scans its
-own open descriptors for the one that is a `utunN` kernel-control socket — the approach WireGuard's
-Apple clients use. The core independently validates what it is handed, by checking the socket is a
-kernel control and the name really begins with `utun`. That check matters: `getsockopt` on an
-unrelated descriptor can *succeed* and return garbage (an `AF_UNIX` socket yields `"Sc"`), which
-without validation would be passed to sing-box as a real interface name.
-
-### Building the Apple side
-
-```bash
-./scripts/fetch-core.sh                # installs NunyaCore.xcframework into vendor/core/apple/
-npm run tauri build -- --bundles app --config src-tauri/tauri.networkextension.conf.json
-./scripts/build-extension.sh           # the .appex, embedded into the bundle
-```
-
-`./scripts/build-app.sh` runs all three in order.
-
-The NetworkExtension entitlements (`Nunya.entitlements`) are merged in only here, from
-`src-tauri/tauri.networkextension.conf.json`. They need an Apple Developer team's signature, and
-macOS kills an app that claims them without one, so the default build (and the CI release) is
-ad-hoc signed without them and runs its core as a child process. The xcframework is fetched only
-when the pinned core release publishes one.
-
-`build-extension.sh` generates the Xcode project from `project.yml` (via XcodeGen — do not edit the
-`.xcodeproj`, it is generated and gitignored), builds the extension, and copies it into
-`Contents/PlugIns`.
-
-Two things that are easy to lose an afternoon to:
-
-- **gomobile generates a class *and* a protocol for every Go interface.** Swift resolves the bare
-  name to the class, so the protocol needs the `Protocol` suffix: `MobilePlatformInterfaceProtocol`,
-  `MobileTunOptionsProtocol`, and so on. Swift also renames some members on import
-  (`usePlatformAutoDetectInterfaceControl` becomes `usePlatformAutoDetectControl`).
-- **Go's `net` package resolves through cgo on Darwin**, which needs `res_9_ninit`, `res_9_nsearch`
-  and `res_9_nclose` from libresolv. `project.yml` adds `-lresolv`; without it the link fails with
-  three undefined symbols and no hint as to why.
-
-### What is still required to actually run it
-
-Signing. `NUNYA_TEAM_ID=<your team> ./scripts/build-extension.sh` signs the extension; the team
-must have the NetworkExtension capability enabled for both bundle identifiers. That capability comes
-only with a paid Apple Developer Program membership — a Personal Team cannot sign it, and an
-unsigned Network Extension will not load, so there is no way to test the tunnel first and sign it
-later.
-
-Unsigned, everything still compiles, and `NetworkExtensionTransport` reports the system's own error
-rather than pretending.
-
-## Developing without an Apple Developer account
-
-You do not need one to work on this. `TunnelTransport` has two implementations and the choice is an
-environment variable:
-
-```bash
-./scripts/dev-linux.sh                        # preferred: a real tunnel, no root on your machine
-./scripts/dev-tunnel.sh                       # last resort: runs the whole app under sudo
-NUNYA_TRANSPORT=networkextension npm run tauri dev   # once the extension can be signed
-```
-
-Reach for `dev-linux.sh` first. `dev-tunnel.sh` elevates the *entire app* — WebKit webview,
-frontend and all — when only the core needs to create a utun, and because it uses `sudo -E` it
-inherits your `HOME`: the moment that root instance saves, `data.json` becomes root-owned and your
-normal unprivileged instance silently fails every write afterwards.
-
-`dev-tunnel.sh` builds a development core from `../nunya-core` (override with `NUNYA_CORE_SRC`),
-builds everything unprivileged and then runs the app under `sudo` for that one
-session, because creating a utun needs root and the system is not doing it for us yet. Nothing
-privileged is left behind: no setuid bit, no installed daemon, nothing that outlives the process.
-
-That last point is the reason it uses `sudo` rather than `chmod u+s` on the core, which is what the
-Qt client does. A setuid-root binary stays root-owned and executable by any local process for as
-long as it is on disk; a `sudo` run ends when you quit.
-
-The transport default is deliberately `subprocess` — see `transport/select.rs`. Defaulting to
-NetworkExtension before it can be signed would leave anyone without a membership looking at a
-tunnel that silently never starts.
-
-When the membership arrives: sign the extension, flip `NUNYA_TRANSPORT`, and nothing above the
-trait changes.
-
-## Replacing the core
-
-The core is reached through exactly two seams, both narrow on purpose:
-
-- `rpc/` speaks the framing above, generated from the pinned `proto/nunya.proto`. Any core that implements `Start`, `Stop`, `CheckConfig` and
-  `QueryStats` over that protocol is a drop-in.
-- `config.rs` generates sing-box JSON, which is the one place that assumes *which* core is running.
-
-Writing a different core means reimplementing the protocol, or replacing `SubprocessTransport` with
-one that speaks something else entirely. Nothing in the UI, the share-link parser or the bypass
-rules depends on the core being this one.
-
-## The transport seam
-
-`src-tauri/src/transport/` holds one trait, `TunnelTransport`, with a platform implementation
-behind it. Everything above it — config generation, share-link parsing, the UI — is shared.
-
-| Platform | Mechanism | Core runs as | Privilege |
-| --- | --- | --- | --- |
-| macOS | `NEPacketTunnelProvider` in a bundled `.appex` | a linked library | none; the system owns the utun |
-| Windows | a service with WinTun | a subprocess | the service |
-| Linux | systemd unit or `CAP_NET_ADMIN` | a subprocess | capability on the core |
-
-The subprocess transport is implemented and tested; the NetworkExtension one is a skeleton.
-
-## Status
-
-Working and tested: the toolchain, the split core build and its checksum-pinned install, the IPC codec with peer verification, config
-generation, config validation against a real core, connect/disconnect, throughput polling, per-config
-usage history with daily charts, a Quick Connect prompt offering the fastest, most used or most recent config, VLESS and
-VMess, Trojan and WireGuard parsing over every transport the core implements, subscriptions in
-both formats below, the transport seam, and the core's Darwin TUN-descriptor support.
-
-Written but not yet buildable: the Swift packet tunnel provider and the `.xcframework` build, both
-blocked on Xcode and an Apple Developer account.
-
-Not yet built: the Xcode target that produces and embeds the `.appex`, `NETunnelProviderManager`
-wiring, bypass rules in the UI, the menu-bar popover,
-protocols beyond the four above, multi-hop chains, and bundled fonts (the CSP forbids remote font hosts, so Manrope
-has to ship with the bundle).
-
-### Subscriptions
-
-A subscription URL goes into the same box as share links; an `https://` line is taken as a
-subscription and gets its own group, which is then refreshable. So is a panel's import link —
-`sing-box://import-remote-profile?url=…` or `clash://install-config?url=…` — which wraps the real
-address and is unwrapped each time it is fetched. Several body formats are in circulation and
-nothing in the headers tells them apart, so they are distinguished by content:
+## Supported protocols
 
 | | |
 | --- | --- |
-| A list of share links | one per line, plain or base64-encoded. The common case. |
-| A JSON Xray configuration, or an array of them | what a BPB panel serves to `?app=xray`: each entry is a whole client config — inbounds, routing, DNS — wrapped around a single `proxy` outbound. |
-| A sing-box configuration | what BPB serves to `?app=sing-box`: every server is an outbound (or, for WireGuard, an endpoint), beside groups that are skipped. |
-| A Clash configuration in JSON | what BPB serves to `?app=clash`: every server is in `proxies`. Clash YAML is refused by name. |
+| **Protocols** | VLESS, VMess, Trojan, WireGuard (Cloudflare WARP included) |
+| **Transports** | TCP, WebSocket, gRPC, HTTP/2, HTTPUpgrade, QUIC |
+| **Security** | TLS and Reality, with browser fingerprints and ALPN |
+| **Subscriptions** | lists of share links (plain or base64), Xray, sing-box and Clash (JSON) configurations, and sing-box and Clash import links |
+| **Coming** | Shadowsocks, Hysteria2, TUIC, SSH, AmneziaWG, proxy chains, and more ([roadmap](#roadmap)) |
 
-The configurations are rewritten back into share links in `subscription.rs`, all through one
-writer, so the three forms of one subscription import identically, everything downstream is
-unchanged, and rejections are still reported entry by entry.
+## Privacy and security
 
-Two decisions inside that are easy to get wrong. A configuration with no outbound tagged `proxy`
-is a load balancer — BPB's "Best Ping" carries `proxy-1` through `proxy-8` behind a `leastPing`
-selector — and is skipped rather than flattened, because the servers behind it are already listed
-individually in the same array and flattening imports each of them twice. And protocols this build
-cannot run are emitted anyway, under their own scheme, so a Trojan entry comes back named rather
-than missing: a subscription that quietly returned four of its eight servers, with nothing to say
-why, would be worse than one that explains itself.
+- **No account, no telemetry, no analytics.**
+- **Your data stays on your device.** Servers, subscriptions and usage are stored in a file only
+  your user account can read. A subscription address is treated as the credential it is.
+- **A verified engine.** Nunya runs a pinned release of [nunya-core](https://github.com/nunyavpn/nunya-core),
+  checked against its published checksums, and the app and the engine verify each other's
+  identity when they connect.
+- **Honest coverage.** The app only says you're protected when the whole device is in the tunnel.
+- **Location lookups.** To place servers on the map, Nunya asks public IP-location services where
+  your servers' addresses are, and where your own public address is, to draw your dot. The map
+  itself is drawn from data inside the app; no map service is contacted.
 
-That second rule covers protocols whose shape is unfamiliar too, not just unfamiliar names. A WARP
-subscription is entirely WireGuard, which keeps its endpoint under `peers` where every other
-protocol uses `servers` — so every entry falls through the address lookup. Emitting a marker link
-under the protocol's own scheme is what turns "the subscription returned nothing that looks like a
-server list" into "WireGuard is not supported yet".
+## Installing
 
-### Protocols and transports
+Nunya is in **beta**. Builds are published on the
+[Releases](https://github.com/nunyavpn/nunya/releases) page, each with a `SHA256SUMS` to check your
+download against.
 
-| | |
-| --- | --- |
-| Protocols | VLESS, VMess (both share-link forms, including the base64 blob), Trojan, WireGuard |
-| Transports | TCP, WebSocket, gRPC, HTTP/2, HTTPUpgrade, QUIC |
-| Security | none, TLS, Reality, with uTLS fingerprints and ALPN |
-| Rejected by name | mKCP, XHTTP, SplitHTTP, meek — the core has no implementation, and silently downgrading one to TCP would connect to the wrong thing |
-| Also rejected by name | multi-hop chains. One outbound dialling through another is a topology this client has no way to express, and reducing one to its last hop would connect somewhere the entry's own name contradicts |
-| Not yet | Shadowsocks, Hysteria2, TUIC — separate outbound types rather than another transport |
+- **macOS** (Apple Silicon, macOS 12 or later): open the `.dmg` and drag Nunya into Applications.
+  The beta isn't signed by an Apple Developer account yet, so the first time you open it, go to
+  **System Settings → Privacy & Security** and choose **Open Anyway**.
+- **Linux** (x86-64 and arm64): install the `.deb` with `sudo apt install ./Nunya_<version>_<arch>.deb`,
+  or make the `.AppImage` executable and run it.
+- **Windows**: planned ([#34](https://github.com/nunyavpn/nunya/issues/34)).
 
-WireGuard is the one that is not an outbound at all. sing-box moved it to `endpoints`, because it
-is an interface with its own addresses rather than a dialer, and the core rejects the old outbound
-form outright (*unknown field "local_address"*). `config::proxy_node` is where that fork lives, so
-the route table names a tag and does not care which of the two produced it. Cloudflare WARP works
-through this path, `reserved` client id included — a wrong `reserved` is dropped by the server
-without an error, so it is carried rather than treated as optional decoration.
+This beta is built around **proxy mode**, on both platforms. VPN mode follows once the app can set
+up the privileges it needs: the signed system extension on macOS, network-admin rights on Linux.
 
-Each transport is validated against a real core in
-`src-tauri/tests/core_link.rs::every_transport_is_accepted_by_the_core`, because the shape this
-client emits and the shape sing-box accepts differ in ways unit tests here cannot see — `host` is a
-string for HTTPUpgrade and a list for HTTP/2, and plain TCP means *no* `transport` key rather than
-an empty one.
+## Roadmap
 
+- More protocols: Shadowsocks, Hysteria2, TUIC, SSH, AmneziaWG, and more
+- Proxy chains, routing rules and a built-in ad blocker
+- VPN mode out of the box on macOS and Linux, and Windows support
+- Cloudflare WARP: create and register configs from the app
+- On the server side: **nunya-server-core** (Docker), **nunya-cluster** (auto-scaling across nodes)
+  and **nunya-server-panel** (config and user management)
 
-## Releasing
+Follow along, or suggest something, in the [issues](https://github.com/nunyavpn/nunya/issues).
 
-A release is a tag. Bump the version in `package.json`, `src-tauri/tauri.conf.json` and
-`src-tauri/Cargo.toml`, merge that to `main`, then:
+## Contributing
 
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-[`release.yml`](.github/workflows/release.yml) refuses a tag that isn't on `main` or doesn't match
-the version. It builds a **macOS arm64** `.dmg` (and a zipped `.app`) plus **Linux x86-64 and arm64**
-`.deb` and `.AppImage`, each against the core pinned in `core.lock`, and publishes them with a
-`SHA256SUMS` as a GitHub release. Versions below 1.0, and tags with a suffix (`v0.2.0-beta.1`), are
-marked pre-release.
-
-The macOS build is ad-hoc signed, not notarised: the first time it's opened, macOS asks the user to
-allow it in **System Settings → Privacy & Security → Open Anyway**. A signed, notarised build with
-the packet tunnel extension (VPN mode on macOS) needs an Apple Developer account; that's
-`build-app.sh`. Windows isn't built yet (#34).
+Bug reports, ideas and pull requests are welcome. Building from source, running in development and
+mock modes, tests, and how the app is put together are all in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 ## Supporting Nunya
 
 Nunya is free and open source. Donations are being set up, through two channels only: **Buy Me a
 Coffee** and **crypto wallets**. They will be listed here and in the app's Support panel (the heart
-in the rail) once they are open.
+in the left edge) once they are open.
 
 Until then, and anywhere else afterwards, anyone asking for payment in Nunya's name is not us.
+
+## License
+
+Nunya is free software under the [GNU General Public License v3.0](LICENSE). It began as a fork of
+[Throne](https://github.com/throneproj/Throne).
