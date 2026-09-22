@@ -6,6 +6,7 @@ pub mod config;
 pub mod core_proc;
 pub mod external;
 pub mod geo;
+mod netwatch;
 pub mod rpc;
 pub mod storage;
 pub mod subscription;
@@ -782,6 +783,7 @@ pub fn run() {
             });
 
             hide_on_close(app.handle());
+            netwatch::spawn(app.handle().clone());
 
             Ok(())
         })

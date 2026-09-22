@@ -48,6 +48,7 @@ import { StatusCard, type ConnectionState, type PlaceLine } from "./views/status
 import { ProfileEditor } from "./views/editor";
 import { qrCode, readQrCode } from "./views/qr";
 import { quickOptions } from "./views/quickpick";
+import { Splash } from "./views/splash";
 import { SupportPanel } from "./views/support";
 import { shortDate, usageBody } from "./views/usage";
 
@@ -983,12 +984,37 @@ interface Whereabouts {
 let tunnelEpoch = 0;
 
 /**
- * Finds the user's own public address and where it is, for the map's first dot.
+ * Finds the user's own public address and where it is, for the map's first dot: at launch, after
+ * every disconnect, and when the network changes (`netwatch.rs`).
  *
  * Only with the tunnel down: in VPN mode a direct request goes through the tunnel, and the answer
  * would be the exit dressed up as the user.
+ *
+ * Asked again while a lookup is under way — a disconnect and a network change together — it looks
+ * once more when that one is done rather than running two at once: the later answer is about the
+ * network the machine is on now.
  */
-async function locateHome() {
+function locateHome(): Promise<void> {
+  if (homeLookup) {
+    homeAgain = true;
+    return homeLookup;
+  }
+  homeLookup = (async () => {
+    do {
+      homeAgain = false;
+      await lookUpHome();
+    } while (homeAgain);
+  })().finally(() => {
+    homeLookup = null;
+  });
+  return homeLookup;
+}
+
+/** The lookup under way, and whether another was asked for meanwhile; see `locateHome`. */
+let homeLookup: Promise<void> | null = null;
+let homeAgain = false;
+
+async function lookUpHome() {
   if (!hasBackend || connection !== "off") return;
   const epoch = tunnelEpoch;
   try {
@@ -2598,6 +2624,13 @@ function paintRail() {
 
 // ---------------------------------------------------------------- boot
 
+// First, before anything else is drawn behind it; see `views/splash.ts`.
+const splash = new Splash(qs("#splash"));
+
+/** The core is up, for the splash; resolved by whichever of the two paths below hears it first. */
+let coreCameUp: () => void = () => {};
+const coreUp = new Promise<void>((resolve) => (coreCameUp = resolve));
+
 paintRail();
 
 // The status card, the map and the tray all render from the store but, unlike the list, are not
@@ -2611,11 +2644,13 @@ darkScheme.addEventListener("change", () => refresh());
 store.subscribe(watchBlockSwitches);
 store.subscribe(watchMode);
 
-void (async () => {
+const dataLoaded = (async () => {
   // Rendering before the data arrives would flash an empty list on every launch.
   await store.load();
   locations.render();
   refresh();
+  // A data file that would not load is for the window to say at once, not after an animation.
+  if (store.storageError) splash.leave();
 })();
 
 void listen<string>("core-log", (line) => {
@@ -2626,6 +2661,14 @@ void listen<string>("core-log", (line) => {
     tunnelDevice = match[1];
     refresh();
   }
+});
+
+// A new network is a new place to draw routes from. With the tunnel up the lookup would go
+// through it, and a disconnect looks again anyway.
+void listen<null>("network-changed", () => {
+  if (connection !== "off") return;
+  log("[ui] the network changed; finding where this machine is now");
+  void locateHome();
 });
 
 // The tray menu's Connect/Disconnect; it runs exactly what the status card's button does.
@@ -2641,6 +2684,7 @@ void listen<boolean>("core-connection", async (connected) => {
   log(`[ui] core ${coreReady ? "connected" : "disconnected"}`);
 
   if (coreReady) {
+    coreCameUp();
     await refreshReadiness();
     void syncBlockLists();
   } else if (connection !== "off") {
@@ -2662,23 +2706,32 @@ void listen<boolean>("core-connection", async (connected) => {
   refresh();
 });
 
+// Independent of the core: a direct request from the Rust side. Nothing to ask without a backend.
+const placed = hasBackend ? locateHome() : Promise.resolve();
+
 void (async () => {
   if (!hasBackend) {
     // Browser preview: no backend, so the UI renders in its "core not running" state. With
     // VITE_MOCK=1 there is a simulated one instead (mockcore.ts), and this is skipped.
     log("[ui] running outside Tauri; the tunnel backend is unavailable");
+    coreCameUp();
     refresh();
     return;
   }
-  // Independent of the core: it is a direct request from the Rust side.
-  void locateHome();
   coreReady = await invoke<boolean>("core_connected").catch(() => false);
   if (coreReady) {
+    coreCameUp();
     await refreshReadiness();
     void syncBlockLists();
   }
   refresh();
 })();
+
+void splash.wait([
+  { line: "Loading your servers…", done: dataLoaded },
+  { line: "Starting the engine…", done: coreUp },
+  { line: "Finding where you are…", done: placed },
+]);
 
 setInterval(() => void poll(), 1000);
 // A list goes stale during a long session too; this fetches only the ones that have.

@@ -2887,3 +2887,175 @@ button:disabled {
 .sheet.add .sheet-foot .gpick {
   min-width: max-content;
 }
+
+/* ---------------------------------------------------------------- splash */
+
+/* The launch cover (views/splash.ts). In index.html from the first paint, so its field is here and
+   not added by the script: the empty window never shows. Above everything, sheets included. */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background:
+    radial-gradient(circle at 50% 42%, var(--brand-soft), transparent 58%),
+    var(--ground);
+  /* LEAVE_MS in splash.ts. */
+  transition:
+    opacity 0.45s ease,
+    visibility 0.45s;
+}
+
+.splash.gone {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.splash-mark {
+  width: 132px;
+  height: 132px;
+  overflow: visible;
+  transition: transform 0.45s cubic-bezier(0.5, 0, 0.75, 0);
+}
+
+/* Leaving, it flies into the tunnel as it fades. */
+.splash.gone .splash-mark {
+  transform: scale(1.6);
+}
+
+/* Drawn as an outline first, then filled: `pathLength` is 1, so the dash runs the whole outline. */
+.splash-arch,
+.splash-road {
+  fill: url(#splash-ink);
+  fill-opacity: 0;
+  stroke: url(#splash-ink);
+  stroke-width: 0.35;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+.splash-arch {
+  animation:
+    splash-draw 1s cubic-bezier(0.6, 0, 0.2, 1) forwards,
+    splash-fill 0.5s 0.8s ease forwards;
+}
+
+/* Out of the tunnel once the arch is most of the way round. */
+.splash-road {
+  animation:
+    splash-draw 0.9s 0.45s cubic-bezier(0.6, 0, 0.2, 1) forwards,
+    splash-fill 0.5s 1.1s ease forwards;
+}
+
+@keyframes splash-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes splash-fill {
+  to {
+    fill-opacity: 1;
+  }
+}
+
+/* Rings receding into the tunnel, one after another, for as long as the splash is up. */
+.splash-ring {
+  fill: none;
+  stroke: url(#splash-ink);
+  stroke-width: 0.3;
+  opacity: 0;
+  transform-box: view-box;
+  /* The tunnel's centre on the mark's grid: TUNNEL in splash.ts. */
+  transform-origin: 12px 11px;
+  animation: splash-recede 2.6s linear infinite;
+}
+
+@keyframes splash-recede {
+  0% {
+    transform: scale(1);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(0.08);
+    opacity: 0;
+  }
+}
+
+/* A light passing over the finished mark, now and then. */
+.splash-sheen {
+  opacity: 0;
+  animation: splash-sheen 2.8s 1.6s ease-in-out infinite;
+}
+
+@keyframes splash-sheen {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  55%,
+  100% {
+    transform: translateX(40px);
+    opacity: 1;
+  }
+}
+
+.splash-word {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  opacity: 0;
+  animation: splash-rise 0.6s 0.9s ease forwards;
+}
+
+.splash-line {
+  min-height: 1.5em;
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0;
+  animation: splash-rise 0.5s 1.1s ease forwards;
+}
+
+@keyframes splash-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The finished mark, still: nothing drawn, nothing receding, nothing flying. */
+@media (prefers-reduced-motion: reduce) {
+  .splash-arch,
+  .splash-road,
+  .splash-ring,
+  .splash-sheen,
+  .splash-word,
+  .splash-line {
+    animation: none;
+  }
+  .splash-arch,
+  .splash-road {
+    stroke-dashoffset: 0;
+    fill-opacity: 1;
+  }
+  .splash-word,
+  .splash-line {
+    opacity: 1;
+  }
+  .splash.gone .splash-mark {
+    transform: none;
+  }
+}
