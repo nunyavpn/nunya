@@ -759,15 +759,19 @@ pub fn prefer_trace(plain_asn: Option<u32>, trace_asn: Option<u32>) -> bool {
 
 /// Endpoints that place an address, or the caller when given none.
 ///
-/// A chain for the same reason as `COUNTRY_URLS`: free tiers run out. HTTPS first, since unlike a
-/// country code this answer is a city, and the plain-HTTP fallback is kept only because it has
-/// outlived the others' quotas before.
-const PLACE_URLS: [fn(Option<&str>) -> String; 3] = [
+/// Several for the same reason as `COUNTRY_URLS`: free tiers run out. HTTPS first, since unlike a
+/// country code this answer is a city, and the plain-HTTP one is kept because it has outlived the
+/// others' quotas before.
+///
+/// `api.ip.sb` is here for networks that filter: it sits behind Cloudflare, which the networks
+/// this client is for cannot block wholesale — too much of their own web is behind it.
+const PLACE_URLS: [fn(Option<&str>) -> String; 4] = [
     |ip| format!("https://ipwho.is/{}", ip.unwrap_or("")),
     |ip| match ip {
         Some(ip) => format!("https://ipinfo.io/{ip}/json"),
         None => "https://ipinfo.io/json".to_string(),
     },
+    |ip| format!("https://api.ip.sb/geoip/{}", ip.unwrap_or("")),
     |ip| {
         format!(
             "http://ip-api.com/json/{}?fields=status,query,countryCode,city,lat,lon,as",
@@ -819,8 +823,8 @@ fn whereabouts_from(body: &str) -> Option<Whereabouts> {
         return None;
     }
 
-    // ipwho.is gives the number and the name apart; ipinfo and ip-api give one string,
-    // "AS13335 Cloudflare, Inc.", which is split here.
+    // ipwho.is gives the number and the name apart, and so does ip.sb, with names of its own;
+    // ipinfo and ip-api give one string, "AS13335 Cloudflare, Inc.", which is split here.
     let as_string = text(&["org", "as"]);
     let org = v
         .get("connection")
@@ -829,6 +833,7 @@ fn whereabouts_from(body: &str) -> Option<Whereabouts> {
         .map(str::trim)
         .filter(|o| !o.is_empty())
         .map(str::to_string)
+        .or_else(|| text(&["asn_organization", "organization", "isp"]))
         .or_else(|| {
             let s = as_string.as_deref()?;
             // Drop the leading "AS13335 "; a string with no number in front is already a name.
@@ -842,6 +847,7 @@ fn whereabouts_from(body: &str) -> Option<Whereabouts> {
         .get("connection")
         .and_then(|c| c.get("asn"))
         .and_then(|a| a.as_u64())
+        .or_else(|| v.get("asn").and_then(|a| a.as_u64()))
         .and_then(|a| u32::try_from(a).ok())
         .or_else(|| {
             let org = text(&["org", "as"])?;
@@ -864,28 +870,73 @@ fn whereabouts_from(body: &str) -> Option<Whereabouts> {
 ///
 /// "Directly" means over whatever route the OS has: with a VPN-mode tunnel up that is the tunnel,
 /// so asking about `None` then answers for the exit. The frontend relies on exactly that.
+///
+/// **Asking where *this machine* is asks every endpoint at once** and takes the first answer.
+/// One at a time is right for placing servers' exits — dozens of addresses, and the free tiers to
+/// spare — but this is one address, once a launch, and on a filtered network the endpoints that
+/// are blocked do not refuse: they hang until the timeout. Asked in turn, two blocked endpoints
+/// cost ten seconds before a reachable one is even tried, which is longer than the launch waits.
 pub fn whereabouts(ip: Option<&str>) -> Result<Whereabouts, String> {
-    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+    match ip {
+        Some(ip) => in_turn(ip),
+        None => all_at_once(),
+    }
+}
 
+fn ask(agent: &ureq::Agent, target: &str, ip: Option<&str>) -> Result<Whereabouts, String> {
+    let response = agent
+        .get(target)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(status, _) => format!("{target} returned {status}"),
+            e => format!("{target}: {e}"),
+        })?;
+    let body = response
+        .into_string()
+        .map_err(|e| format!("could not read {target}: {e}"))?;
+    match whereabouts_from(&body) {
+        // An answer about some other address is not an answer. A service that ignores the path —
+        // rate-limited, or misreading an IPv6 literal — describes the *caller*, and this once
+        // filed the user's own location as a server's exit.
+        Some(found) if !answers_for(ip, &found.ip) => {
+            Err(format!("{target} answered about {} instead", found.ip))
+        }
+        Some(found) => Ok(found),
+        None => Err(format!("{target} did not say where")),
+    }
+}
+
+fn in_turn(ip: &str) -> Result<Whereabouts, String> {
+    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
     let mut last = String::from("no endpoint was tried");
     for url in PLACE_URLS {
-        let target = url(ip);
-        match agent.get(&target).call() {
-            Ok(response) => match response.into_string() {
-                Ok(body) => match whereabouts_from(&body) {
-                    // An answer about some other address is not an answer. A service that ignores
-                    // the path — rate-limited, or misreading an IPv6 literal — describes the
-                    // *caller*, and this once filed the user's own location as a server's exit.
-                    Some(found) if !answers_for(ip, &found.ip) => {
-                        last = format!("{target} answered about {} instead", found.ip);
-                    }
-                    Some(found) => return Ok(found),
-                    None => last = format!("{target} did not say where"),
-                },
-                Err(e) => last = format!("could not read {target}: {e}"),
-            },
-            Err(ureq::Error::Status(status, _)) => last = format!("{target} returned {status}"),
-            Err(e) => last = format!("{target}: {e}"),
+        match ask(&agent, &url(Some(ip)), Some(ip)) {
+            Ok(found) => return Ok(found),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+fn all_at_once() -> Result<Whereabouts, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    for url in PLACE_URLS {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+            // The receiver is gone once an answer has been taken; the rest finish unheard.
+            let _ = tx.send(ask(&agent, &url(None), None));
+        });
+    }
+    drop(tx);
+
+    let mut last = String::from("no endpoint answered");
+    // Ends when every endpoint has answered or failed, since each sender is dropped with its
+    // thread; the first success leaves at once.
+    for outcome in rx {
+        match outcome {
+            Ok(found) => return Ok(found),
+            Err(e) => last = e,
         }
     }
     Err(last)
@@ -1188,6 +1239,37 @@ mod tests {
     ///
     ///     NUNYA_LIVE_PROXY=2080 cargo test --manifest-path src-tauri/Cargo.toml \
     ///       live_exit -- --ignored --nocapture
+    /// Where this machine is, asked of every endpoint at once, as a launch does it. Needs the
+    /// network, so it is ignored by default:
+    ///
+    ///     cargo test --manifest-path src-tauri/Cargo.toml live_place -- --ignored --nocapture
+    ///
+    /// Also says which endpoints answer from here, which is the question when one of them starts
+    /// failing for a whole country.
+    #[test]
+    #[ignore]
+    fn live_place_of_this_machine() {
+        let raced = std::time::Instant::now();
+        let found = super::whereabouts(None);
+        println!("all at once: {:?} in {:?}", found, raced.elapsed());
+        assert!(found.is_ok());
+
+        let agent = ureq::AgentBuilder::new().timeout(super::REQUEST_TIMEOUT).build();
+        for url in super::PLACE_URLS {
+            let target = url(None);
+            let at = std::time::Instant::now();
+            let one = super::ask(&agent, &target, None);
+            println!(
+                "{target}: {} in {:?}",
+                match &one {
+                    Ok(place) => format!("{}, {}", place.country, place.city.as_deref().unwrap_or("—")),
+                    Err(e) => e.clone(),
+                },
+                at.elapsed()
+            );
+        }
+    }
+
     #[test]
     #[ignore]
     fn live_exit_through_a_running_tunnel() {
@@ -1220,6 +1302,18 @@ mod tests {
             whereabouts_from(body),
             Some(place("2001:db8::1", "NL", Some("Amsterdam"), 52.37, 4.89))
         );
+    }
+
+    /// ip.sb spells the network as a number of its own and names it separately; it is the one
+    /// endpoint here chosen for reaching through a filtered network, so its shape is guarded.
+    #[test]
+    fn ip_sb_answers_are_read_including_its_network() {
+        let body = r#"{"ip":"203.0.113.9","country_code":"IR","city":"Tehran","latitude":35.69,"longitude":51.42,"asn":58224,"asn_organization":"Telecommunication Infrastructure Company","isp":"TIC"}"#;
+        let found = whereabouts_from(body).expect("read");
+        assert_eq!(found.country, "IR");
+        assert_eq!(found.city.as_deref(), Some("Tehran"));
+        assert_eq!(found.asn, Some(58224));
+        assert_eq!(found.org.as_deref(), Some("Telecommunication Infrastructure Company"));
     }
 
     #[test]

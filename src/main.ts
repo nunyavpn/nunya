@@ -1014,19 +1014,75 @@ function locateHome(): Promise<void> {
 let homeLookup: Promise<void> | null = null;
 let homeAgain = false;
 
+/**
+ * Whether a lookup would answer about *this machine* right now.
+ *
+ * With a VPN-mode tunnel up a direct request goes through it, and the answer is the exit dressed
+ * up as the user. Proxy mode carries only what is pointed at the listener, and these requests are
+ * the Rust side's own, so they leave on the physical link even while connected — which is how a
+ * machine whose launch lookup failed is placed at all, once its user has connected.
+ */
+function canLocateHome(): boolean {
+  return connection === "off" || (connection === "on" && store.settings().mode === "proxy");
+}
+
+/**
+ * How long to wait before looking again after a failure, growing to the last and staying there.
+ *
+ * The services that place an address are blocked on some of the networks this client is for, and
+ * not always the same ones from one minute to the next: a lookup that failed is worth repeating,
+ * and a machine with no network at all must not be asking every second.
+ */
+const HOME_RETRY_MS = [1500, 3000, 6000, 12000, 30000, 60000];
+let homeTries = 0;
+let homeRetry: ReturnType<typeof setTimeout> | null = null;
+
+/** Resolved the first time this machine is placed; the splash waits for it. */
+let homePlaced: () => void = () => {};
+const homeIsPlaced = new Promise<void>((resolve) => (homePlaced = resolve));
+
 async function lookUpHome() {
-  if (!hasBackend || connection !== "off") return;
+  if (!hasBackend || !canLocateHome()) return;
   const epoch = tunnelEpoch;
   try {
     const found = await invoke<Whereabouts>("locate_me");
-    if (epoch !== tunnelEpoch || connection !== "off") return;
+    if (epoch !== tunnelEpoch || !canLocateHome()) return;
     home = found;
     log(`[ui] this machine is in ${found.city ?? found.country}`);
     store.forgetExitsAt(found.ip);
+    homeTries = 0;
+    homePlaced();
     refresh();
   } catch (e) {
     log(`[ui] could not find this machine's location: ${String(e)}`);
+    retryHome();
   }
+}
+
+/** Looks again after a while, for as long as it keeps failing. */
+function retryHome() {
+  if (homeRetry !== null || !canLocateHome()) return;
+  const wait = HOME_RETRY_MS[Math.min(homeTries, HOME_RETRY_MS.length - 1)];
+  homeTries += 1;
+  splash.say(
+    homeTries > 1
+      ? "Still looking for where you are…"
+      : "Finding where you are — the first service did not answer…",
+  );
+  homeRetry = setTimeout(() => {
+    homeRetry = null;
+    void locateHome();
+  }, wait);
+}
+
+/** A new network is a new question, so the waiting starts over. */
+function locateHomeNow() {
+  if (homeRetry !== null) {
+    clearTimeout(homeRetry);
+    homeRetry = null;
+  }
+  homeTries = 0;
+  void locateHome();
 }
 
 /**
@@ -1276,7 +1332,8 @@ async function disconnectNow() {
   shownRate = { uplink: 0, downlink: 0 };
   refresh();
   // Asked again rather than remembered: the tunnel may have been up across a change of network.
-  void locateHome();
+  // From the start: an earlier failure may have been the tunnel's doing, not the network's.
+  locateHomeNow();
 }
 
 // ---------------------------------------------------------------- blocking
@@ -2666,9 +2723,9 @@ void listen<string>("core-log", (line) => {
 // A new network is a new place to draw routes from. With the tunnel up the lookup would go
 // through it, and a disconnect looks again anyway.
 void listen<null>("network-changed", () => {
-  if (connection !== "off") return;
+  if (!canLocateHome()) return;
   log("[ui] the network changed; finding where this machine is now");
-  void locateHome();
+  locateHomeNow();
 });
 
 // The tray menu's Connect/Disconnect; it runs exactly what the status card's button does.
@@ -2707,7 +2764,9 @@ void listen<boolean>("core-connection", async (connected) => {
 });
 
 // Independent of the core: a direct request from the Rust side. Nothing to ask without a backend.
-const placed = hasBackend ? locateHome() : Promise.resolve();
+// The splash waits for the answer, not for the attempt: on a filtered network the first try often
+// fails, and `retryHome` keeps asking.
+const placed = hasBackend ? (void locateHome(), homeIsPlaced) : Promise.resolve();
 
 void (async () => {
   if (!hasBackend) {
