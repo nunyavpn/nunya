@@ -315,8 +315,8 @@ mode it names what the listener covers, never the device.
 ### The tray icon
 
 The rail shield is also the tray icon, in the macOS menu bar and the Linux top bar — the way
-OpenVPN's changes colour — with a menu of the server, the status, Connect/Disconnect, Show and
-Quit ([tray.rs](src-tauri/src/tray.rs)). The menu owns no connection logic: Connect emits
+OpenVPN's changes colour — with, on Linux, a menu of the server, the status, Connect/Disconnect,
+Show and Quit, and on macOS the popover below ([tray.rs](src-tauri/src/tray.rs)). The menu owns no connection logic: Connect emits
 `tray-toggle` and the frontend runs `toggleConnection`; the frontend reports every change through
 `set_tray_status` (`syncTray` in `main.ts`).
 
@@ -336,14 +336,22 @@ brings the window back on macOS. The style guide shows all four states in both a
 
 ### The menu-bar popover (macOS)
 
-A left click on the tray icon opens a panel under it, NordVPN's shape: the connection and a big
-switch, the server, Quick Connect, a search over the configs, Proxy / VPN, and the two blockers. A
-right click still opens the menu, and Linux keeps only the menu, since a StatusNotifierItem gets no
-clicks to anchor a panel to. [popover.rs](src-tauri/src/popover.rs) makes the window: created with
-the tray and hidden (a webview that loads on the click opens half a second late), transparent
-(`macOSPrivateApi`, so the page draws the rounded panel and its shadow inside `MARGIN`, which must
-match `--margin` in `popover.css`), hidden again on losing focus, with `REOPEN_GUARD` so the click
-that closed it by taking focus does not reopen it.
+A click on the tray icon opens a panel under it, NordVPN's shape: the connection and a big
+switch, the server, Quick Connect, a search over the configs, Proxy / VPN, and the two blockers.
+Linux keeps the menu, since a StatusNotifierItem gets no clicks to anchor a panel to.
+
+**On macOS the status item carries no menu at all.** On macOS 27 a menu attached to it takes every
+click, the left one included, before tray-icon sees it: the popover never opened and the menu did,
+whatever `show_menu_on_left_click` said. tray-icon 0.25.1 fixes that (it attaches the menu only
+while showing it), but Tauri 2 is held to 0.24. So the macOS `install` builds the item without
+one, and either button opens the popover, which carries everything the menu did. Revisit a
+right-click menu when Tauri moves to tray-icon 0.25.
+
+[popover.rs](src-tauri/src/popover.rs) makes the window: created with the tray and hidden (a
+webview that loads on the click opens half a second late), transparent (`macOSPrivateApi`, so the
+page draws the rounded panel and its shadow inside `MARGIN`, which must match `--margin` in
+`popover.css`), hidden again on losing focus, with `REOPEN_GUARD` so the click that closed it by
+taking focus does not reopen it.
 
 **It owns no state.** It is a second webview, and a store of its own would be a second writer to
 the data file. The main window builds a `PopoverModel` ([popover-build.ts](src/popover-build.ts))

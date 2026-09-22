@@ -87,7 +87,7 @@ On a **Mac**, click it to open a panel with everything you need day to day: the 
 big button to turn it on or off, the server you're on, **Quick Connect** (fastest, most used, most
 recent), a search over your configs, the **Proxy / VPN** switch, and the **Ad blocker** and
 **Anti-tracker**. Changing the server, the mode or a blocker while connected reconnects with the
-change. Right-click the icon for a short menu.
+change.
 
 On **Linux**, click it for a menu with the selected server, the status, and **Connect** or
 **Disconnect**.
