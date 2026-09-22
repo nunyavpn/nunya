@@ -78,10 +78,22 @@ off, red not working), then the server list, bypass rules, settings, support, an
 
 ### In the menu bar
 
+<p align="center"><img src="docs/screenshots/popover.png" width="340" alt="The menu-bar popover: Proxy running on FI-1 Helsinki with a Disconnect button, a search box, Quick Connect's three choices, and the mode, ad blocker and anti-tracker switches"></p>
+
 The same shield sits in the macOS menu bar and the Linux top bar, in the same colours, so you can
-see the connection with the window closed. Click it for the selected server, the status, and
-**Connect** or **Disconnect**. Closing the window leaves the connection running: bring the window
-back with **Show Nunya** (or the Dock icon on a Mac), and use **Quit Nunya** to stop.
+see the connection with the window closed.
+
+On a **Mac**, click it to open a panel with everything you need day to day: the connection and a
+big button to turn it on or off, the server you're on, **Quick Connect** (fastest, most used, most
+recent), a search over your configs, the **Proxy / VPN** switch, and the **Ad blocker** and
+**Anti-tracker**. Changing the server, the mode or a blocker while connected reconnects with the
+change. Right-click the icon for a short menu.
+
+On **Linux**, click it for a menu with the selected server, the status, and **Connect** or
+**Disconnect**.
+
+Closing the window leaves the connection running: bring the window back from the panel or the menu
+(or with the Dock icon on a Mac), and use **Quit** to stop.
 
 On Linux the icon needs `libayatana-appindicator3`, and GNOME needs its AppIndicator extension.
 Without them there is no icon, and closing the window quits Nunya as before.

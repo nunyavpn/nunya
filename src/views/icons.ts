@@ -27,6 +27,20 @@ const ICONS: Record<string, Icon> = {
   "shield-alert": {
     paths: ["M12 3 19.5 6v6c0 4.4-3.2 7.8-7.5 9-4.3-1.2-7.5-4.6-7.5-9V6Z", "M12 8.2v4.3", "M12 15.6h.01"],
   },
+  // The popover's blockers: ads refused, tracking not seen.
+  ban: { paths: ["M6 6 18 18"], circles: [[12, 12, 8.5]] },
+  "eye-off": {
+    paths: ["M3 12s3.5-6.5 9-6.5 9 6.5 9 6.5-3.5 6.5-9 6.5S3 12 3 12Z", "M4.5 4.5l15 15"],
+    circles: [[12, 12, 2.8]],
+  },
+  // Out of the popover and into the window.
+  open: {
+    paths: [
+      "M14 4h6v6",
+      "M20 4l-8.5 8.5",
+      "M19 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-12A1.5 1.5 0 0 1 4 18.5v-12A1.5 1.5 0 0 1 5.5 5H10",
+    ],
+  },
   globe: {
     paths: [
       "M3.5 12h17",

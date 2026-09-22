@@ -24,9 +24,9 @@
 //! the old behaviour — closing quits — rather than a hidden window with nothing to bring it back.
 //!
 //! Everything is a menu item because a Linux tray (StatusNotifierItem via libayatana-appindicator)
-//! delivers no click events on the icon itself: a left click opens the menu, and that is all. macOS
-//! shows the same menu on a click, as OpenVPN and Tunnelblick do; a popover anchored to the icon
-//! could replace it later without changing anything the frontend sends.
+//! delivers no click events on the icon itself: a left click opens the menu, and that is all. On
+//! macOS a left click opens the popover instead (`popover.rs`), and the menu moves to a right
+//! click, where it stays as the quick way to Show or Quit.
 
 use std::sync::OnceLock;
 
@@ -121,7 +121,7 @@ fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Resu
         ],
     )?;
 
-    let icon = TrayIconBuilder::with_id("main")
+    let builder = TrayIconBuilder::with_id("main")
         .icon(icon)
         .icon_as_template(template)
         .menu(&menu)
@@ -135,8 +135,28 @@ fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Resu
             // exactly as when the last window closes.
             QUIT => app.exit(0),
             _ => {}
-        })
-        .build(app)?;
+        });
+
+    #[cfg(target_os = "macos")]
+    let builder = {
+        crate::popover::create(app)?;
+        builder
+            .show_menu_on_left_click(false)
+            .on_tray_icon_event(|tray, event| {
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    rect,
+                    ..
+                } = event
+                {
+                    crate::popover::toggle(tray.app_handle(), rect);
+                }
+            })
+    };
+
+    let icon = builder.build(app)?;
 
     Ok(Tray {
         icon,

@@ -151,6 +151,9 @@ In the browser, `src/mockcore.ts` answers what the Rust side would, so the whole
 on without a Tauri window: connecting and disconnecting, live traffic, the exit on the map, server
 checks and Quick Connect. The README's screenshots are taken this way.
 
+The menu-bar popover is a page of its own: open `/popover.html` on the same server. With no main
+window to talk to there, `src/popover-preview.ts` plays its part against the same fixture.
+
 Two things keep all of this away from real data. Writes are discarded, so clicking through the
 fixture cannot overwrite the data file that holds your actual credentials. And `VITE_MOCK` is
 substituted at build time, so an ordinary `npm run build` drops both modules entirely rather than

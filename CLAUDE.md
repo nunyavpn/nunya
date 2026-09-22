@@ -334,6 +334,36 @@ before the shield. Closing the window hides it only once the tray is up (`tray::
 a hidden window with no icon leaves a tunnel nobody can reach. The Dock icon (`RunEvent::Reopen`)
 brings the window back on macOS. The style guide shows all four states in both appearances.
 
+### The menu-bar popover (macOS)
+
+A left click on the tray icon opens a panel under it, NordVPN's shape: the connection and a big
+switch, the server, Quick Connect, a search over the configs, Proxy / VPN, and the two blockers. A
+right click still opens the menu, and Linux keeps only the menu, since a StatusNotifierItem gets no
+clicks to anchor a panel to. [popover.rs](src-tauri/src/popover.rs) makes the window: created with
+the tray and hidden (a webview that loads on the click opens half a second late), transparent
+(`macOSPrivateApi`, so the page draws the rounded panel and its shadow inside `MARGIN`, which must
+match `--margin` in `popover.css`), hidden again on losing focus, with `REOPEN_GUARD` so the click
+that closed it by taking focus does not reopen it.
+
+**It owns no state.** It is a second webview, and a store of its own would be a second writer to
+the data file. The main window builds a `PopoverModel` ([popover-build.ts](src/popover-build.ts))
+and sends it with `emitTo`; the popover sends back `PopoverIntent`s
+([popover-model.ts](src/popover-model.ts)), which `onPopoverIntent` in `main.ts` answers through
+the window's own paths — `toggleConnection`, `quickConnect` (shared with the Quick Connect prompt),
+`connectTo`. The model carries names, places and words, never a profile, so credentials do not
+travel to a webview that has no use for them. It is built only while the popover is showing
+(`hello` with `shown`, and `popover-hidden` from Rust): Quick Connect's picks are worked out over
+the whole list. Search runs in the main window too, which answers with at most `RESULTS_MAX`
+matches through `serverMatches`, the list's own rule.
+
+Unlike the Advanced panel, its mode and blocker switches work while connected: they reconnect, as
+choosing a server does. A blocker whose list is not on disk yet is the exception — `syncBlockLists`
+fetches it through the tunnel and reconnects when it lands. A mode change, from either place,
+re-asks readiness (`watchMode`), since the answer is about one mode.
+
+`VITE_MOCK=1 npm run dev` then `/popover.html` previews it in a browser; `popover-preview.ts` plays
+the main window against the fixture with the real `popoverModel`, and is dropped from other builds.
+
 ### Locating servers (the flags)
 
 The flag beside a server used to be guessed from the share link's name — whatever the provider
@@ -694,10 +724,9 @@ is an unknown field the core refuses outright, so `proxy_outbound` sets the cred
 Blocked on Xcode and an Apple Developer account: the Swift packet tunnel provider, the
 `.xcframework` build, the `.appex` target, `NETunnelProviderManager` wiring.
 
-Not yet built: bypass rules in the UI, a menu-bar popover in place of the tray's plain menu,
-protocols beyond VLESS and VMess (Trojan, Shadowsocks, Hysteria2, TUIC are separate outbound types,
-not more transports), and bundled fonts — the CSP forbids remote font hosts, so Manrope must ship in
-the bundle.
+Not yet built: bypass rules in the UI, protocols beyond VLESS and VMess (Trojan, Shadowsocks,
+Hysteria2, TUIC are separate outbound types, not more transports), and bundled fonts — the CSP
+forbids remote font hosts, so Manrope must ship in the bundle.
 
 ### Subscriptions
 

@@ -13,7 +13,7 @@
  */
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emitTo as tauriEmitTo, listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { MOCK_CORE, mockInvoke, mockListen } from "./mockcore";
 
@@ -42,4 +42,13 @@ export async function listen<T>(
   if (!inTauri && MOCK_CORE) return mockListen(event, (payload) => handler(payload as T));
   if (!inTauri) return null;
   return tauriListen<T>(event, (e) => handler(e.payload));
+}
+
+/**
+ * Sends an event to one webview; the main window and the menu-bar popover talk to each other this
+ * way. Outside Tauri there is no other webview, so it goes nowhere.
+ */
+export async function emitTo(target: string, event: string, payload: unknown): Promise<void> {
+  if (!inTauri) return;
+  await tauriEmitTo(target, event, payload);
 }

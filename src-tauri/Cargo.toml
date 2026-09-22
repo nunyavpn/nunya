@@ -20,7 +20,10 @@ prost-build = "0.13"
 cc = "1"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# `macos-private-api`: the menu-bar popover is a transparent window, which on macOS Tauri can
+# only make through a private AppKit call (see `popover.rs`). This app is not sold through the
+# App Store, which is what that API would rule out.
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = [
