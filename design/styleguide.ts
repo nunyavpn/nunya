@@ -26,6 +26,8 @@ import { bars as barCount, latency as gradeLatency, size } from "../src/format";
 import { h, render } from "../src/dom";
 import { describe } from "../src/share";
 import { place } from "../src/geo";
+import { shieldState, type ShieldInput } from "../src/shield";
+import { trayIcon, type TokenReader } from "../src/trayicon";
 import { ICON_NAMES, icon } from "../src/views/icons";
 import { StatusCard, type ConnectionState } from "../src/views/status";
 import type { Server } from "../src/store";
@@ -262,6 +264,60 @@ function iconsSection() {
         h("div", { class: "sg-icon" }, icon(name, 22), h("span", {}, name)),
       ),
     ),
+  );
+}
+
+// ---------------------------------------------------------------- tray
+
+/** One input per tone, run through the real `shieldState`, so no glyph choice is restated here. */
+const TRAY_INPUTS: [string, ShieldInput][] = [
+  ["connected", { connection: "on", mode: "vpn", fault: null, exit: { ipv4: "192.0.2.4", ipv6: null } }],
+  ["connecting", { connection: "connecting", mode: "vpn", fault: null, exit: null }],
+  ["not working", { connection: "on", mode: "vpn", fault: null, exit: { ipv4: null, ipv6: null, failed: "timeout" } }],
+  ["off", { connection: "off", mode: "vpn", fault: null, exit: null }],
+];
+
+/** The real tray icon's pixels, put back on a canvas at the size the bar draws them. */
+function trayCanvas(input: ShieldInput, token: TokenReader, px: number): HTMLCanvasElement {
+  const drawn = trayIcon(shieldState(input), token);
+  const canvas = document.createElement("canvas");
+  canvas.width = drawn.width;
+  canvas.height = drawn.height;
+  canvas.style.width = canvas.style.height = `${px}px`;
+  canvas.getContext("2d")?.putImageData(new ImageData(Uint8ClampedArray.from(drawn.rgba), drawn.width), 0, 0);
+  if (drawn.template) canvas.classList.add("template");
+  return canvas;
+}
+
+function trayBar(caption: string, theme: "light" | "dark", token: TokenReader) {
+  return h(
+    "div",
+    { class: "sg-tray-row" },
+    h("span", {}, caption),
+    h(
+      "div",
+      { class: `sg-bar ${theme}` },
+      ...TRAY_INPUTS.map(([, input]) => trayCanvas(input, token, 18)),
+      h("span", {}, "Tue 14:02"),
+    ),
+  );
+}
+
+function traySection(tokens: Tokens) {
+  const light: TokenReader = (name) => tokens.light.get(name) ?? "";
+  const dark: TokenReader = (name) => darkValue(tokens, name);
+  return section(
+    "Tray icon",
+    "The rail shield as the menu bar and the top bar show it, drawn by trayicon.ts from the same glyphs and tokens: filled with the mark cut out when it means something, an outline when off. On macOS off is a template image, which the system draws in the menu bar's own colour — emulated here.",
+    h(
+      "div",
+      { class: "sg-tray-big" },
+      ...TRAY_INPUTS.map(([name, input]) =>
+        h("figure", { style: "margin:0" }, trayCanvas(input, light, 72), h("figcaption", {}, name)),
+      ),
+    ),
+    trayBar("macOS · light", "light", light),
+    trayBar("macOS · dark", "dark", dark),
   );
 }
 
@@ -598,6 +654,7 @@ function main() {
     elevationSection(tokens),
     typeSection(tokens),
     iconsSection(),
+    traySection(tokens),
     componentsSection(),
   );
 }

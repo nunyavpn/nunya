@@ -23,8 +23,9 @@ import {
   wgQuickRefusal,
   type Profile,
 } from "./share";
-import { shieldState } from "./shield";
+import { shieldState, type Shield } from "./shield";
 import { SUPPORT } from "./support";
+import { trayIcon } from "./trayicon";
 import { advance, firstDay, total, type Bytes } from "./usage";
 import { icon } from "./views/icons";
 import { BypassPanel } from "./views/bypass";
@@ -515,8 +516,13 @@ function refresh() {
 
   const { pins, route } = buildMap(server);
   map.setPins(pins, route);
-  syncTray(server, blockedReason() === null);
-  paintShield();
+  const shield = currentShield();
+  paintShield(shield);
+  syncTray(server, blockedReason() === null, shield);
+}
+
+function currentShield(): Shield {
+  return shieldState({ connection, mode: store.settings().mode, fault: tunnelFault, exit: exitIps });
 }
 
 /** What the shield last showed, so the once-a-second refresh does not rebuild it. */
@@ -526,8 +532,7 @@ let shieldShown = "";
  * The shield at the top of the rail: whether the tunnel is working, on every screen, since the
  * panels that replace the list hide the status card's detail. See `shield.ts` for the states.
  */
-function paintShield() {
-  const shield = shieldState({ connection, mode: store.settings().mode, fault: tunnelFault, exit: exitIps });
+function paintShield(shield = currentShield()) {
   const shown = `${shield.tone}|${shield.glyph}|${shield.label}`;
   if (shown === shieldShown) return;
   shieldShown = shown;
@@ -541,13 +546,18 @@ function paintShield() {
 /** What was last sent to the tray, so the once-a-second uptime refresh does not resend it. */
 let trayShown = "";
 
+/** The tray icon's colours are the theme's tokens, so a change of appearance changes the icon. */
+const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+
 /**
- * Mirrors the connection into the Linux top-bar menu (`tray.rs`), which owns no state of its own.
+ * Mirrors the connection into the tray (`tray.rs`), which owns no state of its own: the menu's
+ * lines, and the rail shield as its icon (`trayicon.ts`).
  *
  * The same honesty rule as the status card applies: proxy mode carries only what is pointed at
- * the listener, so its line names the listener instead of claiming the machine is connected.
+ * the listener, so its line names the listener instead of claiming the machine is connected, and
+ * the tooltip is the shield's label, which is held to the same rule.
  */
-function syncTray(server: Server | undefined, canConnect: boolean) {
+function syncTray(server: Server | undefined, canConnect: boolean, shield: Shield) {
   const settings = store.settings();
   const detail =
     connection === "on" && settings.mode === "proxy"
@@ -555,16 +565,27 @@ function syncTray(server: Server | undefined, canConnect: boolean) {
       : null;
   const args = {
     state: connection,
+    tone: shield.tone,
     server: server ? serverName(server) : null,
     detail,
+    label: shield.label,
     canConnect,
   };
 
-  const key = JSON.stringify(args);
+  const key = JSON.stringify({ ...args, dark: darkScheme.matches });
   if (key === trayShown) return;
   trayShown = key;
-  invoke("set_tray_status", args).catch(() => {
-    // Outside Tauri, or not on Linux: there is no tray to update.
+
+  let icon;
+  try {
+    icon = trayIcon(shield);
+  } catch (e) {
+    // This runs inside refresh(); a throw here would stop the status card updating too.
+    log(`[ui] could not draw the tray icon: ${String(e)}`);
+    return;
+  }
+  invoke("set_tray_status", { ...args, icon }).catch(() => {
+    // Outside Tauri, or a desktop with no tray: the window is the whole UI.
   });
 }
 
@@ -2260,6 +2281,8 @@ paintRail();
 // picked from the list or the map — on the next connect or the next once-a-second tick, and the
 // tick only runs while connected, so a disconnected selection never reached the status card.
 store.subscribe(() => refresh());
+// Nor do they hear the system switch between light and dark, which recolours the tray icon.
+darkScheme.addEventListener("change", () => refresh());
 
 void (async () => {
   // Rendering before the data arrives would flash an empty list on every launch.
@@ -2278,7 +2301,7 @@ void listen<string>("core-log", (line) => {
   }
 });
 
-// The Linux top-bar menu's Connect/Disconnect; it runs exactly what the status card's button does.
+// The tray menu's Connect/Disconnect; it runs exactly what the status card's button does.
 void listen<null>("tray-toggle", () => void toggleConnection());
 
 void listen<boolean>("core-connection", async (connected) => {

@@ -48,6 +48,8 @@ provider sent you, a subscription or a WireGuard config, and tells you plainly w
 - **Servers you can trust at a glance.** Each server is tested for latency and located by where its
   traffic really exits, not by its name. Relays and CDN-fronted servers are marked as such.
 - **A live map.** Your location, the servers, and the route your connection takes.
+- **In the menu bar.** A shield in the macOS menu bar or the Linux top bar shows the connection at
+  a glance, and connects or disconnects without opening the window.
 - **Quick Connect.** Choose the fastest server, the one you use most, or the one you used last.
 - **Usage.** How much each server and subscription has carried, day by day, beside what your
   provider reports.
@@ -71,6 +73,16 @@ at the bottom shows the connection, live traffic, and the public address the int
 
 The icons down the left edge are the **status shield** (green connected, amber connecting, grey
 off, red not working), then the server list, bypass rules, settings, support, and diagnostics.
+
+### In the menu bar
+
+The same shield sits in the macOS menu bar and the Linux top bar, in the same colours, so you can
+see the connection with the window closed. Click it for the selected server, the status, and
+**Connect** or **Disconnect**. Closing the window leaves the connection running: bring the window
+back with **Show Nunya** (or the Dock icon on a Mac), and use **Quit Nunya** to stop.
+
+On Linux the icon needs `libayatana-appindicator3`, and GNOME needs its AppIndicator extension.
+Without them there is no icon, and closing the window quits Nunya as before.
 
 ### Adding servers
 

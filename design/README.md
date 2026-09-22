@@ -16,6 +16,7 @@ three out of the running app:
 | Every colour, shadow and font token | `src/styles.css`, via the browser's own CSSOM |
 | Every icon | `ICON_NAMES` in `src/views/icons.ts` |
 | The status card, in four states | `StatusCard` itself, mounted with a plain model |
+| The tray icon, in four states and both appearances | `trayIcon` and `shieldState`, fed each theme's tokens |
 | Rows, group headers, quota bars, controls | the real classes and the real `place` / `latency` / `bars` helpers |
 
 So there is no second copy of the design to keep in step. Add a token to `styles.css` and it shows
