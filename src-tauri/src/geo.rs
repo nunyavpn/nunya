@@ -112,8 +112,11 @@ pub struct Spot {
 ///
 /// Both, because either can be missing: the country-only fallback lookup reports no network, and
 /// a provider's ranges are not the whole of its network (Cloudflare's WARP egress is outside its
-/// published list). The ranges are the providers' own: cloudflare.com/ips and Fastly's public IP
-/// list.
+/// published list). The ranges are the providers' own: Cloudflare's are kept, with everything
+/// else about its edges, in `cloudflare.rs`; Fastly's are its public IP list.
+///
+/// Being Cloudflare's says nothing about *where*: an anycast address is answered by whichever
+/// data center is nearest the asker. `cloudflare::observe` finds that out.
 pub fn cdn_of(ip: &str, asn: Option<u32>) -> Option<&'static str> {
     match asn {
         Some(13335 | 209242) => return Some("cloudflare"),
@@ -122,23 +125,14 @@ pub fn cdn_of(ip: &str, asn: Option<u32>) -> Option<&'static str> {
         None => {}
     }
     let addr: std::net::IpAddr = ip.parse().ok()?;
-    let within = |ranges: &[&str]| ranges.iter().any(|r| in_range(addr, r));
-    if within(&CLOUDFLARE_RANGES) {
+    if crate::cloudflare::owner(addr).is_some() {
         Some("cloudflare")
-    } else if within(&FASTLY_RANGES) {
+    } else if FASTLY_RANGES.iter().any(|r| in_range(addr, r)) {
         Some("fastly")
     } else {
         None
     }
 }
-
-const CLOUDFLARE_RANGES: [&str; 22] = [
-    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18",
-    "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17",
-    "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
-    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32",
-    "2a06:98c0::/29", "2c0f:f248::/32",
-];
 
 const FASTLY_RANGES: [&str; 21] = [
     "23.235.32.0/20", "43.249.72.0/22", "103.244.50.0/24", "103.245.222.0/23", "103.245.224.0/24",

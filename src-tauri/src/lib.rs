@@ -2,6 +2,7 @@
 //! the same modules the binary does.
 
 pub mod blocklists;
+pub mod cloudflare;
 pub mod config;
 pub mod core_proc;
 pub mod external;
@@ -41,6 +42,9 @@ struct AppState {
     /// The system proxy as it was before this app set it, while it is set. Also on disk, in
     /// `sysproxy::SAVED_FILE`, so a crash cannot strand it.
     system_proxy: Arc<std::sync::Mutex<Option<sysproxy::Saved>>>,
+    /// Which Cloudflare data center each CDN-fronted address answered from, per network, for a
+    /// while; see `cloudflare::EdgeCache`.
+    edges: Arc<cloudflare::EdgeCache>,
 }
 
 /// Puts the system proxy back if this app set it: the settings from before, then the file.
@@ -609,6 +613,38 @@ async fn locate_exit(proxy_port: Option<u16>) -> Result<geo::Exit, String> {
         .map_err(|e| format!("lookup panicked: {e}"))?
 }
 
+/// Which Cloudflare data center a CDN-fronted config enters at, from this network.
+///
+/// `ip` is the config's entry address, already resolved; the name sent as SNI and `Host` comes
+/// from the profile (`cloudflare::edge_host`). `public_ip` is this machine's public address when
+/// the frontend knows it, and with the local route address it keys the observation to this
+/// network. Asked directly — so, like `locate_me`, only while a direct request still leaves on the
+/// physical link, which the frontend decides.
+#[tauri::command]
+async fn observe_edge(
+    state: State<'_, AppState>,
+    profile: config::Profile,
+    ip: String,
+    public_ip: Option<String>,
+) -> Result<cloudflare::Report, String> {
+    let edges = state.edges.clone();
+    tokio::task::spawn_blocking(move || {
+        let source = cloudflare::SourceNetwork {
+            local: netwatch::route_source(),
+            public: public_ip.and_then(|p| p.parse().ok()),
+        };
+        cloudflare::observe(
+            cloudflare::edge_host(&profile).as_deref(),
+            &ip,
+            source,
+            &edges,
+            &cloudflare::Probe::default(),
+        )
+    })
+    .await
+    .map_err(|e| format!("edge probe panicked: {e}"))
+}
+
 /// Where the data file lives, and where the socket directory is made.
 ///
 /// Tauri resolves this per platform: `~/Library/Application Support/<identifier>` on macOS.
@@ -780,6 +816,7 @@ pub fn run() {
                 tunnel,
                 tunnel_kind,
                 system_proxy,
+                edges: Arc::default(),
             });
 
             hide_on_close(app.handle());
@@ -801,6 +838,7 @@ pub fn run() {
             check_servers,
             locate_me,
             locate_exit,
+            observe_edge,
             set_system_proxy,
             clear_system_proxy,
             fetch_subscription,

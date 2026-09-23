@@ -46,7 +46,9 @@ provider sent you, a subscription or a WireGuard config, and tells you plainly w
 - **Every kind of link, in one box.** VLESS, VMess, Trojan and WireGuard links; subscriptions,
   including Xray, sing-box and Clash configurations; import links; WireGuard configs; QR codes.
 - **Servers you can trust at a glance.** Each server is tested for latency and located by where its
-  traffic really exits, not by its name. Relays and CDN-fronted servers are marked as such.
+  traffic really exits, not by its name. Relays and CDN-fronted servers are marked as such, and a
+  Cloudflare-fronted server shows the Cloudflare data center your network actually reaches it
+  through — asked of Cloudflare, not guessed from a database.
 - **A live map.** Your location, the servers, and the route your connection takes.
 - **In the menu bar.** A shield in the macOS menu bar or the Linux top bar shows the connection at
   a glance, and connects or disconnects without opening the window.

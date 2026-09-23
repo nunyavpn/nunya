@@ -118,6 +118,25 @@ export async function mockInvoke<T>(command: string, args: Record<string, unknow
       });
     }
 
+    // The fixture's user is in Milan, so a Cloudflare-fronted server answers from Milan's data
+    // center — the observed edge, where GeoIP would have said the anycast address's own city.
+    case "observe_edge":
+      return answer({
+        ip: args.ip,
+        host: "edge.example.net",
+        provider: "Cloudflare",
+        asn: 13335,
+        edge: {
+          status: "observed",
+          colo: "MXP",
+          place: { iata: "MXP", city: "Milan", country: "IT", region: "Europe", lat: 45.6306, lon: 8.72811 },
+          source: "cf-ray",
+          rttMs: 18,
+          observedAt: Date.now(),
+        },
+        sourceNetwork: { local: null, public: args.publicIp ?? null },
+      });
+
     case "locate_servers": {
       const profiles = (args.profiles as unknown[]) ?? [];
       return answer(profiles.map((_, index) => ({ index, entry: null, exit: null })));

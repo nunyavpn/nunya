@@ -6,6 +6,7 @@
  * persistence exists at all.
  */
 
+import { entryCountry, type EdgeReport } from "./edge";
 import { matchExisting } from "./identity";
 import { backend, DebouncedWriter } from "./persist";
 import type { Profile } from "./share";
@@ -137,9 +138,16 @@ export function located(server: Server): {
   return { country: server.country, city: server.city, source: "name" };
 }
 
-/** Whether the server enters in one country and exits in another — a relay, or a tunnel. */
-export function isRelayed(server: Server): boolean {
-  return Boolean(server.entry && server.exit && server.entry.country !== server.exit.country);
+/**
+ * Whether the server enters in one country and exits in another — a relay, or a tunnel.
+ *
+ * The entry's country by `entryCountry`: for a Cloudflare-fronted config that is the data center
+ * observed answering (`edge`), and without an observation it is unknown — never GeoIP's country
+ * for the anycast address, which put every such config's entry in the United States.
+ */
+export function isRelayed(server: Server, edge?: EdgeReport | null): boolean {
+  const entry = entryCountry(server.entry, edge);
+  return Boolean(entry && server.exit && entry !== server.exit.country);
 }
 
 /** Traffic allowance, as reported by a subscription's `subscription-userinfo` header. */

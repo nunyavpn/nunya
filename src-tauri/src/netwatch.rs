@@ -27,7 +27,10 @@ const EVERY: Duration = Duration::from_secs(4);
 const PROBE: &str = "1.1.1.1:53";
 
 /// The address this machine would send from to reach the internet, if it can reach it at all.
-fn route_source() -> Option<IpAddr> {
+///
+/// Also half of what identifies the network a Cloudflare edge was observed from
+/// (`cloudflare::SourceNetwork`).
+pub(crate) fn route_source() -> Option<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect(PROBE).ok()?;
     socket.local_addr().ok().map(|a| a.ip())

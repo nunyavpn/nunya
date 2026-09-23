@@ -2062,6 +2062,7 @@ dependencies = [
  "log",
  "prost",
  "prost-build",
+ "rustls",
  "serde",
  "serde_json",
  "tauri",
@@ -2069,6 +2070,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "ureq",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
