@@ -36,7 +36,7 @@ import type { PopoverIntent } from "./popover-model";
 import { shieldState, type Shield } from "./shield";
 import { SUPPORT } from "./support";
 import { trayIcon } from "./trayicon";
-import { advance, firstDay, total, type Bytes } from "./usage";
+import { firstDay, total } from "./usage";
 import { icon } from "./views/icons";
 import { BypassPanel } from "./views/bypass";
 import { DiagnosticsPanel } from "./views/diagnostics";
@@ -68,17 +68,21 @@ import {
   type Readiness,
   type Whereabouts,
 } from "./features/tunnel";
+import {
+  finishSession,
+  initThroughput,
+  poll,
+  resetRate,
+  sample,
+  shownRate,
+  startSession,
+} from "./features/throughput";
 import { ProfileEditor } from "./views/editor";
 import { qrCode, readQrCode } from "./views/qr";
 import { quickOptions } from "./views/quickpick";
 import { Splash } from "./views/splash";
 import { SupportPanel } from "./views/support";
 import { shortDate, usageBody } from "./views/usage";
-
-interface Throughput {
-  uplink: number;
-  downlink: number;
-}
 
 // ---------------------------------------------------------------- app state
 
@@ -107,30 +111,6 @@ const blockLists: Record<BlockList, ListState> = {
   ads: { updatedAt: null, busy: false, error: null },
   trackers: { updatedAt: null, busy: false, error: null },
 };
-
-/** Cumulative counters from the previous poll, so the UI can show a rate rather than a total. */
-let lastCounters = { uplink: 0, downlink: 0, at: 0 };
-let shownRate = { uplink: 0, downlink: 0 };
-
-/**
- * The config the running tunnel is carrying traffic for, fixed when it connected.
- *
- * Not `selectedServerId`: choosing another server while connected changes the selection first and
- * reconnects after, and the last seconds of the old session belong to the old config.
- */
-let usageServerId: string | null = null;
-/** Traffic counted since it was last written into the store. */
-let pendingUsage: Bytes = { up: 0, down: 0 };
-let usageSavedAt = 0;
-
-/**
- * How often counted traffic is written into the store while connected.
- *
- * Not every poll: each write re-renders the list and queues a save of the whole data file, once a
- * second for as long as the tunnel runs. The cost is that quitting while connected can lose up to
- * this much of the session's count. Disconnecting, and the core going away, write at once.
- */
-const USAGE_SAVE_MS = 15_000;
 
 const logLines: string[] = [];
 const MAX_LOG_LINES = 500;
@@ -1220,65 +1200,9 @@ function watchMode() {
   if (!first && coreReady) void refreshReadiness();
 }
 
-async function poll() {
-  if (connection !== "on") return;
-
-  // The uptime line ticks even when no bytes move.
-  refresh();
-  // A slow reply is not queued behind: the next tick reads again.
-  if (!sampling) await sample();
-}
-
-/** The reading in flight, if any; see `sample`. */
-let sampling: Promise<void> | null = null;
-
-/**
- * Takes one reading of the counters, after any already in flight.
- *
- * One at a time because two could land out of order, and a reading older than the last is
- * indistinguishable from a core that restarted — whose traffic `advance` counts again in full.
- */
-async function sample(): Promise<void> {
-  while (sampling) await sampling;
-  sampling = readCounters().finally(() => (sampling = null));
-  return sampling;
-}
-
-/** Reads the tunnel's counters: the rate the status card shows, and the traffic usage is made of. */
-async function readCounters() {
-  try {
-    const counters = await invoke<Throughput>("query_stats");
-    const now = Date.now();
-    if (lastCounters.at > 0) {
-      const seconds = (now - lastCounters.at) / 1000;
-      if (seconds > 0) {
-        shownRate = {
-          uplink: Math.max(0, counters.uplink - lastCounters.uplink) / seconds,
-          downlink: Math.max(0, counters.downlink - lastCounters.downlink) / seconds,
-        };
-      }
-    }
-    // The first reading counts in full: the counters start at zero when the tunnel comes up, and
-    // `lastCounters` is reset to zero with them.
-    const moved = advance(lastCounters, counters);
-    pendingUsage = { up: pendingUsage.up + moved.up, down: pendingUsage.down + moved.down };
-    lastCounters = { ...counters, at: now };
-    if (now - usageSavedAt >= USAGE_SAVE_MS) saveUsage();
-  } catch (e) {
-    // One failed poll is not worth tearing the UI down over; the connection event handles a real
-    // disconnect.
-    log(`[ui] stats: ${String(e)}`);
-  }
-}
-
-/** Writes counted traffic into the store, under the config the tunnel was running on. */
-function saveUsage() {
-  usageSavedAt = Date.now();
-  if (!usageServerId) return;
-  const bytes = pendingUsage;
-  pendingUsage = { up: 0, down: 0 };
-  store.recordUsage(usageServerId, usageSavedAt, bytes);
-}
+// poll/sample/readCounters/saveUsage, and the counters they own, now live in
+// features/throughput.ts — the exact code ENGINEERING_STANDARDS.md names as proof that this
+// "blocking" banner was never really one concern.
 
 async function refreshReadiness() {
   try {
@@ -2484,24 +2408,18 @@ initTunnel({
   refresh,
   blockedReason,
   getHome: () => home,
-  onConnected: (serverId, at) => {
-    lastCounters = { uplink: 0, downlink: 0, at: 0 };
-    usageServerId = serverId;
-    pendingUsage = { up: 0, down: 0 };
-    usageSavedAt = at;
-  },
-  sampleBeforeStop: () => sample(),
-  finishUsageSession: () => {
-    saveUsage();
-    usageServerId = null;
-  },
-  resetRate: () => {
-    shownRate = { uplink: 0, downlink: 0 };
-  },
+  onConnected: startSession,
+  sampleBeforeStop: sample,
+  finishUsageSession: finishSession,
+  resetRate,
   syncBlockLists: () => void syncBlockLists(),
   locateHomeNow: () => locateHomeNow(),
   locateHome: () => void locateHome(),
 });
+
+// features/throughput.ts asks for the same two things almost everything else does: logging, and
+// re-rendering once a second so the uptime line ticks even when no bytes move.
+initThroughput({ log, refresh });
 
 // The status card, the map and the tray all render from the store but, unlike the list, are not
 // views that subscribe themselves. Without this they only caught up with a change — a server
