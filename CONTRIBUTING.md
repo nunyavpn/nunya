@@ -464,3 +464,6 @@ the packet tunnel extension (VPN mode on macOS) needs an Apple Developer account
 
 `CLAUDE.md` holds the longer notes on each subsystem: the modes and their honesty rules, the
 system proxy, server locations, latency testing, usage, Quick Connect, sharing, and support.
+[`ENGINEERING_STANDARDS.md`](ENGINEERING_STANDARDS.md) holds the working rules for structural
+change: when and how to split a large module, the state-management pattern, reusable view
+conventions, and CSS token discipline. Read it before a refactor, not just a feature.

@@ -805,6 +805,12 @@ hit-tests before it moves, which is every automation tool.
   and a list for HTTP/2; plain TCP means *no* `transport` key). Every transport is therefore checked
   against a real core in `tests/core_link.rs::every_transport_is_accepted_by_the_core`.
 
+`ENGINEERING_STANDARDS.md` holds the rules for structural change specifically: when a module is
+large enough to split (and where the actual seams are, not just where a comment banner claims one
+is), the `store.update()` state pattern, reusable-view conventions for the `dom.ts` approach, and
+CSS token discipline. It also records, in writing, that this project considered and rejected
+React/Redux and Tailwind — read it before proposing either again.
+
 ## Current state
 
 Working: toolchain, checksum-pinned core install, IPC codec with peer verification, config
