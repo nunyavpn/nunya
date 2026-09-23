@@ -32,7 +32,6 @@ import {
   type Profile,
 } from "./share";
 import { popoverModel } from "./popover-build";
-import { Serial } from "./serial";
 import type { PopoverIntent } from "./popover-model";
 import { shieldState, type Shield } from "./shield";
 import { SUPPORT } from "./support";
@@ -45,22 +44,36 @@ import { LocationsPanel } from "./views/locations";
 import { WorldMap, type Hop, type Pin, type PickPoint } from "./views/map";
 import { MapPicker } from "./views/mappick";
 import { SettingsPanel } from "./views/settings";
-import { StatusCard, type ConnectionState, type PlaceLine } from "./views/status";
+import { StatusCard, type PlaceLine } from "./views/status";
+import {
+  buildRequest,
+  connect,
+  connection,
+  connectedAt,
+  disconnect,
+  exitIps,
+  exitPlace,
+  handleCoreDied,
+  initTunnel,
+  readiness,
+  reconnect,
+  setReadiness,
+  systemProxyError,
+  systemProxyOn,
+  toggleConnection,
+  transitionStep,
+  tunnelEpoch,
+  tunnelFault,
+  working,
+  type Readiness,
+  type Whereabouts,
+} from "./features/tunnel";
 import { ProfileEditor } from "./views/editor";
 import { qrCode, readQrCode } from "./views/qr";
 import { quickOptions } from "./views/quickpick";
 import { Splash } from "./views/splash";
 import { SupportPanel } from "./views/support";
 import { shortDate, usageBody } from "./views/usage";
-
-/** Mirrors the Rust `Readiness` struct. */
-interface Readiness {
-  mode: string;
-  transport: string;
-  ready: boolean;
-  state: "disconnected" | "connecting" | "connected" | "needsPermission";
-  detail: string | null;
-}
 
 interface Throughput {
   uplink: number;
@@ -69,12 +82,7 @@ interface Throughput {
 
 // ---------------------------------------------------------------- app state
 
-let connection: ConnectionState = "off";
-let connectedAt = 0;
-let readiness: Readiness | null = null;
 let coreReady = false;
-/** The running tunnel's public addresses, per family, once measured; null while checking. */
-let exitIps: ExitIps | null = null;
 /** Where this machine is, looked up with the tunnel down. */
 let home: Whereabouts | null = null;
 
@@ -92,14 +100,7 @@ const edgeAsking = new Set<string>();
 const EDGE_FRESH_MS = 10 * 60_000;
 /** How soon a failed check is tried again: it is as likely this minute's network as the edge. */
 const EDGE_RETRY_MS = 60_000;
-/** Where the running tunnel comes out, once measured. */
-let exitPlace: Whereabouts | null = null;
 let tunnelDevice: string | null = null;
-/**
- * Why the last attempt to connect failed, or why a running tunnel stopped: the rail shield's red.
- * Cleared when a new attempt starts or the user disconnects, never by itself; see `shield.ts`.
- */
-let tunnelFault: string | null = null;
 
 /** The block lists on disk, as the Rust side reports them; see `blocking.ts`. */
 const blockLists: Record<BlockList, ListState> = {
@@ -542,11 +543,6 @@ function syncDiagnostics() {
 }
 
 // ---------------------------------------------------------------- rendering
-
-/** Whether this app currently has the system proxy pointed at its listener. */
-let systemProxyOn = false;
-/** Why setting it failed, when it did; shown on the status card until the next connect. */
-let systemProxyError: string | null = null;
 
 /** Settings are locked while the tunnel is up or coming up; see `SettingsPanel.setLocked`. */
 function lockSettings() {
@@ -1019,34 +1015,6 @@ function selectServer(server: Server) {
   if (connection === "on" || connection === "connecting") void reconnect();
 }
 
-/** Mirrors `geo::Exit` without its place: what the status card shows. */
-interface ExitIps {
-  ipv4: string | null;
-  ipv6: string | null;
-  /** Set when every attempt failed: why no public address could be found through the tunnel. */
-  failed?: string;
-  /** What Cloudflare-hosted sites see; see `geo::CloudflareExit`. */
-  cloudflare: { ip: string; country: string | null } | null;
-}
-
-/** Mirrors `geo::Whereabouts`. */
-interface Whereabouts {
-  ip: string;
-  country: string;
-  city: string | null;
-  lat: number;
-  lon: number;
-  asn: number | null;
-  org: string | null;
-}
-
-/**
- * Bumped on every connect and disconnect, so a lookup that was in flight across one can tell its
- * answer is about a network that no longer exists. Without it, a "where am I" asked just before
- * connecting in VPN mode could come back through the tunnel and put the user at their exit.
- */
-let tunnelEpoch = 0;
-
 /**
  * Finds the user's own public address and where it is, for the map's first dot: at launch, after
  * every disconnect, and when the network changes (`netwatch.rs`).
@@ -1149,256 +1117,10 @@ function locateHomeNow() {
   void locateHome();
 }
 
-/**
- * Finds where the running tunnel comes out, for the exit chip and the end of the route.
- *
- * Asked a moment after connecting, because the first request through a fresh tunnel pays for its
- * handshake, and once more if that fails — a single slow start should not leave the chip saying
- * "checking" for the whole session.
- */
-async function locateExit() {
-  const epoch = tunnelEpoch;
-  const settings = store.settings();
-  const proxyPort = settings.mode === "proxy" ? settings.proxyPort : null;
-
-  let lastError = "";
-  for (const delay of [600, 3000, 8000]) {
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    if (epoch !== tunnelEpoch || connection !== "on") return;
-    try {
-      const found = await invoke<ExitIps & { place: Whereabouts | null }>("locate_exit", {
-        proxyPort,
-      });
-      if (epoch !== tunnelEpoch || connection !== "on") return;
-      exitPlace = found.place;
-      exitIps = { ipv4: found.ipv4, ipv6: found.ipv6, cloudflare: found.cloudflare };
-      // A live end-to-end measurement is the freshest exit this config will have, so it is saved
-      // as the config's exit — the row's flag and the card then agree.
-      const server = store.selected();
-      if (found.place && server && !(home && found.place.ip === home.ip)) {
-        store.applyLocations([{ id: server.id, exit: { ...found.place, checkedAt: Date.now() } }]);
-      }
-      const where = found.place ? ` in ${found.place.city ?? found.place.country}` : "";
-      log(`[ui] exiting from ${[found.ipv4, found.ipv6].filter(Boolean).join(" and ")}${where}`);
-      refresh();
-      return;
-    } catch (e) {
-      lastError = String(e);
-      log(`[ui] could not find the exit yet: ${lastError}`);
-    }
-  }
-  // Every attempt failed: nothing came out through the server. Said on the card, rather than
-  // leaving "checking public IP…" up for the rest of the session as if an answer were coming.
-  if (epoch !== tunnelEpoch || connection !== "on") return;
-  exitIps = { ipv4: null, ipv6: null, cloudflare: null, failed: lastError || "no answer" };
-  refresh();
-}
-
-// ---------------------------------------------------------------- tunnel
-
-function buildRequest() {
-  const server = store.selected();
-  if (!server) throw new Error("no server selected");
-
-  const bypass = store.get().bypass.map((rule) => ({ kind: rule.kind, value: rule.value }));
-  const settings = store.settings();
-
-  // Field names match the serde camelCase shape of config::BuildRequest.
-  return {
-    req: {
-      profile: server.profile,
-      mode: settings.mode,
-      proxy: {
-        port: settings.proxyPort,
-        allowLan: settings.allowLan,
-      },
-      tun: {
-        ipv4Cidr: settings.ipv4Cidr,
-        mtu: settings.mtu,
-        stack: settings.stack,
-        strictRoute: settings.strictRoute,
-        ipv6: settings.ipv6,
-      },
-      bypass,
-      dns: settings.dns,
-      logLevel: settings.logLevel,
-      // The switches only: which lists are on disk is the Rust side's to know.
-      block: { ads: settings.blockAds, trackers: settings.blockTrackers },
-    },
-  };
-}
-
-/**
- * Connecting and disconnecting, one at a time; see `serial.ts` for why a queue and not only
- * disabled buttons. Each checks the state when its turn comes, so a Connect queued behind a
- * Connect is nothing, and a reconnect queued behind a Disconnect does not start the tunnel again.
- */
-const tunnel = new Serial();
-
-/** The step under way while connecting or disconnecting, for the status card and the popover. */
-let transitionStep: string | null = null;
-
-/** Connecting or disconnecting: nothing that would start another is offered until it is done. */
-function working(): boolean {
-  return connection === "connecting" || connection === "disconnecting";
-}
-
-function connect(): Promise<void> {
-  return tunnel.run(connectNow);
-}
-
-function disconnect(): Promise<void> {
-  return tunnel.run(disconnectNow);
-}
-
-/**
- * Starts the tunnel again so a change applies — a server, a mode, a block list — if it is up when
- * its turn comes. Asked for several times while one waits, it is one reconnect: the settings it
- * reads are the latest.
- */
-function reconnect(): Promise<void> {
-  return tunnel.once("reconnect", async () => {
-    if (connection !== "on") return;
-    await disconnectNow();
-    await connectNow();
-  });
-}
-
-async function toggleConnection() {
-  if (working()) return;
-  if (connection === "on") await disconnect();
-  else await connect();
-}
-
-async function connectNow() {
-  if (connection !== "off") return;
-  const blocked = blockedReason();
-  if (blocked) {
-    log(`[ui] refusing to connect: ${blocked}`);
-    refresh();
-    return;
-  }
-
-  connection = "connecting";
-  transitionStep = "Starting the tunnel…";
-  tunnelFault = null;
-  tunnelEpoch++;
-  exitPlace = null;
-  exitIps = null;
-  refresh();
-
-  try {
-    const running = store.selected()?.id ?? null;
-    await invoke("start_tunnel", buildRequest());
-    connectedAt = Date.now();
-    lastCounters = { uplink: 0, downlink: 0, at: 0 };
-    usageServerId = running;
-    pendingUsage = { up: 0, down: 0 };
-    usageSavedAt = connectedAt;
-    // Quick Connect's "Latest". Only once the tunnel is really up: a connect that failed was not
-    // a connection, and should not become the thing offered first next time.
-    if (running) store.markConnected(running, connectedAt);
-    log("[ui] tunnel started");
-    // Part of connecting, not something after it. Until it is set, "on" would claim the browsers
-    // are covered when they are not, and a Disconnect would have nothing it could safely undo.
-    if (wantsSystemProxy()) {
-      transitionStep = "Setting the system proxy…";
-      refresh();
-    }
-    await applySystemProxy();
-    connection = "on";
-    void locateExit();
-    // A list that could not be fetched directly is fetched now, through the tunnel.
-    void syncBlockLists();
-  } catch (e) {
-    connection = "off";
-    tunnelFault = `the connection could not start (${String(e)})`;
-    log(`[ui] start failed: ${String(e)}`);
-    // Surface the core's own words; it knows more about the failure than we do.
-    readiness = readiness ? { ...readiness, ready: false, detail: String(e) } : readiness;
-  } finally {
-    transitionStep = null;
-  }
-  refresh();
-}
-
-/** Proxy mode, with the user's say-so to point the desktop's proxy setting at the listener. */
-function wantsSystemProxy(): boolean {
-  const current = store.settings();
-  return current.mode === "proxy" && current.systemProxy;
-}
-
-/**
- * Points the system proxy at the listener, when proxy mode is running and the user asked for it.
- *
- * A failure does not fail the connection: the listener is up and anything pointed at it by hand
- * works. It is reported on the status card instead, because a user who asked for the system proxy
- * and silently did not get it would assume their browser is covered.
- */
-async function applySystemProxy() {
-  systemProxyOn = false;
-  systemProxyError = null;
-  const current = store.settings();
-  if (current.mode !== "proxy" || !current.systemProxy) return;
-  try {
-    await invoke("set_system_proxy", { port: current.proxyPort });
-    systemProxyOn = true;
-    log(`[ui] system proxy set to 127.0.0.1:${current.proxyPort}`);
-  } catch (e) {
-    systemProxyError = String(e);
-    log(`[ui] could not set the system proxy: ${systemProxyError}`);
-  }
-}
-
-async function disconnectNow() {
-  if (connection !== "on") return;
-  // Said at once, before anything else is awaited: a button still reading Disconnect is a button
-  // clicked again.
-  connection = "disconnecting";
-  transitionStep = systemProxyOn ? "Restoring the system proxy…" : "Stopping the tunnel…";
-  refresh();
-  // One last reading before the counters go away with the tunnel, so the seconds since the last
-  // poll are counted too.
-  await sample();
-
-  // The system proxy first. Pointed at a listener that is about to close, every app that follows
-  // it would lose the network for as long as stopping takes; put back, they go direct at once.
-  if (systemProxyOn) {
-    transitionStep = "Restoring the system proxy…";
-    refresh();
-    try {
-      await invoke("clear_system_proxy");
-    } catch (e) {
-      log(`[ui] could not restore the system proxy: ${String(e)}`);
-    }
-  }
-  transitionStep = "Stopping the tunnel…";
-  refresh();
-  try {
-    // Restores the system proxy too, on the Rust side, if it is still ours: no way of stopping
-    // may leave it pointing at a listener that is gone.
-    await invoke("stop_tunnel");
-    log("[ui] tunnel stopped");
-  } catch (e) {
-    log(`[ui] stop failed: ${String(e)}`);
-  }
-  saveUsage();
-  usageServerId = null;
-  // Asked for, so whatever went wrong before is no longer the state to report.
-  tunnelFault = null;
-  systemProxyOn = false;
-  systemProxyError = null;
-  connection = "off";
-  transitionStep = null;
-  tunnelEpoch++;
-  exitIps = null;
-  exitPlace = null;
-  shownRate = { uplink: 0, downlink: 0 };
-  refresh();
-  // Asked again rather than remembered: the tunnel may have been up across a change of network.
-  // From the start: an earlier failure may have been the tunnel's doing, not the network's.
-  locateHomeNow();
-}
+// Connecting, disconnecting, reconnecting, and the exit lookup that follows a connect now live in
+// features/tunnel.ts (buildRequest, working, connect, disconnect, reconnect, toggleConnection);
+// see ENGINEERING_STANDARDS.md for why, and initTunnel below for the callbacks it uses instead of
+// reaching back into this file.
 
 // ---------------------------------------------------------------- blocking
 
@@ -1562,10 +1284,11 @@ async function refreshReadiness() {
   try {
     // Readiness is a different question per mode — privilege for a TUN, a free port for a
     // listener — so the answer is only meaningful alongside the mode it was asked about.
-    readiness = await invoke<Readiness>("tunnel_readiness", { mode: store.settings().mode });
-    if (!readiness.ready && readiness.detail) log(`[ui] ${readiness.detail}`);
+    const result = await invoke<Readiness>("tunnel_readiness", { mode: store.settings().mode });
+    setReadiness(result);
+    if (!result.ready && result.detail) log(`[ui] ${result.detail}`);
   } catch (e) {
-    readiness = null;
+    setReadiness(null);
     log(`[ui] readiness: ${String(e)}`);
   }
   refresh();
@@ -2754,6 +2477,32 @@ const coreUp = new Promise<void>((resolve) => (coreCameUp = resolve));
 
 paintRail();
 
+// features/tunnel.ts asks this module for the things it cannot do on its own: render a screen,
+// save usage against the config the tunnel was running on, and look up where the user is.
+initTunnel({
+  log,
+  refresh,
+  blockedReason,
+  getHome: () => home,
+  onConnected: (serverId, at) => {
+    lastCounters = { uplink: 0, downlink: 0, at: 0 };
+    usageServerId = serverId;
+    pendingUsage = { up: 0, down: 0 };
+    usageSavedAt = at;
+  },
+  sampleBeforeStop: () => sample(),
+  finishUsageSession: () => {
+    saveUsage();
+    usageServerId = null;
+  },
+  resetRate: () => {
+    shownRate = { uplink: 0, downlink: 0 };
+  },
+  syncBlockLists: () => void syncBlockLists(),
+  locateHomeNow: () => locateHomeNow(),
+  locateHome: () => void locateHome(),
+});
+
 // The status card, the map and the tray all render from the store but, unlike the list, are not
 // views that subscribe themselves. Without this they only caught up with a change — a server
 // picked from the list or the map — on the next connect or the next once-a-second tick, and the
@@ -2810,21 +2559,10 @@ void listen<boolean>("core-connection", async (connected) => {
     coreCameUp();
     await refreshReadiness();
     void syncBlockLists();
-  } else if (connection !== "off") {
-    // The core went away with the tunnel up, so the TUN went with it — and the listener the
-    // system proxy points at, which has to be put back now rather than at the next disconnect.
-    connection = "off";
-    tunnelEpoch++;
-    // What was counted before the core went is real traffic; only the last poll's worth is lost.
-    saveUsage();
-    usageServerId = null;
-    tunnelFault = "the core stopped while connected";
-    if (systemProxyOn) void invoke("clear_system_proxy").catch(() => {});
-    systemProxyOn = false;
-    exitIps = null;
-    exitPlace = null;
-    refresh();
-    void locateHome();
+  } else {
+    // The core going away with the tunnel up is handled the same way a failed connect is: the
+    // system proxy has to be put back now rather than at the next disconnect.
+    handleCoreDied();
   }
   refresh();
 });
