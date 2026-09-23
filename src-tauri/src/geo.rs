@@ -1249,11 +1249,8 @@ mod tests {
     #[test]
     #[ignore]
     fn live_place_of_this_machine() {
-        let raced = std::time::Instant::now();
-        let found = super::whereabouts(None);
-        println!("all at once: {:?} in {:?}", found, raced.elapsed());
-        assert!(found.is_ok());
-
+        // Every endpoint first, and the verdict last: this test is run to find out what a network
+        // answers, and an assertion in the middle of it hides the half that says so.
         let agent = ureq::AgentBuilder::new().timeout(super::REQUEST_TIMEOUT).build();
         for url in super::PLACE_URLS {
             let target = url(None);
@@ -1268,6 +1265,15 @@ mod tests {
                 at.elapsed()
             );
         }
+
+        let raced = std::time::Instant::now();
+        let found = super::whereabouts(None);
+        println!("all at once: {:?} in {:?}", found, raced.elapsed());
+        assert!(
+            found.is_ok(),
+            "no endpoint placed this machine; the lines above say why, and scripts/net-check.sh \
+             says whether it is the names or the addresses"
+        );
     }
 
     #[test]
