@@ -6,6 +6,7 @@ import {
   type ListState,
 } from "./blocking";
 import { emitTo, hasBackend, inTauri, invoke, listen } from "./bridge";
+import { entryLine, entryPlace, isAnycast, type EdgeReport } from "./edge";
 
 import { h, qs, render } from "./dom";
 import { size } from "./format";
@@ -76,6 +77,21 @@ let coreReady = false;
 let exitIps: ExitIps | null = null;
 /** Where this machine is, looked up with the tunnel down. */
 let home: Whereabouts | null = null;
+
+/**
+ * Which Cloudflare data center each config's address answered from, on this network; see
+ * `cloudflare.rs` and `edge.ts`.
+ *
+ * Held here and never saved. An edge is a fact about a network at a time, not about a config:
+ * written into the data file it would travel to the next network as if it were still true, which
+ * is the GeoIP mistake over again.
+ */
+const edges = new Map<string, { report: EdgeReport; at: number }>();
+const edgeAsking = new Set<string>();
+/** How long an answer stands here: the Rust side's `OBSERVATION_TTL`. */
+const EDGE_FRESH_MS = 10 * 60_000;
+/** How soon a failed check is tried again: it is as likely this minute's network as the edge. */
+const EDGE_RETRY_MS = 60_000;
 /** Where the running tunnel comes out, once measured. */
 let exitPlace: Whereabouts | null = null;
 let tunnelDevice: string | null = null;
@@ -566,6 +582,7 @@ function refresh() {
 
   const { pins, route } = buildMap(server);
   map.setPins(pins, route);
+  void observeEdge(server);
   const shield = currentShield();
   paintShield(shield);
   syncTray(server, blockedReason() === null, shield);
@@ -757,8 +774,52 @@ function placeLines(server: Server | undefined): { exitAt: PlaceLine | null; ent
   const entry = server.entry ?? null;
   return {
     exitAt: exit,
-    entryAt: entry && (!exit || entry.ip !== exit.ip) ? entry : null,
+    entryAt: entry && (!exit || entry.ip !== exit.ip) ? entryLine(entry, edgeOf(server)) : null,
   };
+}
+
+/** The observation for a config, when it is about its current address. */
+function edgeOf(server: Server | undefined): EdgeReport | null {
+  const had = server && edges.get(server.id);
+  return had && had.report.ip === server.entry?.ip ? had.report : null;
+}
+
+/**
+ * Asks which data center the selected config's address answers from, when it is an anycast
+ * address and the answer is not fresh.
+ *
+ * Only while a direct request leaves on the physical link (`canLocateHome`): with a VPN-mode
+ * tunnel up it would go through the tunnel and observe the edge its exit reaches, which is not
+ * the one the core dials. The answer from before connecting still stands meanwhile — same
+ * network, same edge. An answer that was in flight across a connect or disconnect is dropped.
+ */
+async function observeEdge(server: Server | undefined) {
+  if (!hasBackend || !server?.entry || !isAnycast(server.entry) || !canLocateHome()) return;
+  if (edgeAsking.has(server.id)) return;
+  const had = edges.get(server.id);
+  if (had && had.report.ip === server.entry.ip && had.report.sourceNetwork.public === (home?.ip ?? null)) {
+    const lasts = ["observed", "notObservable", "noHostname"].includes(had.report.edge.status);
+    if (Date.now() - had.at < (lasts ? EDGE_FRESH_MS : EDGE_RETRY_MS)) return;
+  }
+
+  edgeAsking.add(server.id);
+  const epoch = tunnelEpoch;
+  try {
+    const report = await invoke<EdgeReport>("observe_edge", {
+      profile: server.profile,
+      ip: server.entry.ip,
+      publicIp: home?.ip ?? null,
+    });
+    if (epoch !== tunnelEpoch) return;
+    edges.set(server.id, { report, at: Date.now() });
+    const edge = report.edge;
+    log(`[ui] ${server.profile.name}: Cloudflare edge ${edge.status === "observed" ? edge.colo : edge.status}`);
+    refresh();
+  } catch (e) {
+    log(`[ui] could not check the Cloudflare edge: ${String(e)}`);
+  } finally {
+    edgeAsking.delete(server.id);
+  }
 }
 
 /** Why Connect will not work, phrased for someone who did not write the app. */
@@ -854,7 +915,7 @@ function buildMap(selected: Server | undefined): { pins: Pin[]; route: Hop[] } {
   // sweep placed this server, else the centre of the country its name suggests.
   let exit: Pin | null = null;
   if (on && selected) {
-    const at = exitPlace ?? spotCoords(selected.exit) ?? spotCoords(selected.entry);
+    const at = exitPlace ?? spotCoords(selected.exit) ?? entryPlace(selected.entry, edgeOf(selected));
     const country = exitPlace?.country ?? located(selected).country;
     const where = at ?? place(country);
     exit = {
@@ -887,9 +948,12 @@ function buildMap(selected: Server | undefined): { pins: Pin[]; route: Hop[] } {
   if (exit) pins.push(exit);
 
   // A relayed server enters somewhere else first; the route shows the detour, which is the whole
-  // reason to know the entry. Chains will add their hops the same way.
-  const entry = on && selected && isRelayed(selected) ? spotCoords(selected.entry) : null;
-  if (entry) pins.push({ lon: entry.lon, lat: entry.lat, label: `via ${entry.city ?? place(selected!.entry!.country).name}`, labelBelow: true, hop: true });
+  // reason to know the entry. Chains will add their hops the same way. A Cloudflare-fronted one
+  // enters at the data center observed answering, and until one has been there is no hop to draw
+  // (`entryPlace`) — not a detour through wherever GeoIP files the anycast address.
+  const edge = edgeOf(selected);
+  const entry = on && selected && isRelayed(selected, edge) ? entryPlace(selected.entry, edge) : null;
+  if (entry) pins.push({ lon: entry.lon, lat: entry.lat, label: `via ${entry.city ?? place(entry.country).name}`, labelBelow: true, hop: true });
   const route: Hop[] = home && exit ? [home, ...(entry ? [entry] : []), exit] : [];
 
   return { pins, route };
@@ -2723,6 +2787,8 @@ void listen<string>("core-log", (line) => {
 // A new network is a new place to draw routes from. With the tunnel up the lookup would go
 // through it, and a disconnect looks again anyway.
 void listen<null>("network-changed", () => {
+  // Made from the old network; the same address can answer from another data center here.
+  edges.clear();
   if (!canLocateHome()) return;
   log("[ui] the network changed; finding where this machine is now");
   locateHomeNow();

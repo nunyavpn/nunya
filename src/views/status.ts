@@ -27,7 +27,8 @@ export type ConnectionState = "off" | "connecting" | "on" | "disconnecting";
 /** A measured place, as the card shows it: city, country, and who runs the data center. */
 export interface PlaceLine {
   city: string | null;
-  country: string;
+  /** Null when there is no place to name — an anycast edge not yet observed (`edge.ts`). */
+  country: string | null;
   org?: string | null;
   asn?: number | null;
 }
@@ -120,7 +121,7 @@ export class StatusCard {
     const [up, upUnit] = rate(model.uplink);
     // Connected, the live measurement is the truth; the saved one is from the last test.
     const at =
-      model.state === "on" && model.exitAt
+      model.state === "on" && model.exitAt?.country
         ? { country: model.exitAt.country, city: model.exitAt.city ?? "" }
         : model.server
           ? located(model.server)
@@ -292,7 +293,7 @@ export class StatusCard {
       return h(
         "span",
         { class: "tag ip place" },
-        h("span", { class: "flag mini", style: `background:${place(p.country).flag}` }),
+        p.country ? h("span", { class: "flag mini", style: `background:${place(p.country).flag}` }) : null,
         h("b", {}, label),
         network ? `${where} · ${network}` : where,
       );

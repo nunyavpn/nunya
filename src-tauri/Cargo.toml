@@ -42,6 +42,12 @@ log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+# The TLS stack ureq already carries, named so `cloudflare.rs` can tell a failed handshake from a
+# timeout by its cause, and so its tests can run a TLS server. Same features as ureq's, so this
+# adds no code to the build.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+# ureq's default trust roots, named so the edge probe's timed handshake trusts the same ones.
+webpki-roots = "0.26"
 
 [profile.release]
 # A VPN client is a trust artifact: smaller and stripped means less to audit and a smaller

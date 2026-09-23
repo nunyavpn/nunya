@@ -453,6 +453,29 @@ the **entry** that means the config connects to a CDN edge; `cdnOf()` in `store.
 row shows a **CDN · CF / Fastly** tag beside the name, and it is there for a future edge-address
 optimisation. Add a provider in `cdn_of` and `Cdn`/`CDN_NAMES` together.
 
+**A Cloudflare entry is placed where it answers, never by GeoIP.** An anycast address has no place:
+`104.21.77.84` is "Los Angeles" in every geo database and was measured answering from Newark on
+one network and Frankfurt on another. [cloudflare.rs](src-tauri/src/cloudflare.rs) asks
+(`observe_edge`): a TLS connection to the address itself with the config's name as SNI and `Host`
+(`edge_host`: SNI, else transport host, else server) — `curl --resolve`, natively — reading the
+data center from the `CF-Ray` suffix, else `/cdn-cgi/trace`'s `colo=`. The outcome is one of
+`Edge`'s cases (observed, not observable, no host name, TLS failed, timeout, probe failed, not
+Cloudflare, invalid address), and none is ever filled in from GeoIP: a colo code missing from the
+table is reported as its code with no place. Its RTT is the **TLS handshake**, not the TCP connect,
+because a local TUN or transparent proxy answers the SYN itself (0.26 ms connect, 660 ms TLS,
+measured). Ownership (`owner`) comes from Cloudflare's published ranges and its colo table from
+`speed.cloudflare.com/locations`, both compiled in from `src-tauri/data/cloudflare/` and refreshed
+with `./scripts/update-cloudflare-data.sh`.
+
+**An observation belongs to a network, not an address.** `EdgeCache` keys it by host, address and
+`SourceNetwork` (the route's local address plus the public one) for `OBSERVATION_TTL`; failures are
+not kept. The frontend holds observations in memory only (`edges` in `main.ts`, cleared on
+`network-changed`), never in the data file, and asks only while `canLocateHome()` — in VPN mode the
+probe would go through the tunnel and see the exit's edge. [edge.ts](src/edge.ts) is the one rule
+for what views make of it: the Entry chip names the data center, `isRelayed` and the map's entry
+hop use its country and coordinates, and an anycast entry not observed has **no** place (no city,
+no flag, no hop) rather than GeoIP's.
+
 **A BPB / Cloudflare Workers server has two real exits.** A Worker cannot connect to Cloudflare's
 own addresses, so BPB sends requests for Cloudflare-hosted sites through its *proxy IP* (a relay
 outside Cloudflare), and everything else straight from the Worker (a Cloudflare address). A
