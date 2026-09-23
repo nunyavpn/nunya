@@ -1018,14 +1018,19 @@ button:disabled {
   box-shadow: 0 0 0 4px var(--live-glow);
 }
 
+/* The ring pulsing out of the exit dot. `* { box-sizing }` does not reach a pseudo-element, so it
+   is set here: content-box made the ring 19px, not the dot's 15, and a centring margin worked out
+   for 15 left it 2px right and 2px down of the dot. Centred by `translate`, which composes with
+   the pulse's `transform`, it stays on the dot whatever size it is given. */
 .pin.act::after {
   content: "";
   position: absolute;
   left: 50%;
   top: 50%;
+  box-sizing: border-box;
   width: 15px;
   height: 15px;
-  margin: -7.5px 0 0 -7.5px;
+  translate: -50% -50%;
   border-radius: 50%;
   border: 2px solid var(--live-fill);
   animation: pulse 2.4s ease-out infinite;
