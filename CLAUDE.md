@@ -548,7 +548,10 @@ blocked service hangs rather than refusing. (Placing a *server's* exit stays one
 of addresses, and free tiers to spare.) `api.ip.sb` is in the list for its Cloudflare front, which
 such networks cannot block wholesale. And a failed lookup is tried again on a growing delay
 (`HOME_RETRY_MS`, up to a minute), starting over on a network change or a disconnect, so a machine
-that could not be placed at launch still gets placed later. `tunnelEpoch` in `main.ts` is
+that could not be placed at launch still gets placed later — including after a spell with no DNS at
+all, which is what an Iranian network did once (every name failed in 92 ms, then resolved again).
+`scripts/net-check.sh` tells a name that will not resolve from an address that will not answer; run
+it on the failing network before building anything for it. `tunnelEpoch` in `main.ts` is
 bumped on every connect and disconnect so an answer that was in flight across one is discarded.
 `locate_exit` takes the same two steps as `geo::locate` in proxy mode — the address through the
 listener, the place from the user's own connection — to keep the rate-limited half off a shared

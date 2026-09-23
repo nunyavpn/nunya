@@ -203,6 +203,16 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 real TUN are `#[ignore]`d, so the default run is the pure ones. CI runs all of the above on macOS
 and Linux for every pull request.
 
+### When a network will not place you
+
+`./scripts/net-check.sh` says what a network answers, one line per question: the system resolver,
+plain DNS and DNS over HTTPS to resolvers by address, Cloudflare's trace with no name at all, the
+location services by name and with an address supplied, and GitHub for the block lists. Run it on
+the network that is failing and paste the output into the issue. "Dns Failed" on every service at
+once and a service that stalls need different fixes, and the app's own error does not say which.
+`cargo test --manifest-path src-tauri/Cargo.toml live_place -- --ignored --nocapture` asks the
+location services the way the app does, each one on its own and then all at once.
+
 ### Testing the tunnel without root
 
 ```bash
