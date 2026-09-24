@@ -20,16 +20,13 @@ import {
   type Spot,
 } from "./store";
 import { fastestFirst, type QuickKind } from "./quick";
+import { extractWgQuick, parseShareLink, type Profile } from "./share";
 import {
-  describe,
-  dnsAddressOf,
-  extractWgQuick,
-  parseShareLink,
-  toShareLink,
-  toWgQuick,
-  wgQuickRefusal,
-  type Profile,
-} from "./share";
+  addSubscription,
+  classify,
+  initAddServers,
+  manualGroupName,
+} from "./features/add-servers";
 import { popoverModel } from "./popover-build";
 import type { PopoverIntent } from "./popover-model";
 import { shieldState, type Shield } from "./shield";
@@ -68,7 +65,7 @@ import {
   type Whereabouts,
 } from "./features/tunnel";
 import { ProfileEditor } from "./views/editor";
-import { qrCode, readQrCode } from "./views/qr";
+import { readQrCode } from "./views/qr";
 import { quickOptions } from "./views/quickpick";
 import {
   confirmDeleteGroup,
@@ -79,6 +76,7 @@ import {
   sheetHead,
 } from "./views/sheets";
 import { initEditServer, openEditServer } from "./views/edit-server";
+import { copyText, initShareServer, openShareServer } from "./views/share-server";
 import { Splash } from "./views/splash";
 import { SupportPanel } from "./views/support";
 
@@ -1409,116 +1407,10 @@ function connectedServerId(): string | null {
 
 // ---------------------------------------------------------------- add servers
 
-/**
- * What a pasted line turned out to be.
- *
- * Subscriptions and share links arrive through the same box because that is how users receive
- * them — a provider hands you a page with both on it — and which kind is on the clipboard is a
- * question the app can answer for itself rather than ask.
- */
-type Pasted =
-  | { kind: "server"; server: Omit<Server, "id" | "groupId"> }
-  | { kind: "subscription"; url: string; name: string }
-  | { kind: "rejected"; reason: string };
-
-/**
- * A panel's "import to sing-box" or "import to Clash" link, which wraps the subscription address
- * in `url=`. Kept whole as the group's address; Rust unwraps it on every fetch (`subscription::
- * resolve`), so this only has to recognise one, not take it apart.
- */
-const IMPORT_LINK = /^(sing-box:\/\/import-remote-profile|clash:\/\/install-config|clashmeta:\/\/install-config)\b/i;
-
-/**
- * Names a subscription from its URL fragment.
- *
- * Providers put the display name there — `#%F0%9F%92%A6%20BPB%20Normal` is "💦 BPB Normal" — and
- * it is the only name available until the fetch returns, because `profile-title` is a header not
- * every panel sends. Clash's import link carries it as `name=` instead. The host is a weak fallback
- * but an honest one — the host of the address inside, for an import link, whose own "host" is
- * `import-remote-profile` — and the first refresh replaces any of them with whatever the
- * subscription calls itself.
- */
-function subscriptionName(url: string): string {
-  try {
-    const parsed = new URL(url);
-    // A malformed percent-escape throws, which is why this sits inside the try rather than beside
-    // it: a name is never worth failing an import over.
-    const fragment = decodeURIComponent(parsed.hash.replace(/^#/, "")).trim();
-    if (fragment) return fragment;
-    if (!IMPORT_LINK.test(url)) return parsed.hostname;
-    const carried = parsed.searchParams.get("url") ?? "";
-    return parsed.searchParams.get("name")?.trim() || new URL(carried).hostname;
-  } catch {
-    return url;
-  }
-}
-
-/**
- * Sorts one pasted line into a server, a subscription, or a rejection carrying its reason.
- *
- * `http://` is checked here as well as in Rust. Leaving it to the backend would mean creating a
- * group and failing it a moment later, when the reason can be given while the user is still
- * looking at what they pasted.
- */
-function classify(line: string): Pasted {
-  if (/^https:\/\//i.test(line) || IMPORT_LINK.test(line)) {
-    return { kind: "subscription", url: line, name: subscriptionName(line) };
-  }
-
-  if (/^http:\/\//i.test(line)) {
-    return {
-      kind: "rejected",
-      reason:
-        "A plain HTTP subscription would expose every server credential to the network. " +
-        "Ask your provider for an https:// link.",
-    };
-  }
-
-  try {
-    const profile = parseShareLink(line);
-    return {
-      kind: "server",
-      server: {
-        profile,
-        country: guessCountry(profile.name),
-        city: guessCity(profile.name),
-        latency: null,
-        testedAt: null,
-      },
-    };
-  } catch (e) {
-    return { kind: "rejected", reason: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-/** The hand-added group, which is where a pasted share link goes. */
-function manualGroupName(): string {
-  return store.get().groups.find((g) => g.id === MANUAL_GROUP_ID)?.name ?? "Personal";
-}
-
-/**
- * Adds a subscription group and pulls it straight away.
- *
- * The group is created before the fetch rather than after it, so a slow or failing subscription
- * appears as a row that spins and then carries an error — exactly what a later refresh produces.
- * Fetching first would mean a dialog that hangs on a dead endpoint, and a second failure story to
- * write and keep in step with the first.
- *
- * Re-pasting a URL already on the list refreshes it instead of adding a second copy, because
- * pasting it again is the obvious way to ask for an update.
- */
-function addSubscription(url: string, name: string) {
-  const existing = store.get().groups.find((g) => g.url === url);
-  if (existing) {
-    log(`[ui] ${existing.name} is already on the list; refreshing it instead`);
-    void refreshSubscription(existing);
-    return;
-  }
-
-  const id = store.addSubscription(name, url);
-  const group = store.get().groups.find((g) => g.id === id);
-  if (group) void refreshSubscription(group);
-}
+// What a pasted line turns out to be, and adding a subscription for one, now live in
+// features/add-servers.ts (Pasted, IMPORT_LINK, subscriptionName, classify, manualGroupName,
+// addSubscription); see ENGINEERING_STANDARDS.md. buildAddServers below is the sheet's DOM and
+// stays here with the other sheets.
 
 function openAddServers() {
   openSheet((close) => buildAddServers(close));
@@ -1948,167 +1840,9 @@ function blankProfile(): Profile {
 // openEditServer now lives in views/edit-server.ts; see ENGINEERING_STANDARDS.md.
 // openShareServer and buildAddServers stay here for now, separate future extractions.
 
-/**
- * Shows a server as a share link and a QR code, for a phone to scan or another client to import.
- *
- * The link is generated here, from the profile, rather than kept from whatever was pasted: the
- * profile is what the app actually connects with, so an edit made since import is what gets
- * shared. The standard `vless://` / `vmess://` / `trojan://` form is what v2rayNG, Hiddify and
- * Streisand all scan.
- *
- * A WireGuard server can also be shared as a wg-quick config, and opens on it: the official
- * WireGuard apps — most people's phone client for WireGuard — scan only that, not a link. A WARP
- * server says why it cannot be (`wgQuickRefusal`) and opens on the link instead. The config's DNS
- * line comes from the app's DNS setting when that names an address; when it names a host, the
- * sheet says so rather than choosing a resolver for the user.
- *
- * The sheet says plainly that what it shows is the credential. A QR code on screen looks like a
- * harmless picture, and anyone who photographs it can use the server exactly as the user does.
- */
-function openShareServer(server: Server) {
-  let link: string;
-  try {
-    link = toShareLink(server.profile);
-  } catch (e) {
-    log(`[ui] could not write a share link for ${server.profile.name}: ${String(e)}`);
-    return;
-  }
+// openShareServer and copyText now live in views/share-server.ts; see ENGINEERING_STANDARDS.md.
+// buildAddServers (above) is the remaining sheet still here, tied to features/add-servers.ts.
 
-  const wireguard = server.profile.protocol === "wireguard";
-  const refusal = wireguard ? wgQuickRefusal(server.profile) : null;
-  const dnsSetting = store.settings().dns;
-  const dns = dnsAddressOf(dnsSetting);
-  const config = wireguard && !refusal ? toWgQuick(server.profile, dns ? [dns] : []) : null;
-  let format: "link" | "config" = config ? "config" : "link";
-
-  openSheet((close) => {
-    const body = h("div", { class: "share-body" });
-    const copyButton = h("button", { class: "btn brand" }) as HTMLButtonElement;
-    let reset = 0;
-    const copyLabel = () => (format === "config" ? "Copy config" : "Copy link");
-    copyButton.onclick = async () => {
-      const text = format === "config" ? config : link;
-      if (!text) return;
-      const copied = await copyText(text);
-      copyButton.textContent = copied ? "Copied" : "Copy failed";
-      window.clearTimeout(reset);
-      reset = window.setTimeout(() => (copyButton.textContent = copyLabel()), 1600);
-    };
-
-    const textBox = (value: string, label: string, rows: number, extra = "") => {
-      const box = h("textarea", {
-        class: `val sharelink${extra}`,
-        readonly: true,
-        rows,
-        spellcheck: false,
-        "aria-label": label,
-        onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
-      }) as HTMLTextAreaElement;
-      box.value = value;
-      return box;
-    };
-
-    const paint = () => {
-      window.clearTimeout(reset);
-      copyButton.textContent = copyLabel();
-      copyButton.disabled = format === "config" && !config;
-
-      const choice = wireguard
-        ? h(
-            "span",
-            { class: "seg share-format", role: "radiogroup", "aria-label": "Share as" },
-            ...(
-              [
-                ["config", "WireGuard config"],
-                ["link", "Link"],
-              ] as const
-            ).map(([key, text]) =>
-              h(
-                "button",
-                {
-                  class: key === format ? "on" : "",
-                  role: "radio",
-                  "aria-checked": String(key === format),
-                  onclick: () => {
-                    format = key;
-                    paint();
-                  },
-                },
-                text,
-              ),
-            ),
-          )
-        : null;
-
-      const shown =
-        format === "config"
-          ? config
-            ? [
-                h("div", { class: "share-qr" }, qrCode(config, 248)),
-                h("p", { class: "fnote" }, "Scan with the WireGuard app: Add a tunnel, then Create from QR code."),
-                // Tall enough for every line, and a row for the horizontal scrollbar a long key may
-                // need: the sheet focuses its first text box on open, which puts the caret at the end
-                // and would otherwise scroll the [Interface] header out of view.
-                textBox(config, "WireGuard config", config.trimEnd().split("\n").length + 1, " wgconf"),
-                dns
-                  ? null
-                  : h(
-                      "p",
-                      { class: "fnote warn" },
-                      `There is no DNS line: your DNS setting (${dnsSetting}) names a host, not an address. ` +
-                        "Add one in the WireGuard app, or names may not resolve through the tunnel.",
-                    ),
-                h(
-                  "p",
-                  { class: "fnote warn" },
-                  "The config contains this server's private key. Anyone who has it can use the server.",
-                ),
-              ]
-            : [h("p", { class: "fnote warn" }, refusal ?? "")]
-          : [
-              h("div", { class: "share-qr" }, qrCode(link)),
-              // Nunya first: it is the client this link is written for. It has no phone app, so a
-              // phone is pointed at the kind of client rather than at another product by name.
-              h(
-                "p",
-                { class: "fnote" },
-                "Import it in Nunya on another device, or scan it on a phone with a client that reads share links.",
-              ),
-              textBox(link, "Share link", 4),
-              h(
-                "p",
-                { class: "fnote warn" },
-                "The link contains this server's credentials. Anyone who has it can use the server.",
-              ),
-            ];
-
-      render(body, h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`), choice, ...shown);
-    };
-    paint();
-
-    return h(
-      "div",
-      { class: "app sheet share", role: "dialog", "aria-label": "Share server" },
-      sheetHead("Share server", close),
-      body,
-      h(
-        "div",
-        { class: "sheet-foot" },
-        h("span", { class: "gpick" }),
-        h("button", { class: "ghost", onclick: close }, "Done"),
-        copyButton,
-      ),
-    );
-  });
-}
-
-/**
- * Puts text on the clipboard, and says whether it got there.
- *
- * The async Clipboard API is the right one, but WebKitGTK builds that predate it — or refuse it for
- * the app's origin — reject, so the old selection-and-`execCommand` route is kept as a fallback
- * rather than reporting a copy that did not happen.
- */
 /**
  * Opens a page in the system browser. In the app that is Rust's `open_external`, which opens only
  * allow-listed https pages; in the browser preview there is no Rust side, and a new tab is the
@@ -2123,21 +1857,6 @@ async function openExternal(url: string) {
     await invoke("open_external", { url });
   } catch (e) {
     log(`[ui] could not open ${url}: ${String(e)}`);
-  }
-}
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const scratch = h("textarea", { class: "offscreen", readonly: true }) as HTMLTextAreaElement;
-    scratch.value = text;
-    document.body.append(scratch);
-    scratch.select();
-    const ok = document.execCommand("copy");
-    scratch.remove();
-    return ok;
   }
 }
 
@@ -2203,6 +1922,16 @@ initSheets({ log });
 // views/edit-server.ts asks this module for logging and for re-measuring a server whose address
 // just changed.
 initEditServer({ log, checkOne: (server) => void checkOne(server) });
+
+// views/share-server.ts asks this module for the one thing it cannot do on its own: logging.
+initShareServer({ log });
+
+// features/add-servers.ts asks this module for the same two things almost everything else does:
+// logging, and (here) asking a subscription group to refresh.
+initAddServers({
+  log,
+  refreshSubscription: (group) => void refreshSubscription(group),
+});
 
 // The status card, the map and the tray all render from the store but, unlike the list, are not
 // views that subscribe themselves. Without this they only caught up with a change — a server
