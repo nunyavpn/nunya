@@ -9,7 +9,6 @@ import { emitTo, hasBackend, inTauri, invoke, listen } from "./bridge";
 import { entryLine, entryPlace, isAnycast, type EdgeReport } from "./edge";
 
 import { h, qs, render } from "./dom";
-import { size } from "./format";
 import { guessCity, guessCountry, place } from "./geo";
 import {
   isRelayed,
@@ -21,16 +20,7 @@ import {
   type Spot,
 } from "./store";
 import { fastestFirst, type QuickKind } from "./quick";
-import {
-  describe,
-  dnsAddressOf,
-  extractWgQuick,
-  parseShareLink,
-  toShareLink,
-  toWgQuick,
-  wgQuickRefusal,
-  type Profile,
-} from "./share";
+import { extractWgQuick, parseShareLink, type Profile } from "./share";
 import {
   addSubscription,
   classify,
@@ -42,7 +32,6 @@ import type { PopoverIntent } from "./popover-model";
 import { shieldState, type Shield } from "./shield";
 import { SUPPORT } from "./support";
 import { trayIcon } from "./trayicon";
-import { firstDay, total } from "./usage";
 import { icon } from "./views/icons";
 import { BypassPanel } from "./views/bypass";
 import { DiagnosticsPanel } from "./views/diagnostics";
@@ -84,11 +73,20 @@ import {
   startSession,
 } from "./features/throughput";
 import { ProfileEditor } from "./views/editor";
-import { qrCode, readQrCode } from "./views/qr";
+import { readQrCode } from "./views/qr";
 import { quickOptions } from "./views/quickpick";
+import {
+  confirmDeleteGroup,
+  confirmDeleteServer,
+  initSheets,
+  isLive,
+  openSheet,
+  openUsage,
+  sheetHead,
+} from "./views/sheets";
+import { copyText, initShareServer, openShareServer } from "./views/share-server";
 import { Splash } from "./views/splash";
 import { SupportPanel } from "./views/support";
-import { shortDate, usageBody } from "./views/usage";
 
 // ---------------------------------------------------------------- app state
 
@@ -1757,243 +1755,10 @@ function blankProfile(): Profile {
 
 // ---------------------------------------------------------------- sheets
 
-/**
- * Opens a modal over the scrim and hands the builder a way to close it.
- *
- * The dialogs differ only in their contents, so the plumbing — the scrim, click-outside, Escape —
- * lives here once. Escape in particular is why this exists rather than three copies: a modal that
- * traps you until you find the right button is a modal people learn to distrust.
- */
-function openSheet(build: (close: () => void) => Node) {
-  const scrim = qs<HTMLElement>("#scrim");
-
-  const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape") close();
-  };
-  const onClick = (event: MouseEvent) => {
-    if (event.target === scrim) close();
-  };
-
-  function close() {
-    scrim.hidden = true;
-    scrim.replaceChildren();
-    // Both are removed, or every sheet ever opened keeps listening for the rest of the session.
-    document.removeEventListener("keydown", onKey);
-    scrim.removeEventListener("click", onClick);
-  }
-
-  scrim.hidden = false;
-  render(scrim, build(close));
-  // After insertion, not inside the builder: an element outside the document cannot take focus.
-  scrim.querySelector<HTMLElement>("textarea, input")?.focus();
-  document.addEventListener("keydown", onKey);
-  scrim.addEventListener("click", onClick);
-}
-
-/** Head and close button, identical across the sheets. */
-function sheetHead(title: string, close: () => void) {
-  return h(
-    "div",
-    { class: "sheet-head" },
-    h("span", { class: "t" }, title),
-    h("button", { class: "x", "aria-label": "Close", onclick: close }, icon("close", 15)),
-  );
-}
-
-/**
- * A yes/no sheet for something that cannot be undone.
- *
- * This app has no undo, and what is being deleted is usually a credential — a hand-added server or
- * a subscription URL exists nowhere else. So the sheet states what will be lost rather than asking
- * "are you sure?", which is a question nobody reads.
- */
-function confirmSheet(options: {
-  title: string;
-  lines: (string | null)[];
-  confirmLabel: string;
-  onConfirm: () => void;
-}) {
-  openSheet((close) =>
-    h(
-      "div",
-      { class: "app sheet confirm", role: "dialog", "aria-label": options.title },
-      sheetHead(options.title, close),
-      h(
-        "div",
-        { class: "confirm-body" },
-        ...options.lines.filter((l): l is string => Boolean(l)).map((line) => h("p", {}, line)),
-      ),
-      h(
-        "div",
-        { class: "sheet-foot" },
-        h("span", { class: "gpick" }),
-        h("button", { class: "ghost", onclick: close }, "Cancel"),
-        h(
-          "button",
-          {
-            class: "btn danger",
-            onclick: () => {
-              options.onConfirm();
-              close();
-            },
-          },
-          options.confirmLabel,
-        ),
-      ),
-    ),
-  );
-}
-
-/** Whether the tunnel is currently running on this server. */
-function isLive(server: Server): boolean {
-  return connection !== "off" && store.get().selectedServerId === server.id;
-}
-
-/**
- * The usage sheet, for one config or for every config in a group.
- *
- * It stays live while open — the numbers climb as the tunnel runs — by repainting on store
- * changes; the listener drops itself the first time it fires after the sheet has gone. Clearing
- * asks in the footer rather than in a second sheet, and says what goes: the history, never the
- * configs.
- */
-function openUsage(target: { server: Server } | { group: Group }) {
-  const configs = (): Server[] =>
-    "server" in target
-      ? [store.server(target.server.id)].filter((s): s is Server => Boolean(s))
-      : store.serversIn(target.group.id);
-
-  openSheet((close) => {
-    const body = h("div", { class: "share-body usage-host" });
-    const foot = h("div", { class: "sheet-foot" });
-    let confirming = false;
-
-    const paint = () => {
-      const servers = configs();
-      const group = "group" in target ? store.group(target.group.id) : store.group(servers[0]?.groupId ?? "");
-      const heading =
-        "server" in target
-          ? [target.server.profile.name, group?.name]
-          : [target.group.name, `${servers.length} config${servers.length === 1 ? "" : "s"}`];
-      render(
-        body,
-        h("p", { class: "share-name" }, heading[0], heading[1] ? h("span", { class: "usage-of" }, ` · ${heading[1]}`) : null),
-        usageBody({
-          servers,
-          quota: "group" in target ? group?.quota : null,
-          breakdown: "group" in target,
-          now: Date.now(),
-        }),
-      );
-
-      const histories = servers.map((s) => s.usage);
-      const since = firstDay(histories);
-      const recorded = total(histories);
-      if (confirming && since) {
-        render(
-          foot,
-          h(
-            "span",
-            { class: "gpick" },
-            `Clears ${size(recorded.up + recorded.down)} recorded since ${shortDate(since)}. The configs stay.`,
-          ),
-          h("button", { class: "ghost", onclick: () => ((confirming = false), paint()) }, "Cancel"),
-          h(
-            "button",
-            {
-              class: "btn danger",
-              onclick: () => {
-                confirming = false;
-                store.clearUsage(servers.map((s) => s.id));
-                log(`[ui] cleared the usage history of ${heading[0]}`);
-              },
-            },
-            "Clear",
-          ),
-        );
-      } else {
-        render(
-          foot,
-          h("span", { class: "gpick" }),
-          h(
-            "button",
-            { class: "ghost danger", disabled: !since, onclick: () => ((confirming = true), paint()) },
-            "Clear history",
-          ),
-          h("button", { class: "ghost", onclick: close }, "Done"),
-        );
-      }
-    };
-    paint();
-
-    // After insertion: `subscribe` calls the listener at once, and a sheet not yet in the document
-    // would read as already closed.
-    queueMicrotask(() => {
-      let off: (() => void) | null = null;
-      off = store.subscribe(() => {
-        if (!body.isConnected) off?.();
-        else paint();
-      });
-    });
-
-    return h(
-      "div",
-      { class: "app sheet usage", role: "dialog", "aria-label": "Usage" },
-      sheetHead("Usage", close),
-      body,
-      foot,
-    );
-  });
-}
-
-function confirmDeleteServer(server: Server) {
-  const group = store.group(server.groupId);
-  const live = isLive(server);
-
-  confirmSheet({
-    title: "Delete this server?",
-    lines: [
-      `${server.profile.name} · ${describe(server.profile)}`,
-      // A subscription server returns on the next update, so removing it is housekeeping. A
-      // hand-added one is gone for good, and its credentials with it.
-      group?.kind === "subscription"
-        ? `It will come back the next time ${group.name} updates.`
-        : "Its address and credentials are not saved anywhere else.",
-      live ? "The tunnel is running on it and will be disconnected." : null,
-    ],
-    confirmLabel: "Delete",
-    onConfirm: () => {
-      store.removeServer(server.id);
-      log(`[ui] deleted ${server.profile.name}`);
-      if (live) void disconnect();
-    },
-  });
-}
-
-function confirmDeleteGroup(group: Group) {
-  const servers = store.serversIn(group.id);
-  const live = servers.some(isLive);
-
-  confirmSheet({
-    title: group.url ? "Delete this subscription?" : "Delete this group?",
-    lines: [
-      group.name,
-      servers.length
-        ? `Its ${servers.length} server${servers.length === 1 ? "" : "s"} go with it.`
-        : "It has no servers.",
-      // The URL is the credential: anyone holding it can read the whole server list, and this is
-      // the only copy the app has.
-      group.url ? "The subscription address is not saved anywhere else." : null,
-      live ? "The tunnel is running on one of them and will be disconnected." : null,
-    ],
-    confirmLabel: "Delete",
-    onConfirm: () => {
-      store.removeGroup(group.id);
-      log(`[ui] deleted ${group.name}`);
-      if (live) void disconnect();
-    },
-  });
-}
+// openSheet, sheetHead, confirmSheet, isLive, openUsage, confirmDeleteServer and
+// confirmDeleteGroup now live in views/sheets.ts; see ENGINEERING_STANDARDS.md. openEditServer,
+// openShareServer and buildAddServers (above) stay here — each needs its own larger machinery
+// (the profile editor, QR/clipboard, the add-servers parser) and is a separate future extraction.
 
 /**
  * Edits a server through a form over its profile.
@@ -2078,167 +1843,9 @@ function openEditServer(server: Server) {
   });
 }
 
-/**
- * Shows a server as a share link and a QR code, for a phone to scan or another client to import.
- *
- * The link is generated here, from the profile, rather than kept from whatever was pasted: the
- * profile is what the app actually connects with, so an edit made since import is what gets
- * shared. The standard `vless://` / `vmess://` / `trojan://` form is what v2rayNG, Hiddify and
- * Streisand all scan.
- *
- * A WireGuard server can also be shared as a wg-quick config, and opens on it: the official
- * WireGuard apps — most people's phone client for WireGuard — scan only that, not a link. A WARP
- * server says why it cannot be (`wgQuickRefusal`) and opens on the link instead. The config's DNS
- * line comes from the app's DNS setting when that names an address; when it names a host, the
- * sheet says so rather than choosing a resolver for the user.
- *
- * The sheet says plainly that what it shows is the credential. A QR code on screen looks like a
- * harmless picture, and anyone who photographs it can use the server exactly as the user does.
- */
-function openShareServer(server: Server) {
-  let link: string;
-  try {
-    link = toShareLink(server.profile);
-  } catch (e) {
-    log(`[ui] could not write a share link for ${server.profile.name}: ${String(e)}`);
-    return;
-  }
+// openShareServer and copyText now live in views/share-server.ts; see ENGINEERING_STANDARDS.md.
+// buildAddServers (above) is the remaining sheet still here, tied to features/add-servers.ts.
 
-  const wireguard = server.profile.protocol === "wireguard";
-  const refusal = wireguard ? wgQuickRefusal(server.profile) : null;
-  const dnsSetting = store.settings().dns;
-  const dns = dnsAddressOf(dnsSetting);
-  const config = wireguard && !refusal ? toWgQuick(server.profile, dns ? [dns] : []) : null;
-  let format: "link" | "config" = config ? "config" : "link";
-
-  openSheet((close) => {
-    const body = h("div", { class: "share-body" });
-    const copyButton = h("button", { class: "btn brand" }) as HTMLButtonElement;
-    let reset = 0;
-    const copyLabel = () => (format === "config" ? "Copy config" : "Copy link");
-    copyButton.onclick = async () => {
-      const text = format === "config" ? config : link;
-      if (!text) return;
-      const copied = await copyText(text);
-      copyButton.textContent = copied ? "Copied" : "Copy failed";
-      window.clearTimeout(reset);
-      reset = window.setTimeout(() => (copyButton.textContent = copyLabel()), 1600);
-    };
-
-    const textBox = (value: string, label: string, rows: number, extra = "") => {
-      const box = h("textarea", {
-        class: `val sharelink${extra}`,
-        readonly: true,
-        rows,
-        spellcheck: false,
-        "aria-label": label,
-        onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
-      }) as HTMLTextAreaElement;
-      box.value = value;
-      return box;
-    };
-
-    const paint = () => {
-      window.clearTimeout(reset);
-      copyButton.textContent = copyLabel();
-      copyButton.disabled = format === "config" && !config;
-
-      const choice = wireguard
-        ? h(
-            "span",
-            { class: "seg share-format", role: "radiogroup", "aria-label": "Share as" },
-            ...(
-              [
-                ["config", "WireGuard config"],
-                ["link", "Link"],
-              ] as const
-            ).map(([key, text]) =>
-              h(
-                "button",
-                {
-                  class: key === format ? "on" : "",
-                  role: "radio",
-                  "aria-checked": String(key === format),
-                  onclick: () => {
-                    format = key;
-                    paint();
-                  },
-                },
-                text,
-              ),
-            ),
-          )
-        : null;
-
-      const shown =
-        format === "config"
-          ? config
-            ? [
-                h("div", { class: "share-qr" }, qrCode(config, 248)),
-                h("p", { class: "fnote" }, "Scan with the WireGuard app: Add a tunnel, then Create from QR code."),
-                // Tall enough for every line, and a row for the horizontal scrollbar a long key may
-                // need: the sheet focuses its first text box on open, which puts the caret at the end
-                // and would otherwise scroll the [Interface] header out of view.
-                textBox(config, "WireGuard config", config.trimEnd().split("\n").length + 1, " wgconf"),
-                dns
-                  ? null
-                  : h(
-                      "p",
-                      { class: "fnote warn" },
-                      `There is no DNS line: your DNS setting (${dnsSetting}) names a host, not an address. ` +
-                        "Add one in the WireGuard app, or names may not resolve through the tunnel.",
-                    ),
-                h(
-                  "p",
-                  { class: "fnote warn" },
-                  "The config contains this server's private key. Anyone who has it can use the server.",
-                ),
-              ]
-            : [h("p", { class: "fnote warn" }, refusal ?? "")]
-          : [
-              h("div", { class: "share-qr" }, qrCode(link)),
-              // Nunya first: it is the client this link is written for. It has no phone app, so a
-              // phone is pointed at the kind of client rather than at another product by name.
-              h(
-                "p",
-                { class: "fnote" },
-                "Import it in Nunya on another device, or scan it on a phone with a client that reads share links.",
-              ),
-              textBox(link, "Share link", 4),
-              h(
-                "p",
-                { class: "fnote warn" },
-                "The link contains this server's credentials. Anyone who has it can use the server.",
-              ),
-            ];
-
-      render(body, h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`), choice, ...shown);
-    };
-    paint();
-
-    return h(
-      "div",
-      { class: "app sheet share", role: "dialog", "aria-label": "Share server" },
-      sheetHead("Share server", close),
-      body,
-      h(
-        "div",
-        { class: "sheet-foot" },
-        h("span", { class: "gpick" }),
-        h("button", { class: "ghost", onclick: close }, "Done"),
-        copyButton,
-      ),
-    );
-  });
-}
-
-/**
- * Puts text on the clipboard, and says whether it got there.
- *
- * The async Clipboard API is the right one, but WebKitGTK builds that predate it — or refuse it for
- * the app's origin — reject, so the old selection-and-`execCommand` route is kept as a fallback
- * rather than reporting a copy that did not happen.
- */
 /**
  * Opens a page in the system browser. In the app that is Rust's `open_external`, which opens only
  * allow-listed https pages; in the browser preview there is no Rust side, and a new tab is the
@@ -2253,21 +1860,6 @@ async function openExternal(url: string) {
     await invoke("open_external", { url });
   } catch (e) {
     log(`[ui] could not open ${url}: ${String(e)}`);
-  }
-}
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const scratch = h("textarea", { class: "offscreen", readonly: true }) as HTMLTextAreaElement;
-    scratch.value = text;
-    document.body.append(scratch);
-    scratch.select();
-    const ok = document.execCommand("copy");
-    scratch.remove();
-    return ok;
   }
 }
 
@@ -2320,6 +1912,12 @@ initTunnel({
 // features/throughput.ts asks for the same two things almost everything else does: logging, and
 // re-rendering once a second so the uptime line ticks even when no bytes move.
 initThroughput({ log, refresh });
+
+// views/sheets.ts asks this module for the one thing it cannot do on its own: logging.
+initSheets({ log });
+
+// views/share-server.ts asks this module for the one thing it cannot do on its own: logging.
+initShareServer({ log });
 
 // features/add-servers.ts asks this module for the same two things almost everything else does:
 // logging, and (here) asking a subscription group to refresh.
