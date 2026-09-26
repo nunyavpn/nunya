@@ -166,9 +166,37 @@ async fn check_config(
 
 /// Asks for whatever consent the platform requires, once.
 ///
-/// A no-op for the subprocess transport, which gets its privilege from how the core was installed.
+/// On macOS without the extension, that is the administrator password: the core is made setuid
+/// root (`core_proc::grant_root`) and restarted, because the running one was started without it.
+/// The restart looks to the frontend like the core going away and coming back, which re-asks
+/// readiness on its own.
 #[tauri::command]
-async fn request_permission(state: State<'_, AppState>) -> Result<(), String> {
+async fn request_permission(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if state.tunnel_kind == transport::select::Kind::Subprocess {
+        // A restart would drop a running tunnel (a proxy-mode one, since VPN mode is what needs this).
+        if matches!(state.tunnel.state().await, Ok(TunnelState::Connected)) {
+            return Err("disconnect first: the core restarts to take administrator access".into());
+        }
+        let core_path = state.core_path.clone();
+        tokio::task::spawn_blocking(move || core_proc::grant_root(&core_path))
+            .await
+            .map_err(|e| e.to_string())??;
+
+        let mut slot = state.core.lock().await;
+        if let Some(old) = slot.take() {
+            old.stop().await;
+        }
+        let core = spawn_core(&app, &state.core_path, state.link.socket_path(), &state.runtime_dir)
+            .map_err(|e| e.to_string())?;
+        state.link.expect_core_pid(core.pid);
+        log::info!("core restarted with administrator access (pid {})", core.pid);
+        *slot = Some(core);
+        return Ok(());
+    }
     state
         .tunnel
         .request_permission()
@@ -745,6 +773,21 @@ fn hide_on_close(app: &tauri::AppHandle) {
     });
 }
 
+/// Starts the core with its log forwarded to the frontend. At launch, and again when it is
+/// restarted to take administrator access.
+fn spawn_core(
+    app: &tauri::AppHandle,
+    core_path: &std::path::Path,
+    socket: &std::path::Path,
+    runtime_dir: &std::path::Path,
+) -> Result<CoreProcess, core_proc::SpawnError> {
+    let log_sink = app.clone();
+    CoreProcess::spawn(core_path, socket, runtime_dir, move |line| {
+        log::debug!("core: {line}");
+        let _ = log_sink.emit("core-log", line);
+    })
+}
+
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -765,15 +808,11 @@ pub fn run() {
                 .to_path_buf();
             let core_path = core_proc::find_core(&exe_dir);
 
-            let log_sink = app.handle().clone();
             // `setup` runs outside the async runtime, but tokio's process machinery registers a
             // SIGCHLD handler with the reactor and `pump` calls `tokio::spawn`, so this has to be
             // entered on the runtime even though the call itself is not async.
             let core = tauri::async_runtime::block_on(async {
-                CoreProcess::spawn(&core_path, &socket, &runtime_dir, move |line| {
-                    log::debug!("core: {line}");
-                    let _ = log_sink.emit("core-log", line);
-                })
+                spawn_core(app.handle(), &core_path, &socket, &runtime_dir)
             })?;
 
             // Must happen before the first accept, so the peer check has something to compare

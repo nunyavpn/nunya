@@ -14,6 +14,21 @@ fn main() {
         proto.display()
     );
 
+    // A release bundle is what `grant_root` makes setuid root, and a core built from source has its
+    // parent check compiled out — the only thing that keeps other programs from driving it. So a
+    // release build refuses one here, for every path to a bundle, not just `build-app.sh`.
+    let origin = Path::new("../vendor/core/.origin");
+    println!("cargo:rerun-if-changed={}", origin.display());
+    if std::env::var("PROFILE").as_deref() == Ok("release")
+        && std::fs::read_to_string(origin).is_ok_and(|o| o.trim() == "source")
+    {
+        panic!(
+            "vendor/core holds a development core, built from source with its parent check \
+             disabled; a release build must not bundle one. Run ./scripts/fetch-core.sh to \
+             install the pinned release."
+        );
+    }
+
     prost_build::compile_protos(&[&proto], &[proto_dir])
         .expect("failed to compile nunya.proto (is protoc installed?)");
 

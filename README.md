@@ -167,9 +167,10 @@ you'd give access to.
   it). Apps you point at it go through the connection. Turn on **Set system proxy** to point your
   desktop's proxy setting at it while you're connected; your previous setting comes back when you
   disconnect. Apps that ignore the system proxy aren't covered, and Nunya says so.
-- **VPN mode** carries all of the device's traffic through the tunnel. It needs system privileges
-  this beta doesn't set up for you yet: on macOS, the signed system extension, and on Linux,
-  network-admin rights for the engine. Both are coming in later releases.
+- **VPN mode** carries all of the device's traffic through the tunnel. It needs system privileges.
+  On macOS, click **Allow…** on the status card and enter your administrator password once (again
+  after each update); Nunya must be in Applications for this. On Linux, the engine needs
+  network-admin rights, which this beta doesn't set up for you yet.
 - **Allow LAN** lets other devices on your network use the proxy. **DNS** sets the resolver used
   inside the connection.
 - **Ad blocker** refuses ad networks (the `category-ads-all` list published by sing-box's authors).
@@ -229,8 +230,8 @@ download against.
   or make the `.AppImage` executable and run it.
 - **Windows**: planned ([#34](https://github.com/nunyavpn/nunya/issues/34)).
 
-This beta is built around **proxy mode**, on both platforms. VPN mode follows once the app can set
-up the privileges it needs: the signed system extension on macOS, network-admin rights on Linux.
+This beta is built around **proxy mode**, on both platforms. VPN mode works on macOS after an
+administrator password prompt; on Linux it follows once the app can set up network-admin rights.
 
 ## Roadmap
 
