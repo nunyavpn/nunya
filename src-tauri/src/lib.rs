@@ -100,10 +100,6 @@ struct Readiness {
     state: TunnelState,
     /// Present when the transport cannot run: an unprivileged core, or an unapproved VPN profile.
     detail: Option<String>,
-    /// `needsPermission` is one the app can clear itself, with the administrator password
-    /// (`request_permission`). Only on macOS: Linux has no such prompt yet, and offering one there
-    /// would be a button that always fails.
-    can_grant: bool,
 }
 
 #[tauri::command]
@@ -129,13 +125,9 @@ async fn tunnel_readiness(
         Err(e) => (None, Some(e.to_string())),
     };
 
-    let can_grant = cfg!(target_os = "macos")
-        && state.tunnel_kind == transport::select::Kind::Subprocess
-        && matches!(state_or_err, Some(TunnelState::NeedsPermission));
     Ok(Readiness {
         mode: mode.as_str(),
         transport: state.tunnel_kind.as_str(),
-        can_grant,
         ready: matches!(state_or_err, Some(TunnelState::Disconnected)),
         state: state_or_err.unwrap_or(TunnelState::NeedsPermission),
         detail,

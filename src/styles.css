@@ -1476,84 +1476,12 @@ button:disabled {
   border-color: transparent;
 }
 
-/* What Connect will ask for: information, not a fault, so brand rather than amber. */
-.tag.note {
-  font-family: var(--ui);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--brand);
-  background: var(--brand-soft);
-  border-color: transparent;
-}
-
-/* ---------------------------------------------------------------- grant access */
-
-.grant-body {
-  padding: 20px 22px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--ink-2);
-}
-
-.grant-body p {
-  margin: 0;
-  line-height: 1.5;
-}
-
-.grant-badge {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  color: var(--brand);
-  background: var(--brand-soft);
-}
-
-.grant-body .grant-lede {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.015em;
-  color: var(--ink);
-}
-
-.grant-facts {
-  margin: 2px 0 0;
-  padding: 12px 14px;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  border-radius: 10px;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  line-height: 1.45;
-}
-
-.grant-facts b {
-  color: var(--ink);
-}
-
-.grant-error {
-  padding: 9px 12px;
-  border-radius: 9px;
-  color: var(--warn);
-  background: var(--warn-soft);
-}
-
-.grant-alt {
-  color: var(--muted);
-}
-
-.linkish {
-  color: var(--brand);
+.tag.grant {
   font-weight: 600;
+  cursor: pointer;
 }
 
-.linkish:hover {
+.tag.grant:hover {
   text-decoration: underline;
 }
 

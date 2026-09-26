@@ -26,8 +26,6 @@ export interface Readiness {
   ready: boolean;
   state: "disconnected" | "connecting" | "connected" | "needsPermission";
   detail: string | null;
-  /** The app can clear `needsPermission` itself, with the administrator password (macOS). */
-  canGrant: boolean;
 }
 
 /** Mirrors `geo::Exit` without its place: what the status card shows. */
@@ -56,10 +54,6 @@ export interface TunnelHooks {
   log(line: string): void;
   refresh(): void;
   blockedReason(): string | null;
-  /** VPN mode is waiting on the administrator password; see `openGrantAccess`. */
-  needsGrant(): boolean;
-  /** Explains, then asks for it. Not awaited: the sheet waits on the user, the queue must not. */
-  askGrant(): void;
   /** Where this machine is, looked up with the tunnel down; null while unplaced or connected. */
   getHome(): Whereabouts | null;
   /** A connect just landed: reset the usage/throughput counters main.ts owns for the new session. */
@@ -191,12 +185,6 @@ async function connectNow() {
   if (blocked) {
     hooks.log(`[ui] refusing to connect: ${blocked}`);
     hooks.refresh();
-    return;
-  }
-  // A Connect that did nothing until an "Allow…" beside it had been found was the old shape of
-  // this. Connect is what the user reaches for, so Connect is what explains and asks.
-  if (hooks.needsGrant()) {
-    hooks.askGrant();
     return;
   }
 

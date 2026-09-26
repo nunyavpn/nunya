@@ -299,14 +299,10 @@ development the parent is `cargo`. Every published core enforces the check.
 ## Privilege today: a setuid core, behind the administrator prompt
 
 Until the packet tunnel extension below can be signed (a paid Apple Developer membership), VPN mode
-on macOS runs the core as root. Readiness reports `canGrant`, the status card notes that VPN mode
-will ask for the password, and Connect — from the card, the popover or the tray — opens the
-*Allow VPN mode* sheet ([views/grant-access.ts](src/views/grant-access.ts)) instead of doing nothing.
-The sheet says why, that the password goes to macOS, and that proxy mode needs none; only on
-Continue does `request_permission` run `core_proc::grant_root`, which asks for the password through
-`osascript … with administrator privileges`, makes the bundled core `root:wheel 4755`, and restarts
-it. The app waits for the new core to report itself privileged, then connects. Preview the sheet
-with `VITE_MOCK=1 npm run dev` and `/?needsAdmin` (add `&refuseAdmin` for a cancelled prompt).
+on macOS runs the core as root. In VPN mode the status card says "VPN mode needs administrator
+access" with an **Allow…** button; `request_permission` runs `core_proc::grant_root`, which asks for
+the password through `osascript … with administrator privileges`, makes the bundled core
+`root:wheel 4755`, and restarts it.
 
 Setuid, not `sudo` or `osascript` around the core, because both of those become the core's parent:
 the release core's parent check (parent is `Nunya` in the same directory) and our pid check in

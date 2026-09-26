@@ -168,8 +168,8 @@ you'd give access to.
   desktop's proxy setting at it while you're connected; your previous setting comes back when you
   disconnect. Apps that ignore the system proxy aren't covered, and Nunya says so.
 - **VPN mode** carries all of the device's traffic through the tunnel. It needs system privileges.
-  On macOS, the first Connect in VPN mode explains why and asks for your administrator password,
-  once (and again after each update); Nunya must be in Applications for this. On Linux, the engine needs
+  On macOS, click **Allow…** on the status card and enter your administrator password once (again
+  after each update); Nunya must be in Applications for this. On Linux, the engine needs
   network-admin rights, which this beta doesn't set up for you yet.
 - **Allow LAN** lets other devices on your network use the proxy. **DNS** sets the resolver used
   inside the connection.
