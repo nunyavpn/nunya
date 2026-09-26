@@ -78,6 +78,7 @@ import {
 import { initEditServer, openEditServer } from "./views/edit-server";
 import { copyText, initShareServer, openShareServer } from "./views/share-server";
 import { initAddServersSheet, openAddServers } from "./views/add-servers-sheet";
+import { openGrantAccess } from "./views/grant-access";
 import { Splash } from "./views/splash";
 import { SupportPanel } from "./views/support";
 
@@ -120,7 +121,6 @@ const status = new StatusCard(qs("#status"), {
     const server = store.selected();
     if (server) openShareServer(server);
   },
-  onGrant: () => void grantAccess(),
 });
 const map = new WorldMap(qs<HTMLCanvasElement>("#worldmap"), qs("#pins"), (key, at) =>
   pickFromMap(key, at),
@@ -552,7 +552,7 @@ function refresh() {
     systemProxyError,
     ...placeLines(server),
     blockedReason: blockedReason(),
-    canGrant: canGrant(),
+    grantNote: needsGrant() ? "VPN mode will ask for your administrator password" : null,
   });
 
   const { pins, route } = buildMap(server);
@@ -799,25 +799,49 @@ async function observeEdge(server: Server | undefined) {
 
 /**
  * VPN mode without the packet tunnel extension: the core needs root to create a utun, and the
- * app can ask for it (`core_proc::grant_root`). The core restarts with it, and `core-connection`
- * re-asks readiness when it is back.
+ * app can ask for it (`core_proc::grant_root`). Not a reason Connect is blocked — Connect is
+ * what explains and asks (`askGrant`).
  */
-function canGrant(): boolean {
-  return readiness?.state === "needsPermission" && readiness.transport === "subprocess";
+function needsGrant(): boolean {
+  return Boolean(readiness?.canGrant) && readiness?.mode === store.settings().mode;
 }
 
-/** Why the last Allow… did not work, shown in place of the plain reason until the next one. */
-let grantError: string | null = null;
+/** From Connect wherever it was pressed; the popover and the tray have no room for the sheet. */
+function askGrant() {
+  if (inTauri) void invoke("show_main_window").catch(() => {});
+  openGrantAccess({ allow: allowVpn, useProxy: () => void connectInProxyMode() });
+}
 
-async function grantAccess() {
+/**
+ * Asks macOS, waits for the core to come back with the access, then connects — the user pressed
+ * Connect, and a second press after the password would be a step for nothing.
+ */
+async function allowVpn(): Promise<string | null> {
   try {
     await invoke("request_permission");
-    grantError = null;
   } catch (e) {
-    grantError = String(e);
-    log(`[ui] ${grantError}`);
+    const why = e instanceof Error ? e.message : String(e);
+    log(`[ui] ${why}`);
+    return why.charAt(0).toUpperCase() + why.slice(1) + ".";
   }
-  refresh();
+  // The core restarts to take it; readiness says when the new one is up and privileged.
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (!(await invoke<boolean>("core_connected").catch(() => false))) continue;
+    await refreshReadiness();
+    if (readiness?.ready) {
+      void connect();
+      return null;
+    }
+  }
+  return "Access was granted, but the engine did not come back with it. Quit and reopen Nunya, then try again.";
+}
+
+/** The sheet's way out: proxy mode needs no password. Readiness is asked again first, since it is per mode. */
+async function connectInProxyMode() {
+  store.updateSettings({ mode: "proxy" });
+  await refreshReadiness();
+  void connect();
 }
 
 /** Why Connect will not work, phrased for someone who did not write the app. */
@@ -826,8 +850,7 @@ function blockedReason(): string | null {
   if (store.storageError) return `Could not read saved data: ${store.storageError}`;
   if (!coreReady) return "Waiting for the core to start";
   if (!store.get().servers.length) return "Add a server to get started";
-  if (canGrant()) return grantError ?? "VPN mode needs administrator access";
-  if (readiness && !readiness.ready) {
+  if (readiness && !readiness.ready && !needsGrant()) {
     return readiness.detail ?? `The ${readiness.transport} transport is not ready`;
   }
   return null;
@@ -1420,6 +1443,8 @@ initTunnel({
   log,
   refresh,
   blockedReason,
+  needsGrant,
+  askGrant,
   getHome: () => home,
   onConnected: startSession,
   sampleBeforeStop: sample,
