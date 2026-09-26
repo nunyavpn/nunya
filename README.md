@@ -221,7 +221,8 @@ when something doesn't connect, and what to include in a bug report.
 
 Nunya is in **beta**. Builds are published on the
 [Releases](https://github.com/nunyavpn/nunya/releases) page, each with a `SHA256SUMS` to check your
-download against.
+download against. Every change ships as a new beta (marked *Pre-release*), so take the newest one;
+stable versions, from 1.0 on, are marked *Latest*.
 
 - **macOS** (Apple Silicon, macOS 12 or later): open the `.dmg` and drag Nunya into Applications.
   The beta isn't signed by an Apple Developer account yet, so the first time you open it, go to
