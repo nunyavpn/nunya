@@ -25,6 +25,8 @@ const handlers = new Map<string, Set<Handler>>();
 
 let connectedAt = 0;
 let running = false;
+/** The simulated core has been given administrator access (`?needsAdmin`). */
+let granted = false;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -59,8 +61,27 @@ export async function mockInvoke<T>(command: string, args: Record<string, unknow
     case "core_connected":
       return answer(true);
 
-    case "tunnel_readiness":
-      return answer({ mode: args.mode, transport: "subprocess", ready: true, state: "disconnected", detail: null });
+    // `?needsAdmin` previews VPN mode on a Mac that has not granted the core access yet.
+    case "tunnel_readiness": {
+      const needs = args.mode === "vpn" && !granted && new URLSearchParams(location.search).has("needsAdmin");
+      return answer({
+        mode: args.mode,
+        transport: "subprocess",
+        ready: !needs,
+        state: needs ? "needsPermission" : "disconnected",
+        detail: null,
+        canGrant: needs,
+      });
+    }
+
+    // Long enough to see "Waiting for macOS…"; `?refuseAdmin` previews a cancelled prompt.
+    case "request_permission":
+      await wait(1500);
+      if (new URLSearchParams(location.search).has("refuseAdmin")) {
+        throw "the password prompt was cancelled, so VPN mode is still off";
+      }
+      granted = true;
+      return answer(null);
 
     case "start_tunnel":
       await wait(700);
