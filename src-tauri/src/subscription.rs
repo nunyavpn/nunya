@@ -1105,28 +1105,31 @@ fn percent_decode(value: &str) -> Option<String> {
 pub fn fetch(url: &str) -> Result<Fetched, SubscriptionError> {
     let address = resolve(url)?;
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout(TIMEOUT)
+    // No proxy from the environment: a subscription URL is a credential, and it goes only where
+    // the system routes it — through the tunnel when one is up.
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .proxy(None)
+        .timeout_global(Some(TIMEOUT))
         .user_agent(USER_AGENT)
-        .build();
+        .build()
+        .into();
 
     let response = match agent.get(&address).call() {
         Ok(r) => r,
-        Err(ureq::Error::Status(status, _)) => return Err(SubscriptionError::Status { status }),
+        Err(ureq::Error::StatusCode(status)) => return Err(SubscriptionError::Status { status }),
         Err(e) => return Err(SubscriptionError::Network(e.to_string())),
     };
 
-    let quota = response
-        .header("subscription-userinfo")
-        .map(parse_userinfo);
-    let title = response
-        .header("profile-title")
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
+    let quota = header("subscription-userinfo").map(parse_userinfo);
+    let title = header("profile-title")
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
 
     // Capped read rather than into_string(), which would happily consume an unbounded body.
     let mut body = String::new();
     response
+        .into_body()
         .into_reader()
         .take(MAX_BODY as u64)
         .read_to_string(&mut body)
