@@ -158,7 +158,7 @@ pub fn grant_root(core: &Path) -> Result<(), String> {
     let err = String::from_utf8_lossy(&out.stderr);
     // -128 is AppleScript's "User canceled".
     if err.contains("(-128)") {
-        Err("administrator access was not granted".into())
+        Err("the password prompt was cancelled, so VPN mode is still off".into())
     } else {
         Err(format!("could not give the core administrator access: {}", err.trim()))
     }
