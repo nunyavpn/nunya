@@ -46,7 +46,8 @@ npm run tauri dev
 | Style guide | `npm run design` |
 | Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `deb,appimage` (Linux) |
 | Signed bundle with the packet tunnel | `./scripts/build-app.sh` (needs an Apple Developer team) |
-| Release | bump the version in three places, merge, `git tag vX.Y.Z && git push origin vX.Y.Z` |
+| Release | automatic on every merge to `main` (beta); stable: `git tag vX.Y.Z && git push origin vX.Y.Z` |
+| Next version / set one | `node scripts/version.mjs next` · `node scripts/version.mjs set X.Y.Z` |
 
 There is no JS linter and **no `cargo fmt` gate** — the tree is not rustfmt-clean, so do not
 reformat files you are not otherwise editing.
@@ -103,8 +104,12 @@ installing. Repin with `./scripts/fetch-core.sh --update <tag>` and commit the l
 `npm run tauri dev` cannot run a *release* core (its parent is `target/debug/nunya`); develop against
 one built with `--source`.
 
-**Releases** are tags: `release.yml` builds and publishes on `vX.Y.Z` (see CONTRIBUTING.md's
-*Releasing*). The default macOS build is ad-hoc signed and carries **no** entitlements; the
+**Every merge to `main` is a release.** `release.yml` computes the version with
+`scripts/version.mjs` from the newest `vX.Y.Z` tag — a `feat:` squash subject bumps the middle
+number, anything else the last, and the first never moves on its own — publishes a beta
+(pre-release), and commits the number back to `main` as `chore(release): vX.Y.Z`. **So the PR
+title decides the bump.** A stable release is a `vX.Y.Z` tag a person pushes, published as Latest.
+Do not bump versions by hand in a PR (see CONTRIBUTING.md's *Releasing*). The default macOS build is ad-hoc signed and carries **no** entitlements; the
 NetworkExtension ones need an Apple Developer team, and macOS kills an app that claims them without
 one — they are merged in only by `build-app.sh`, from `tauri.networkextension.conf.json`.
 `fetch-core.sh` fetches `NunyaCore.xcframework.zip` only when the release lists it.

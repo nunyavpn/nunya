@@ -1,24 +1,39 @@
 name: release
 
-# A release is a tag. Push `vX.Y.Z` (or `vX.Y.Z-beta.1`) on a commit that is on main, and this builds
-# the macOS and Linux bundles and publishes them, with their checksums, as a GitHub release:
+# Every merge to main is a release, and a tag a person pushes is a stable one.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+# - **A merge to main** publishes a beta (a GitHub pre-release). The version is worked out, not
+#   typed: from the newest `vX.Y.Z` tag, a `feat:` merge bumps the middle number and anything else
+#   the last (`scripts/version.mjs`). The first number never moves on its own.
+# - **A tag you push** (`git tag v1.0.0 && git push origin v1.0.0`) publishes that version as a
+#   stable release, marked Latest. "This is stable" is a decision, so it is the one number a person
+#   picks; merges after it keep counting from it.
+#
+# Either way the version is stamped into the build, so the installers say it, and then committed
+# back to main so the files do too. That commit is pushed with the workflow's own token, which by
+# GitHub's rule starts no workflow run: no loop, and no second release for it.
 #
 # The macOS build is ad-hoc signed and carries no NetworkExtension entitlements: those need an Apple
-# Developer team, and macOS kills an app that claims them without one. Until there is a team it runs
-# its core as a child process, which is everything proxy mode needs. scripts/build-app.sh is the
-# signed build, with the packet tunnel extension, for when there is.
+# Developer team, and macOS kills an app that claims them without one. VPN mode on macOS runs its
+# core as root instead, after the administrator prompt (`core_proc::grant_root`).
+# scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
 
 on:
   push:
+    branches: [main]
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+# One release at a time, and never cancelled: two merges close together are two releases, the
+# second computed from the first's tag, not one release that silently swallows the other.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  verify:
+  version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -28,33 +43,36 @@ jobs:
         with:
           fetch-depth: 0
 
-      # A tag on a branch nobody merged is not a release, and a tag that disagrees with the version
-      # the app reports would put the wrong number on every installer.
-      - name: The tag is on main and matches the app's version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Which version this is
         id: version
         run: |
-          tag="$GITHUB_REF_NAME"
-          version="${tag#v}"
-          base="${version%%-*}"
-          git fetch --quiet origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::$tag points at a commit that is not on main"
-            exit 1
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            # A tag on a branch nobody merged is not a release.
+            git fetch --quiet origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::$GITHUB_REF_NAME points at a commit that is not on main"
+              exit 1
+            fi
+            # Stable, unless the tag says otherwise (`v1.0.0-rc.1`).
+            prerelease=false
+            case "$version" in *-*) prerelease=true ;; esac
+          else
+            version="$(node scripts/version.mjs next)"
+            prerelease=true
+            [ -n "$version" ] || echo "Nothing to release since the last tag."
           fi
-          for file in package.json src-tauri/tauri.conf.json; do
-            found="$(node -p "require('./$file').version")"
-            [ "$found" = "$base" ] || { echo "::error::$file says $found, the tag says $base"; exit 1; }
-          done
-          found="$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)"
-          [ "$found" = "$base" ] || { echo "::error::src-tauri/Cargo.toml says $found, the tag says $base"; exit 1; }
-          # Below 1.0, or with a suffix, it is a pre-release.
-          prerelease=false
-          case "$version" in 0.*|*-*) prerelease=true ;; esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${version:-nothing} (pre-release: $prerelease)"
 
   build:
-    needs: verify
+    needs: version
+    if: needs.version.outputs.version != ''
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +121,13 @@ jobs:
       - name: Fetch the pinned core
         run: ./scripts/fetch-core.sh
 
+      # Into this checkout only; the commit back to main comes after the release is out.
+      - name: Stamp the version
+        # The base number: bundle versions are X.Y.Z, and a suffix (`-rc.1`) lives in the tag.
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/version.mjs set "${VERSION%%-*}"
+
       - name: Build
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
         env:
@@ -116,7 +141,7 @@ jobs:
           if [ "$RUNNER_OS" = "macOS" ]; then
             cp "$bundle"/dmg/*.dmg out/
             # The app itself too, for anyone who would rather not mount a disk image.
-            ditto -c -k --keepParent "$bundle/macos/Nunya.app" "out/Nunya_${{ needs.verify.outputs.version }}_aarch64.app.zip"
+            ditto -c -k --keepParent "$bundle/macos/Nunya.app" "out/Nunya_${{ needs.version.outputs.version }}_aarch64.app.zip"
           else
             cp "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage out/
           fi
@@ -129,12 +154,18 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [verify, build]
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - uses: actions/download-artifact@v4
         with:
@@ -148,8 +179,8 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.verify.outputs.version }}
-          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           cat > notes.md <<NOTES
           ## Installing
@@ -167,9 +198,50 @@ jobs:
           ## In this build
 
           **Proxy mode** on macOS and Linux: a local SOCKS/HTTP listener, which can also be set as the system proxy
-          while connected. VPN mode on macOS needs the signed packet tunnel extension, which comes with an Apple
-          Developer account.
+          while connected. **VPN mode** on macOS asks for your administrator password the first time you connect
+          in it (and again after an update); on Linux it is not set up for you yet.
           NOTES
-          flags=(--title "Nunya $VERSION" --notes-file notes.md --generate-notes --verify-tag)
-          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
-          gh release create "$GITHUB_REF_NAME" out/* "${flags[@]}"
+          flags=(--title "Nunya $VERSION" --notes-file notes.md --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease --latest=false)
+          else
+            flags+=(--latest)
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            flags+=(--verify-tag)
+          else
+            # A merge: the tag is made here, on the commit that was built.
+            flags+=(--target "$GITHUB_SHA")
+          fi
+          gh release create "v$VERSION" out/* "${flags[@]}"
+
+      # So main's files say the version it has reached. Onto main as it is now, not the commit that
+      # was built: a merge that landed during the build must not be undone. A stable tag lower than
+      # main's version (a hotfix line) leaves the files alone.
+      - name: Commit the version to main
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base="${VERSION%%-*}"
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git checkout --quiet -B main origin/main
+            current="$(node -p "require('./package.json').version")"
+            if [ "$(printf '%s\n%s\n' "$current" "$base" | sort -V | tail -1)" != "$base" ]; then
+              echo "main is at $current, ahead of $base; leaving it"
+              exit 0
+            fi
+            node scripts/version.mjs set "$base"
+            if git diff --quiet; then
+              echo "main already says $base"
+              exit 0
+            fi
+            git commit --quiet -am "chore(release): v$base"
+            # Rejected only when someone merged in between; fetch and try again on top of them.
+            git push --quiet origin main && exit 0
+            sleep 5
+          done
+          echo "::error::could not push the version bump to main"
+          exit 1

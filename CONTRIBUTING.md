@@ -457,18 +457,40 @@ an empty one.
 
 ## Releasing
 
-A release is a tag. Bump the version in `package.json`, `src-tauri/tauri.conf.json` and
-`src-tauri/Cargo.toml`, merge that to `main`, then:
+**Every merge to `main` is a release.** Nobody types a version:
+[`release.yml`](.github/workflows/release.yml) works it out with `scripts/version.mjs` from the
+newest `vX.Y.Z` tag and the commits since it, and publishes a **beta** (a GitHub pre-release).
+
+| The merge is | The version goes | e.g. |
+| --- | --- | --- |
+| `feat:` / `feat(scope):`, or marked breaking (`fix!:`) | middle number up, last to 0 | 0.1.4 → 0.2.0 |
+| anything else (`fix:`, `refactor:`, `docs:`, a revert…) | last number up | 0.1.4 → 0.1.5 |
+
+The first number never moves by itself. **The PR title decides the bump**: a squash merge makes it
+the commit's subject, so title a feature `feat(…): …` and everything else by its own type.
+
+**A stable release is a tag you push**, with the number you choose:
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v1.0.0 && git push origin v1.0.0
 ```
 
-[`release.yml`](.github/workflows/release.yml) refuses a tag that isn't on `main` or doesn't match
-the version. It builds a **macOS arm64** `.dmg` (and a zipped `.app`) plus **Linux x86-64 and
-arm64** `.deb` and `.AppImage`, each against the core pinned in `core.lock`, and publishes them
-with a `SHA256SUMS` as a GitHub release. Versions below 1.0, and tags with a suffix
-(`v0.2.0-beta.1`), are marked pre-release.
+That version is published as stable and marked Latest; merges after it keep counting from it
+(`fix:` → 1.0.1, `feat:` → 1.1.0) as betas until the next tag. A tag must be on `main`, and one with
+a suffix (`v1.0.0-rc.1`) is a pre-release.
+
+Either way the version is stamped into the build, and afterwards committed back to `main` as
+`chore(release): vX.Y.Z` by `github-actions[bot]` — so `package.json`, `tauri.conf.json`,
+`Cargo.toml` and both lockfiles say the version `main` has reached. Pull before starting a branch.
+That commit starts no workflow (GitHub's rule for its own token), so it releases nothing. Set a
+version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come next with
+`node scripts/version.mjs next`.
+
+Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`) plus **Linux x86-64 and arm64**
+`.deb` and `.AppImage`, each against the core pinned in `core.lock`, and publishes them with a
+`SHA256SUMS`. Releases run one at a time, never cancelled, so two quick merges are two releases.
+A release whose build failed leaves its tag behind with no release; the next merge moves past it
+rather than reusing the number.
 
 The macOS build is ad-hoc signed, not notarised: the first time it's opened, macOS asks the user to
 allow it in **System Settings → Privacy & Security → Open Anyway**. A signed, notarised build with
