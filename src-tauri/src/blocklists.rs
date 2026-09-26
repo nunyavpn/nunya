@@ -157,15 +157,17 @@ pub fn status(dir: &Path, list: List) -> Status {
 ///
 /// Blocking: call it from `spawn_blocking`.
 pub fn download(list: List, proxy_port: Option<u16>) -> Result<Vec<u8>, String> {
-    let mut builder = ureq::AgentBuilder::new()
-        .timeout(TIMEOUT)
-        .user_agent(concat!("Nunya/", env!("CARGO_PKG_VERSION")));
-    if let Some(port) = proxy_port {
-        let proxy = ureq::Proxy::new(format!("http://127.0.0.1:{port}"))
-            .map_err(|e| format!("bad proxy address: {e}"))?;
-        builder = builder.proxy(proxy);
-    }
-    let agent = builder.build();
+    // Explicit either way: ureq would otherwise take a proxy from the environment.
+    let proxy = proxy_port
+        .map(|port| ureq::Proxy::new(&format!("http://127.0.0.1:{port}")))
+        .transpose()
+        .map_err(|e| format!("bad proxy address: {e}"))?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .proxy(proxy)
+        .timeout_global(Some(TIMEOUT))
+        .user_agent(concat!("Nunya/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into();
 
     match list {
         List::Ads => {
@@ -198,11 +200,12 @@ pub fn download(list: List, proxy_port: Option<u16>) -> Result<Vec<u8>, String> 
 fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
     let response = match agent.get(url).call() {
         Ok(r) => r,
-        Err(ureq::Error::Status(status, _)) => return Err(format!("{url} answered {status}")),
+        Err(ureq::Error::StatusCode(status)) => return Err(format!("{url} answered {status}")),
         Err(e) => return Err(format!("{url}: {e}")),
     };
     let mut body = Vec::new();
     response
+        .into_body()
         .into_reader()
         .take(MAX_BODY)
         .read_to_end(&mut body)

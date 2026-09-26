@@ -281,43 +281,60 @@ pub struct SeenExit {
     pub trace: Option<String>,
 }
 
+/// An agent for the endpoints here: through the local listener on `proxy_port`, or direct.
+///
+/// Direct means direct. ureq 3 reads `HTTP_PROXY` and `ALL_PROXY` unless told otherwise, and a
+/// request that is meant to leave from this machine's own connection — placing the user, placing
+/// an address — must not quietly go through whatever the environment names.
+pub(crate) fn agent(proxy_port: Option<u16>, timeout: Duration) -> Result<ureq::Agent, String> {
+    let proxy = proxy_port
+        .map(|port| ureq::Proxy::new(&format!("http://127.0.0.1:{port}")))
+        .transpose()
+        .map_err(|e| format!("bad proxy address: {e}"))?;
+    Ok(ureq::Agent::config_builder()
+        .proxy(proxy)
+        .timeout_global(Some(timeout))
+        .build()
+        .into())
+}
+
+/// A text answer, or why there was none: a status is the endpoint answering, anything else is
+/// the path to it failing, and a log should tell the two apart.
+fn text(agent: &ureq::Agent, url: &str) -> Result<String, String> {
+    match agent.get(url).call() {
+        Ok(mut response) => response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| format!("could not read {url}: {e}")),
+        Err(ureq::Error::StatusCode(status)) => Err(format!("{url} returned {status}")),
+        Err(e) => Err(format!("{url}: {e}")),
+    }
+}
+
 fn exits_through(port: u16) -> Result<SeenExit, String> {
     let plain = exit_ip_through(port)?;
-    let agent = ureq::AgentBuilder::new()
-        .proxy(ureq::Proxy::new(format!("http://127.0.0.1:{port}")).map_err(|e| e.to_string())?)
-        .timeout(REQUEST_TIMEOUT)
-        .build();
+    let agent = agent(Some(port), REQUEST_TIMEOUT)?;
     let trace = cloudflare_exit(&agent).map(|c| c.ip).filter(|ip| *ip != plain);
     Ok(SeenExit { plain, trace })
 }
 
 fn exit_ip_through(port: u16) -> Result<String, String> {
-    let proxy = ureq::Proxy::new(format!("http://127.0.0.1:{port}"))
-        .map_err(|e| format!("bad proxy address: {e}"))?;
-    let agent = ureq::AgentBuilder::new()
-        .proxy(proxy)
-        .timeout(REQUEST_TIMEOUT)
-        .build();
+    let agent = agent(Some(port), REQUEST_TIMEOUT)?;
 
     let mut last = String::from("no endpoint was tried");
     for url in EXIT_IP_URLS {
-        match agent.get(url).call() {
-            Ok(response) => match response.into_string() {
-                Ok(body) => {
-                    let candidate = body.trim();
-                    // Validated rather than trusted: a captive portal or an error page would
-                    // otherwise become an "address" and then a nonsense flag.
-                    if candidate.parse::<std::net::IpAddr>().is_ok() {
-                        return Ok(candidate.to_string());
-                    }
-                    last = format!("{url} did not return an address");
+        match text(&agent, url) {
+            Ok(body) => {
+                let candidate = body.trim();
+                // Validated rather than trusted: a captive portal or an error page would
+                // otherwise become an "address" and then a nonsense flag.
+                if candidate.parse::<std::net::IpAddr>().is_ok() {
+                    return Ok(candidate.to_string());
                 }
-                Err(e) => last = format!("could not read {url}: {e}"),
-            },
-            // A status is the endpoint answering; a transport error is the server failing. Both
-            // are worth trying the next endpoint for, but they mean different things in a log.
-            Err(ureq::Error::Status(status, _)) => last = format!("{url} returned {status}"),
-            Err(e) => last = format!("{url}: {e}"),
+                last = format!("{url} did not return an address");
+            }
+            // Either way the next endpoint is worth trying.
+            Err(e) => last = e,
         }
     }
     Err(last)
@@ -347,23 +364,19 @@ fn code_from(body: &str) -> Option<String> {
 
 /// Turns an address into a two-letter country code, from this machine's own connection.
 fn country_of(ip: &str) -> Result<String, String> {
-    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+    let agent = agent(None, REQUEST_TIMEOUT)?;
 
     let mut last = String::from("no endpoint was tried");
     for url in COUNTRY_URLS {
         let target = url(ip);
-        match agent.get(&target).call() {
-            Ok(response) => match response.into_string() {
-                Ok(body) => match code_from(&body) {
-                    Some(code) => return Ok(code),
-                    None => last = format!("{target} named no country"),
-                },
-                Err(e) => last = format!("could not read {target}: {e}"),
+        match text(&agent, &target) {
+            Ok(body) => match code_from(&body) {
+                Some(code) => return Ok(code),
+                None => last = format!("{target} named no country"),
             },
             // A 429 here means this endpoint's free tier is spent, which is exactly the case the
             // chain exists for: move on rather than leave the server unplaced.
-            Err(ureq::Error::Status(status, _)) => last = format!("{target} returned {status}"),
-            Err(e) => last = format!("{target}: {e}"),
+            Err(e) => last = e,
         }
     }
     Err(last)
@@ -878,16 +891,7 @@ pub fn whereabouts(ip: Option<&str>) -> Result<Whereabouts, String> {
 }
 
 fn ask(agent: &ureq::Agent, target: &str, ip: Option<&str>) -> Result<Whereabouts, String> {
-    let response = agent
-        .get(target)
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(status, _) => format!("{target} returned {status}"),
-            e => format!("{target}: {e}"),
-        })?;
-    let body = response
-        .into_string()
-        .map_err(|e| format!("could not read {target}: {e}"))?;
+    let body = text(agent, target)?;
     match whereabouts_from(&body) {
         // An answer about some other address is not an answer. A service that ignores the path —
         // rate-limited, or misreading an IPv6 literal — describes the *caller*, and this once
@@ -901,7 +905,7 @@ fn ask(agent: &ureq::Agent, target: &str, ip: Option<&str>) -> Result<Whereabout
 }
 
 fn in_turn(ip: &str) -> Result<Whereabouts, String> {
-    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+    let agent = agent(None, REQUEST_TIMEOUT)?;
     let mut last = String::from("no endpoint was tried");
     for url in PLACE_URLS {
         match ask(&agent, &url(Some(ip)), Some(ip)) {
@@ -917,9 +921,8 @@ fn all_at_once() -> Result<Whereabouts, String> {
     for url in PLACE_URLS {
         let tx = tx.clone();
         std::thread::spawn(move || {
-            let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
             // The receiver is gone once an answer has been taken; the rest finish unheard.
-            let _ = tx.send(ask(&agent, &url(None), None));
+            let _ = tx.send(agent(None, REQUEST_TIMEOUT).and_then(|a| ask(&a, &url(None), None)));
         });
     }
     drop(tx);
@@ -999,16 +1002,7 @@ const CLOUDFLARE_TRACE_URLS: [&str; 2] = [
 /// The two families are asked at once: the missing one costs a timeout, and a tunnel with no IPv6
 /// is common enough that it should not double the wait.
 pub fn exit_addresses(port: Option<u16>) -> Result<Exit, String> {
-    let agent = match port {
-        Some(port) => ureq::AgentBuilder::new()
-            .proxy(
-                ureq::Proxy::new(format!("http://127.0.0.1:{port}"))
-                    .map_err(|e| format!("bad proxy address: {e}"))?,
-            )
-            .timeout(REQUEST_TIMEOUT)
-            .build(),
-        None => ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
-    };
+    let agent = agent(port, REQUEST_TIMEOUT)?;
 
     let (ipv4, ipv6, cloudflare) = std::thread::scope(|scope| {
         let v4 = scope.spawn(|| family_ip(&agent, &IPV4_URLS, false));
@@ -1067,8 +1061,7 @@ pub fn exit_addresses(port: Option<u16>) -> Result<Exit, String> {
 
 fn cloudflare_exit(agent: &ureq::Agent) -> Option<CloudflareExit> {
     for url in CLOUDFLARE_TRACE_URLS {
-        let Ok(response) = agent.get(url).call() else { continue };
-        let Ok(body) = response.into_string() else { continue };
+        let Ok(body) = text(agent, url) else { continue };
         if let Some(found) = parse_trace(&body) {
             return Some(found);
         }
@@ -1094,8 +1087,7 @@ fn parse_trace(body: &str) -> Option<CloudflareExit> {
 /// The first answer from `urls` that is an address of the wanted family.
 fn family_ip(agent: &ureq::Agent, urls: &[&str], v6: bool) -> Option<String> {
     for url in urls {
-        let Ok(response) = agent.get(url).call() else { continue };
-        let Ok(body) = response.into_string() else { continue };
+        let Ok(body) = text(agent, url) else { continue };
         match body.trim().parse::<std::net::IpAddr>() {
             Ok(ip) if ip.is_ipv6() == v6 => return Some(ip.to_string()),
             _ => continue,
@@ -1245,7 +1237,7 @@ mod tests {
     fn live_place_of_this_machine() {
         // Every endpoint first, and the verdict last: this test is run to find out what a network
         // answers, and an assertion in the middle of it hides the half that says so.
-        let agent = ureq::AgentBuilder::new().timeout(super::REQUEST_TIMEOUT).build();
+        let agent = super::agent(None, super::REQUEST_TIMEOUT).unwrap();
         for url in super::PLACE_URLS {
             let target = url(None);
             let at = std::time::Instant::now();
@@ -1341,5 +1333,62 @@ mod tests {
             whereabouts_from(r#"{"ip":"not an ip","country":"DE","loc":"1,2"}"#),
             None
         );
+    }
+
+    /// What sing-box's HTTP proxy answers a request it cannot forward: an empty `502`, then the
+    /// connection reset. ureq 2 returned such a connection to its pool the moment it had read the
+    /// head, clearing its timeouts with `setsockopt` — which XNU refuses (EINVAL) on a socket that
+    /// can neither send nor receive, as a reset one cannot — and turned that into a panic: an abort
+    /// in a release build (issue #44). Every exit lookup and every server check can meet one.
+    ///
+    /// The window is between reading the head and pooling the connection, microseconds wide and on
+    /// the client's side, so no answer lands in it every time: a reset before the head is an
+    /// ordinary error, one after the pooling harmless. Sweeping the delay before the reset found
+    /// it about once in a thousand requests, which reproduced the panic but cannot be relied on
+    /// to catch it. What this guards is the rest: through ureq 3 every such answer is an error.
+    fn serve_empty_502() -> u16 {
+        use std::io::{BufRead, BufReader, Write};
+        const HEAD: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for (n, stream) in listener.incoming().enumerate() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).map(|n| n > 2).unwrap_or(false) {
+                    line.clear();
+                }
+                let _ = stream.write_all(HEAD);
+                std::thread::sleep(std::time::Duration::from_micros((n % 60) as u64));
+                // SO_LINGER 0: closing sends a reset rather than a FIN.
+                let linger = libc::linger { l_onoff: 1, l_linger: 0 };
+                // SAFETY: a live socket and a correctly sized option value.
+                unsafe {
+                    use std::os::fd::AsRawFd;
+                    libc::setsockopt(
+                        stream.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_LINGER,
+                        &linger as *const _ as *const libc::c_void,
+                        std::mem::size_of::<libc::linger>() as libc::socklen_t,
+                    );
+                }
+                drop(reader);
+                drop(stream);
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn an_empty_answer_from_the_proxy_is_an_error_not_a_crash() {
+        let port = serve_empty_502();
+        for _ in 0..500 {
+            assert!(super::exit_ip_through(port).is_err());
+        }
+        // The other paths through a local proxy port meet the same answer.
+        assert!(super::exit_addresses(Some(port)).is_err());
+        assert!(crate::blocklists::download(crate::blocklists::List::Ads, Some(port)).is_err());
     }
 }

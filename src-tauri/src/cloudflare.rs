@@ -35,6 +35,7 @@
 //! name as `:authority`, and Cloudflare routes on either the same way.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -222,7 +223,7 @@ pub enum ProbeError {
 pub struct Probe {
     pub timeout: Duration,
     pub port: u16,
-    /// Trust roots other than the bundled public ones (`webpki-roots`, as ureq's default).
+    /// Trust roots other than the bundled public ones (`webpki-roots`).
     pub tls: Option<Arc<rustls::ClientConfig>>,
 }
 
@@ -232,54 +233,53 @@ impl Default for Probe {
     }
 }
 
-/// Resolves every name to one address: `curl --resolve`. The agent it is given to is used for one
-/// request, with redirects off, so no other name can be sent to this address.
-struct Pinned(SocketAddr);
-
-impl ureq::Resolver for Pinned {
-    fn resolve(&self, _netloc: &str) -> std::io::Result<Vec<SocketAddr>> {
-        Ok(vec![self.0])
-    }
-}
-
 /// Asks the edge at `ip` which data center it is, sending `host` as SNI and `Host`.
 ///
 /// Direct, over whatever route the OS has, and never through a proxy: the question is which edge
 /// *this network* reaches, which is also the edge the core reaches when it dials the config.
+///
+/// `curl --resolve`, by hand: the request goes over the connection whose handshake was timed. An
+/// HTTP client would need that address pinned through its resolver, and it would add nothing for
+/// one GET whose answer is a header or a `colo=` line.
 pub fn probe(host: &str, ip: IpAddr, opts: &Probe) -> Result<Seen, ProbeError> {
     let addr = SocketAddr::new(ip, opts.port);
     let tls = opts.tls.clone().unwrap_or_else(public_roots);
 
-    let rtt_ms = handshake(host, addr, tls.clone(), opts.timeout)?;
+    let (mut stream, rtt_ms) = handshake(host, addr, tls, opts.timeout)?;
 
-    let agent = ureq::AgentBuilder::new()
-        .resolver(Pinned(addr))
-        .tls_config(tls)
-        .timeout(opts.timeout)
-        .redirects(0)
-        .user_agent(concat!("Nunya/", env!("CARGO_PKG_VERSION")))
-        .build();
-    let url = if opts.port == 443 {
-        format!("https://{host}/cdn-cgi/trace")
-    } else {
-        format!("https://{host}:{}/cdn-cgi/trace", opts.port)
-    };
+    let authority = if opts.port == 443 { host.to_string() } else { format!("{host}:{}", opts.port) };
+    let request = format!(
+        "GET /cdn-cgi/trace HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: Nunya/{}\r\n\
+         Accept: */*\r\nConnection: close\r\n\r\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    stream.write_all(request.as_bytes()).map_err(|e| io_error(&e))?;
 
-    let response = match agent.get(&url).call() {
-        Ok(r) => r,
-        // A 404 or a 403 from Cloudflare still names the data center that sent it.
-        Err(ureq::Error::Status(_, r)) => r,
-        Err(ureq::Error::Transport(t)) => return Err(transport_error(&t)),
-    };
+    let mut raw = Vec::new();
+    let read = (&mut stream).take(BODY_LIMIT).read_to_end(&mut raw);
+    // An edge that closes without a TLS close_notify is an error to rustls, after the answer has
+    // arrived; what was read still counts, and only an empty read is a failure.
+    if raw.is_empty() {
+        return Err(match read {
+            Err(e) => io_error(&e),
+            Ok(_) => ProbeError::Failed("the edge closed without answering".into()),
+        });
+    }
 
-    if let Some(colo) = response.header("cf-ray").and_then(colo_from_ray) {
+    let answer = String::from_utf8_lossy(&raw);
+    let (head, body) = answer.split_once("\r\n\r\n").unwrap_or((&answer, ""));
+    let mut lines = head.lines();
+    // A 404 or a 403 from Cloudflare still names the data center that sent it.
+    let status = lines.next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("nothing");
+    let ray = lines
+        .filter_map(|l| l.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("cf-ray"))
+        .and_then(|(_, value)| colo_from_ray(value));
+
+    if let Some(colo) = ray {
         return Ok(Seen { colo, via: Via::CfRay, rtt_ms });
     }
-    let status = response.status();
-    let mut body = String::new();
-    use std::io::Read;
-    let _ = response.into_reader().take(BODY_LIMIT).read_to_string(&mut body);
-    match colo_from_trace(&body) {
+    match colo_from_trace(body) {
         Some(colo) => Ok(Seen { colo, via: Via::Trace, rtt_ms }),
         None => Err(ProbeError::NoColo(format!(
             "answered {status} with no CF-Ray header and no trace"
@@ -287,8 +287,7 @@ pub fn probe(host: &str, ip: IpAddr, opts: &Probe) -> Result<Seen, ProbeError> {
     }
 }
 
-/// The public roots ureq trusts by default, made once, so the timed handshake and the request
-/// trust exactly the same certificates.
+/// The bundled public roots (`webpki-roots`), made once.
 fn public_roots() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     CONFIG
@@ -315,15 +314,15 @@ fn public_roots() -> Arc<rustls::ClientConfig> {
 /// 660 ms to finish TLS). A handshake cannot be answered locally: it needs the edge's certificate
 /// and key. Under TLS 1.3 it is one round trip plus the edge's signature, which is noise.
 ///
-/// A connection of its own, so the time is the handshake's alone; the request that follows makes
-/// another. Its failures are the probe's: a certificate refused here is a TLS failure, reported
-/// before anything is asked over the connection.
+/// The request then goes over the same connection; the time is taken before it, so it is the
+/// handshake's alone. Its failures are the probe's: a certificate refused here is a TLS failure,
+/// reported before anything is asked over the connection.
 fn handshake(
     host: &str,
     addr: SocketAddr,
     tls: Arc<rustls::ClientConfig>,
     timeout: Duration,
-) -> Result<u32, ProbeError> {
+) -> Result<(rustls::StreamOwned<rustls::ClientConnection, TcpStream>, u32), ProbeError> {
     let io = |e: std::io::Error| io_error(&e);
     let mut tcp = TcpStream::connect_timeout(&addr, timeout).map_err(io)?;
     tcp.set_read_timeout(Some(timeout)).map_err(io)?;
@@ -337,7 +336,8 @@ fn handshake(
     while conn.is_handshaking() {
         conn.complete_io(&mut tcp).map_err(io)?;
     }
-    Ok(u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX))
+    let rtt_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+    Ok((rustls::StreamOwned::new(conn, tcp), rtt_ms))
 }
 
 /// A timeout, a TLS failure — rustls reports those inside an `io::Error` — or anything else.
@@ -349,30 +349,6 @@ fn io_error(e: &std::io::Error) -> ProbeError {
         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => ProbeError::Timeout,
         _ => ProbeError::Failed(e.to_string()),
     }
-}
-
-/// Sorts a failed request into a timeout, a TLS failure, or anything else, by what caused it.
-///
-/// By cause, not by ureq's kind: a handshake that times out and one that is refused a
-/// certificate are the same `ConnectionFailed` to it. A rustls error sits *inside* an
-/// `io::Error`, which `source()` walks straight past, so each `io::Error` is opened by hand.
-fn transport_error(t: &ureq::Transport) -> ProbeError {
-    let mut next: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(t);
-    while let Some(e) = next {
-        if let Some(io) = e.downcast_ref::<std::io::Error>() {
-            if matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) {
-                return ProbeError::Timeout;
-            }
-            if let Some(tls) = io.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>()) {
-                return ProbeError::Tls(tls.to_string());
-            }
-        }
-        if let Some(tls) = e.downcast_ref::<rustls::Error>() {
-            return ProbeError::Tls(tls.to_string());
-        }
-        next = e.source();
-    }
-    ProbeError::Failed(t.to_string())
 }
 
 // ---------------------------------------------------------------- the answer
@@ -937,18 +913,10 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            // The probe's first connection only times a handshake; the request is on the next.
-            // When that handshake fails there is no next, and this thread waits out the test.
-            let Ok((mut first, _)) = listener.accept() else { return };
-            std::thread::sleep(delay);
-            let mut timed = rustls::ServerConnection::new(config.clone()).unwrap();
-            while timed.is_handshaking() {
-                if timed.complete_io(&mut first).is_err() {
-                    break;
-                }
-            }
-            drop(first);
+            // One connection: the timed handshake, then the request over it. A handshake that
+            // fails ends it, and the reads below find nothing.
             let Ok((tcp, _)) = listener.accept() else { return };
+            std::thread::sleep(delay);
             let conn = rustls::ServerConnection::new(config).unwrap();
             let mut tls = rustls::StreamOwned::new(conn, tcp);
             let mut heard = Heard::default();
