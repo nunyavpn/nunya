@@ -146,6 +146,14 @@ macOS uses a real system VPN (NetworkExtension), the same mechanism WireGuard an
 nothing runs as root, nothing is setuid. The app side is only the control plane —
 `macos/tunnel_manager.m`, compiled by `build.rs`; the tunnel itself lives in the `.appex`.
 
+**Until the extension can be signed, VPN mode on macOS is a setuid-root core.** The status card's
+**Allow…** calls `request_permission`, which runs `core_proc::grant_root` (the administrator
+password through `osascript`, then `chown root:wheel` and `chmod 4755` on the bundled core) and
+restarts the core. Setuid rather than `sudo`, because anything wrapping the core becomes its parent
+and fails both the core's parent check and `rpc/peer.rs`. Only a core beside `Nunya` is granted,
+since the release core's parent check is the only thing keeping other programs from driving it,
+and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle carries one. See CONTRIBUTING.md's *Privilege today*.
+
 ### Where things actually live (Rust)
 
 `main.rs` is a five-line shim. **All Tauri commands and the startup sequence are in

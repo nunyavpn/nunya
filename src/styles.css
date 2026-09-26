@@ -1476,6 +1476,15 @@ button:disabled {
   border-color: transparent;
 }
 
+.tag.grant {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tag.grant:hover {
+  text-decoration: underline;
+}
+
 /* ---------------------------------------------------------------- sheets */
 
 .scrim {

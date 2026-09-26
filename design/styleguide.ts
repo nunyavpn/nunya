@@ -430,7 +430,7 @@ function statusSpecimen(caption: string, state: ConnectionState, extra: Partial<
   const root = h("section", { class: "status" });
   stage.appendChild(root);
 
-  new StatusCard(root, { onToggle: () => {}, onShare: () => {} }).render({
+  new StatusCard(root, { onToggle: () => {}, onShare: () => {}, onGrant: () => {} }).render({
     state,
     // The specimens show VPN mode unless one overrides it; proxy mode gets its own row below,
     // because the two say materially different things.

@@ -120,6 +120,7 @@ const status = new StatusCard(qs("#status"), {
     const server = store.selected();
     if (server) openShareServer(server);
   },
+  onGrant: () => void grantAccess(),
 });
 const map = new WorldMap(qs<HTMLCanvasElement>("#worldmap"), qs("#pins"), (key, at) =>
   pickFromMap(key, at),
@@ -551,6 +552,7 @@ function refresh() {
     systemProxyError,
     ...placeLines(server),
     blockedReason: blockedReason(),
+    canGrant: canGrant(),
   });
 
   const { pins, route } = buildMap(server);
@@ -795,12 +797,36 @@ async function observeEdge(server: Server | undefined) {
   }
 }
 
+/**
+ * VPN mode without the packet tunnel extension: the core needs root to create a utun, and the
+ * app can ask for it (`core_proc::grant_root`). The core restarts with it, and `core-connection`
+ * re-asks readiness when it is back.
+ */
+function canGrant(): boolean {
+  return readiness?.state === "needsPermission" && readiness.transport === "subprocess";
+}
+
+/** Why the last Allow… did not work, shown in place of the plain reason until the next one. */
+let grantError: string | null = null;
+
+async function grantAccess() {
+  try {
+    await invoke("request_permission");
+    grantError = null;
+  } catch (e) {
+    grantError = String(e);
+    log(`[ui] ${grantError}`);
+  }
+  refresh();
+}
+
 /** Why Connect will not work, phrased for someone who did not write the app. */
 function blockedReason(): string | null {
   // A storage failure comes first: it means the server list on screen is not what is on disk.
   if (store.storageError) return `Could not read saved data: ${store.storageError}`;
   if (!coreReady) return "Waiting for the core to start";
   if (!store.get().servers.length) return "Add a server to get started";
+  if (canGrant()) return grantError ?? "VPN mode needs administrator access";
   if (readiness && !readiness.ready) {
     return readiness.detail ?? `The ${readiness.transport} transport is not ready`;
   }

@@ -55,6 +55,8 @@ export interface StatusModel {
   tunnelDevice: string | null;
   /** Why the tunnel cannot start, when it cannot. */
   blockedReason: string | null;
+  /** The reason is one the app can fix by asking for the administrator password. */
+  canGrant?: boolean;
   /** Where the selected config's traffic leaves, once measured. */
   exitAt?: PlaceLine | null;
   /** Where its address is, when that is not where it exits — a CDN edge, a relay's front. */
@@ -69,6 +71,8 @@ export interface StatusCallbacks {
   onToggle: () => void;
   /** Share the selected server as a link and QR code. */
   onShare: () => void;
+  /** Ask for administrator access, so VPN mode can create its interface. */
+  onGrant: () => void;
 }
 
 /**
@@ -276,6 +280,9 @@ export class StatusCard {
       { class: "st-more" },
       ...places,
       model.blockedReason ? h("span", { class: "tag warn" }, model.blockedReason) : null,
+      model.canGrant
+        ? h("button", { class: "tag warn grant", onclick: () => this.callbacks.onGrant() }, "Allow…")
+        : null,
     );
   }
 

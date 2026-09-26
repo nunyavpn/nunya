@@ -296,6 +296,29 @@ socket is created inside a `0700` directory and set to `0600`.
 A core built with `fetch-core.sh --source` carries the `noparentcheck` build tag, because during
 development the parent is `cargo`. Every published core enforces the check.
 
+## Privilege today: a setuid core, behind the administrator prompt
+
+Until the packet tunnel extension below can be signed (a paid Apple Developer membership), VPN mode
+on macOS runs the core as root. In VPN mode the status card says "VPN mode needs administrator
+access" with an **Allow…** button; `request_permission` runs `core_proc::grant_root`, which asks for
+the password through `osascript … with administrator privileges`, makes the bundled core
+`root:wheel 4755`, and restarts it.
+
+Setuid, not `sudo` or `osascript` around the core, because both of those become the core's parent:
+the release core's parent check (parent is `Nunya` in the same directory) and our pid check in
+`rpc/peer.rs` would both refuse it. Setuid keeps the core a plain child of the app, and the core
+already drops back to the real user for anything it starts (`applyPrivilegeDrop`). The parent check
+is then what stops other programs driving it, so only a core beside a binary named `Nunya` is
+granted: `npm run tauri dev` (parent `target/debug/nunya`) is refused, `build.rs` refuses a release
+build over a `noparentcheck` core so no bundle can carry one, and
+`scripts/dev-tunnel.sh` stays the way to test VPN mode in development. Test the grant itself with
+a local bundle built over the pinned release core (`./scripts/fetch-core.sh`, then
+`npm run tauri build -- --bundles app`) copied to `/Applications`.
+
+The known ceiling: `Contents/MacOS` belongs to the user, so code already running as the user can
+replace `Nunya` and drive a root core. The extension is the fix. An app update replaces the core and
+drops the bit, so the prompt returns after each update.
+
 ## Privilege: the macOS tunnel is a real system VPN
 
 VPN mode on macOS uses Apple's NetworkExtension framework, the same mechanism WireGuard, Mullvad,
