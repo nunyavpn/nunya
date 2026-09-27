@@ -16,6 +16,7 @@ pub mod transport;
 #[cfg(target_os = "macos")]
 mod popover;
 mod tray;
+pub mod update;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,6 +39,8 @@ struct AppState {
     core_path: PathBuf,
     /// How the tunnel is actually carried. Chosen at startup; see `transport::select`.
     tunnel: Arc<dyn TunnelTransport>,
+    /// The update the last check found, if any; see `update.rs`.
+    update: Mutex<Option<update::Staged>>,
     tunnel_kind: transport::select::Kind,
     /// The system proxy as it was before this app set it, while it is set. Also on disk, in
     /// `sysproxy::SAVED_FILE`, so a crash cannot strand it.
@@ -209,11 +212,8 @@ async fn request_permission(
         if let Some(old) = slot.take() {
             old.stop().await;
         }
-        let core = spawn_core(&app, &state.core_path, state.link.socket_path(), &state.runtime_dir)
-            .map_err(|e| e.to_string())?;
-        state.link.expect_core_pid(core.pid);
-        log::info!("core restarted with administrator access (pid {})", core.pid);
-        *slot = Some(core);
+        let pid = respawn_core(&app, &state, &mut slot)?;
+        log::info!("core restarted with administrator access (pid {pid})");
         return Ok(());
     }
     state
@@ -221,6 +221,159 @@ async fn request_permission(
         .request_permission()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Starts a core into `slot`, which the caller has emptied, and tells the link to expect it.
+fn respawn_core(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    slot: &mut Option<CoreProcess>,
+) -> Result<u32, String> {
+    let core = spawn_core(app, &state.core_path, state.link.socket_path(), &state.runtime_dir)
+        .map_err(|e| e.to_string())?;
+    let pid = core.pid;
+    state.link.expect_core_pid(pid);
+    *slot = Some(core);
+    Ok(pid)
+}
+
+/// Looks for a newer release; see `update.rs` for how one is chosen.
+///
+/// `beta` is the user's setting. `proxy_port` is the listener when connected in proxy mode, so the
+/// check and the download go through the tunnel like the block lists do.
+#[tauri::command]
+async fn check_update(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    beta: bool,
+    proxy_port: Option<u16>,
+) -> Result<Option<update::Available>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let releases = tokio::task::spawn_blocking(move || update::releases(proxy_port))
+        .await
+        .map_err(|e| e.to_string())??;
+    let Some((release, manifest)) = update::newest(&releases, beta) else {
+        *state.update.lock().await = None;
+        return Ok(None);
+    };
+    let prerelease = release.prerelease;
+
+    let manifest: tauri::Url = manifest
+        .parse()
+        .map_err(|e| format!("bad manifest address: {e}"))?;
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![manifest])
+        .map_err(|e| e.to_string())?
+        .timeout(update::TIMEOUT);
+    if let Some(port) = proxy_port {
+        let proxy: tauri::Url = format!("http://127.0.0.1:{port}")
+            .parse()
+            .map_err(|e| format!("bad proxy address: {e}"))?;
+        builder = builder.proxy(proxy);
+    }
+    let found = builder
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| format!("could not read the update: {e}"))?;
+
+    let mut slot = state.update.lock().await;
+    let Some(found) = found else {
+        *slot = None;
+        return Ok(None);
+    };
+    let available = update::Available {
+        version: found.version.clone(),
+        prerelease,
+        notes: found.body.clone(),
+    };
+    // A package already downloaded for this version is kept, not fetched again on every check.
+    if slot.as_ref().map_or(true, |s| s.update.version != found.version) {
+        *slot = Some(update::Staged {
+            update: found,
+            bytes: None,
+        });
+    }
+    Ok(Some(available))
+}
+
+/// Downloads the update the last check found and verifies its signature against the key compiled
+/// into this copy. Progress goes out as `update-progress` events: bytes so far, and the total when
+/// the server said it.
+#[tauri::command]
+async fn download_update(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let update = {
+        let slot = state.update.lock().await;
+        let staged = slot.as_ref().ok_or("there is no update to download")?;
+        if staged.bytes.is_some() {
+            return Ok(());
+        }
+        staged.update.clone()
+    };
+
+    let progress = app.clone();
+    let (mut received, mut shown) = (0usize, 0usize);
+    let bytes = update
+        .download(
+            move |chunk, total| {
+                received += chunk;
+                // Every chunk would be thousands of events; a step of 256 KiB is smooth enough.
+                if received - shown >= 256 * 1024 || total == Some(received as u64) {
+                    shown = received;
+                    let _ = progress.emit("update-progress", (received, total));
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("could not download the update: {e}"))?;
+
+    let mut slot = state.update.lock().await;
+    // A check that found a newer version meanwhile replaced the slot; this package is then stale.
+    if let Some(staged) = slot.as_mut().filter(|s| s.update.version == update.version) {
+        staged.bytes = Some(bytes);
+    }
+    Ok(())
+}
+
+/// Replaces this copy with the downloaded update and starts the new one.
+///
+/// The frontend disconnects first, through its own queue, so the system proxy is put back the
+/// usual way. The core is stopped here: on Windows the installer cannot replace a running
+/// `nunya-core.exe`, and it ends this process without the cleanup a quit runs. On macOS the new
+/// core loses the setuid bit, so VPN mode asks for the password once more (`core_proc::grant_root`).
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if matches!(state.tunnel.state().await, Ok(TunnelState::Connected)) {
+        return Err("disconnect first: installing the update restarts Nunya".into());
+    }
+    let staged = state
+        .update
+        .lock()
+        .await
+        .take()
+        .ok_or("there is no update to install")?;
+    if staged.bytes.is_none() {
+        *state.update.lock().await = Some(staged);
+        return Err("the update has not finished downloading".into());
+    }
+
+    let mut slot = state.core.lock().await;
+    if let Some(core) = slot.take() {
+        core.stop().await;
+    }
+    match staged.update.install(staged.bytes.as_deref().unwrap_or_default()) {
+        // On Windows `install` has already ended the process; the installer starts the new copy.
+        Ok(()) => app.restart(),
+        Err(e) => {
+            // Still the old copy: give it its core back so it keeps working.
+            respawn_core(&app, &state, &mut slot)?;
+            Err(format!("could not install the update: {e}"))
+        }
+    }
 }
 
 #[tauri::command]
@@ -811,6 +964,8 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     tauri::Builder::default()
+        // Verifies and installs updates; which release to take is `update.rs`'s decision.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // Per-user private directory. On macOS `temp_dir` is already inside the user's
             // sandboxed `/var/folders/...` tree, which keeps the socket path well under the
@@ -876,6 +1031,7 @@ pub fn run() {
                 tunnel_kind,
                 system_proxy,
                 edges: Arc::default(),
+                update: Mutex::new(None),
             });
 
             hide_on_close(app.handle());
@@ -906,6 +1062,9 @@ pub fn run() {
             open_external,
             load_data,
             save_data,
+            check_update,
+            download_update,
+            install_update,
             tray::set_tray_status,
             #[cfg(target_os = "macos")]
             popover::hide_popover,

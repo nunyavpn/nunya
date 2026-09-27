@@ -48,6 +48,12 @@ ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] 
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 # ureq's default trust roots, named so the edge probe trusts the same ones.
 webpki-roots = "0.26"
+# Release tags compared as versions, not strings: v0.10.0 is newer than v0.9.0. Already in the
+# build through the updater.
+semver = "1"
+# Pinned: 2.13 needs Tauri 2.12, which moves tray-icon to 0.25 and changes the macOS tray (see
+# CLAUDE.md, *The menu-bar popover*). Move it with Tauri, not before.
+tauri-plugin-updater = "=2.12.0"
 
 # The core link on Windows is a named pipe, and our half of the peer check asks the pipe for its
 # client's pid. 0.61 is the version tokio already brings, so this adds nothing to the build.

@@ -1091,6 +1091,50 @@ button:disabled {
   opacity: 0;
 }
 
+/* The update notice: across the top of the map pane, which is on screen whichever panel is open.
+   Styled as the status card's sibling, above the pins and the map picker, beside the zoom. */
+.updatebar {
+  position: absolute;
+  z-index: 7;
+  top: 16px;
+  left: 20px;
+  /* Clear of the zoom buttons: their column is 16px in and 34px wide. */
+  right: 62px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px 11px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 13px;
+  box-shadow: var(--shadow-pop);
+}
+
+.updatebar[hidden] {
+  display: none;
+}
+
+.updatebar .t {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.updatebar .d {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.updatebar .btn {
+  flex: none;
+}
+
 /* The map picker: a city's servers, opened from its dot. */
 .mpick {
   position: absolute;
