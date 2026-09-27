@@ -15,6 +15,8 @@ pub mod sysproxy;
 pub mod transport;
 #[cfg(target_os = "macos")]
 mod popover;
+#[cfg(target_os = "linux")]
+mod sni;
 mod tray;
 
 use std::path::PathBuf;
