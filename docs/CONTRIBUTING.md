@@ -486,9 +486,10 @@ That commit starts no workflow (GitHub's rule for its own token), so it releases
 version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come next with
 `node scripts/version.mjs next`.
 
-Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`) plus **Linux x86-64 and arm64**
-`.deb` and `.AppImage`, each against the core pinned in `core.lock`, and publishes them with a
-`SHA256SUMS`. Releases run one at a time, never cancelled, so two quick merges are two releases.
+Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`) against the core pinned in
+`core.lock`, and publishes it with a `SHA256SUMS`. Releases are macOS only for now: Linux `.deb`
+and `.AppImage` builds come back next (the arm64 AppImage fails in linuxdeploy), then Windows.
+The workflow keeps its Linux steps, so bringing Linux back is a row in the build matrix. Releases run one at a time, never cancelled, so two quick merges are two releases.
 A release whose build failed leaves its tag behind with no release; the next merge moves past it
 rather than reusing the number.
 

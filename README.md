@@ -227,12 +227,11 @@ stable versions, from 1.0 on, are marked *Latest*.
 - **macOS** (Apple Silicon, macOS 12 or later): open the `.dmg` and drag Nunya into Applications.
   The beta isn't signed by an Apple Developer account yet, so the first time you open it, go to
   **System Settings → Privacy & Security** and choose **Open Anyway**.
-- **Linux** (x86-64 and arm64): install the `.deb` with `sudo apt install ./Nunya_<version>_<arch>.deb`,
-  or make the `.AppImage` executable and run it.
-- **Windows**: planned ([#34](https://github.com/nunyavpn/nunya/issues/34)).
+- **Linux**: next. It runs from source today, and release builds come after macOS.
+- **Windows**: planned after Linux ([#34](https://github.com/nunyavpn/nunya/issues/34)).
 
-This beta is built around **proxy mode**, on both platforms. VPN mode works on macOS after an
-administrator password prompt; on Linux it follows once the app can set up network-admin rights.
+This beta is built around **proxy mode**. VPN mode works on macOS after an administrator password
+prompt; on Linux it follows once the app can set up network-admin rights.
 
 ## Roadmap
 
