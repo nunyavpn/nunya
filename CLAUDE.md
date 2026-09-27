@@ -44,7 +44,7 @@ npm run tauri dev
 | Frontend in a browser, no Rust | `VITE_MOCK=1 npm run dev` |
 | App with the list full | `VITE_MOCK=1 npm run tauri dev` |
 | Style guide | `npm run design` |
-| Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `deb,appimage` (Linux) |
+| Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `nsis` (Windows) · `deb,appimage` (Linux) |
 | Signed bundle with the packet tunnel | `./scripts/build-app.sh` (needs an Apple Developer team) |
 | Release | automatic on every merge to `main` (beta); stable: `git tag vX.Y.Z && git push origin vX.Y.Z` |
 | Next version / set one | `node scripts/version.mjs next` · `node scripts/version.mjs set X.Y.Z` |
@@ -122,7 +122,7 @@ a downloadable core with its parent check off is a root-capable binary anything 
 
 Despite `service NunyaCoreService` in the proto, nothing on the wire is gRPC. The proto exists only
 to generate message types for both sides. The framing is two little-endian frames over a unix
-socket, implemented and unit-tested in [rpc/codec.rs](src-tauri/src/rpc/codec.rs):
+socket (a named pipe on Windows), implemented and unit-tested in [rpc/codec.rs](src-tauri/src/rpc/codec.rs):
 
 ```text
 request   [u32 id][u16 method_len][method][u32 payload_len][protobuf]
@@ -263,8 +263,8 @@ a Mac, but only with `NUNYA_TOUCH_SYSTEM_PROXY=1`.
 **Windows** sets `ProxyEnable`, `ProxyServer` (one `127.0.0.1:<port>` for every scheme, as the
 settings page writes it) and `ProxyOverride`, and sets a PAC `AutoConfigURL` aside while ours is
 applied, since a PAC takes precedence. The whole key is read at once, so a missing value is absent
-rather than a localised error message. It is unit-tested everywhere but has not run on Windows:
-the app does not build there yet (the core link is a Unix socket).
+rather than a localised error message. It is unit-tested everywhere; CI builds and tests on Windows,
+but the real registry cycle has not been run there.
 
 **Restoring is the load-bearing half.** A system proxy left pointing at a dead port breaks every
 browser on the machine. So the previous settings are captured *before* anything changes, written to
