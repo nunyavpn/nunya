@@ -184,7 +184,6 @@ impl CoreLink {
         listener: PendingListener,
         on_change: impl Fn(bool) + Send + Sync + 'static,
     ) {
-        use std::os::windows::io::AsRawHandle;
         use tokio::net::windows::named_pipe::ServerOptions;
 
         let mut server = match ServerOptions::new().first_pipe_instance(true).create(&listener) {
@@ -211,7 +210,7 @@ impl CoreLink {
             let stream = std::mem::replace(&mut server, next);
 
             let expected = self.expected_pid.load(Ordering::SeqCst);
-            if let Err(why) = peer::verify_pipe(stream.as_raw_handle(), expected) {
+            if let Err(why) = peer::verify_pipe(&stream, expected) {
                 log::warn!("rejected a connection to the core pipe: {why}");
                 drop(stream);
                 continue;

@@ -1,5 +1,4 @@
 use super::*;
-use std::os::windows::io::AsRawHandle;
 use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
 
 /// A pipe with its client connected from this very process, so the expected pid is our own.
@@ -16,13 +15,12 @@ async fn connected_pipe() -> tokio::net::windows::named_pipe::NamedPipeServer {
 #[tokio::test]
 async fn a_pipe_client_is_identified_by_its_pid() {
     let server = connected_pipe().await;
-    let handle = server.as_raw_handle();
 
-    verify_pipe(handle, std::process::id()).unwrap();
+    verify_pipe(&server, std::process::id()).unwrap();
 
-    let err = verify_pipe(handle, std::process::id() + 1).unwrap_err();
+    let err = verify_pipe(&server, std::process::id() + 1).unwrap_err();
     assert!(err.contains("is not the core we spawned"), "{err}");
 
-    let err = verify_pipe(handle, 0).unwrap_err();
+    let err = verify_pipe(&server, 0).unwrap_err();
     assert!(err.contains("before any core was spawned"), "{err}");
 }

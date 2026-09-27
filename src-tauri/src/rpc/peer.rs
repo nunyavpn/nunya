@@ -125,15 +125,18 @@ pub fn verify(fd: RawFd, expected_pid: u32) -> Result<(), String> {
 ///
 /// There is no uid to compare: the pid is the whole identity, and it is the child we started.
 #[cfg(windows)]
-pub fn verify_pipe(pipe: std::os::windows::io::RawHandle, expected_pid: u32) -> Result<(), String> {
+pub fn verify_pipe(
+    pipe: &impl std::os::windows::io::AsRawHandle,
+    expected_pid: u32,
+) -> Result<(), String> {
     use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
 
     if expected_pid == 0 {
         return Err(NOT_SPAWNED.to_string());
     }
     let mut pid = 0u32;
-    // SAFETY: `pipe` is a live, connected pipe server handle; `pid` is a valid out-param.
-    if unsafe { GetNamedPipeClientProcessId(pipe, &mut pid) } == 0 {
+    // SAFETY: `pipe` is borrowed, so its handle is live for this call; `pid` is a valid out-param.
+    if unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &mut pid) } == 0 {
         return Err(format!("cannot read peer pid: {}", io::Error::last_os_error()));
     }
     is_the_core(pid, expected_pid)

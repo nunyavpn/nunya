@@ -73,3 +73,12 @@ jobs:
       # The integration tests that need a live core or a real TUN are #[ignore]d; this runs the rest.
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # TEMPORARY, for the Windows PR only: prove the installer builds and carries the core.
+      - name: Bundle the installer (temporary)
+        if: runner.os == 'Windows'
+        run: |
+          npm run tauri build -- --bundles nsis --debug
+          ls -la src-tauri/target/debug/bundle/nsis/
+          7z l src-tauri/target/debug/bundle/nsis/*-setup.exe | grep -iE "nunya|\.exe"
+
