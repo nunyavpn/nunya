@@ -17,6 +17,10 @@ name: release
 # Developer team, and macOS kills an app that claims them without one. VPN mode on macOS runs its
 # core as root instead, after the administrator prompt (`core_proc::grant_root`).
 # scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
+#
+# Releases are macOS only for now. Linux comes back next (the arm64 AppImage fails in linuxdeploy),
+# then Windows. The Linux dependency step and bundle collection are kept, so a Linux row in the matrix is
+# all it takes to bring it back once its build passes.
 
 on:
   push:
@@ -80,14 +84,6 @@ jobs:
           - runner: macos-14
             label: macos-arm64
             bundles: app,dmg
-          # 22.04 rather than the newest image: a bundle built against an older glibc runs on more
-          # distributions.
-          - runner: ubuntu-22.04
-            label: linux-x86_64
-            bundles: deb,appimage
-          - runner: ubuntu-22.04-arm
-            label: linux-arm64
-            bundles: deb,appimage
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -190,16 +186,15 @@ jobs:
           refuse. Open **System Settings → Privacy & Security** and choose **Open Anyway**. (Or, in Terminal:
           \`xattr -dr com.apple.quarantine /Applications/Nunya.app\`.)
 
-          **Linux (x86-64 or arm64)**: install the \`.deb\` with \`sudo apt install ./Nunya_${VERSION}_<arch>.deb\`,
-          or make the \`.AppImage\` executable and run it.
+          **Linux and Windows**: not in this build yet. Linux comes next, then Windows.
 
           Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
 
           ## In this build
 
-          **Proxy mode** on macOS and Linux: a local SOCKS/HTTP listener, which can also be set as the system proxy
-          while connected. **VPN mode** on macOS asks for your administrator password the first time you connect
-          in it (and again after an update); on Linux it is not set up for you yet.
+          **Proxy mode**: a local SOCKS/HTTP listener, which can also be set as the system proxy while connected.
+          **VPN mode** asks for your administrator password the first time you connect in it (and again after an
+          update).
           NOTES
           flags=(--title "Nunya $VERSION" --notes-file notes.md --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then
