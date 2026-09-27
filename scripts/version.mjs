@@ -72,16 +72,24 @@ function replaceOnce(path, pattern, replacement) {
   writeFileSync(file, text.replace(pattern, replacement));
 }
 
+/**
+ * Where the version is kept, each anchored on what surrounds it, so a dependency that happens to
+ * share the number is untouched. Line breaks are `\r?\n`: git on a Windows runner checks files out
+ * with CRLF, and a plain `\n` there matched nothing, which failed the Windows release build.
+ */
+export const VERSION_FIELDS = [
+  ["package.json", /^( {2}"version": )"[^"]*"/m],
+  ["src-tauri/tauri.conf.json", /^( {2}"version": )"[^"]*"/m],
+  ["src-tauri/Cargo.toml", /^(\[package\]\r?\nname = "nunya"\r?\nversion = )"[^"]*"/m],
+  ["src-tauri/Cargo.lock", /^(name = "nunya"\r?\nversion = )"[^"]*"/m],
+  // The lockfile names the root package twice: at the top, and as the "" entry under packages.
+  ["package-lock.json", /^( {2}"version": )"[^"]*"/m],
+  ["package-lock.json", /^( {4}"": \{\r?\n {6}"name": "[^"]*",\r?\n {6}"version": )"[^"]*"/m],
+];
+
 function set(version) {
   if (!PLAIN.test(version)) throw new Error(`${version} is not X.Y.Z`);
-  // Anchored on what surrounds each, so a dependency that happens to share the number is untouched.
-  replaceOnce("package.json", /^( {2}"version": )"[^"]*"/m, `$1"${version}"`);
-  replaceOnce("src-tauri/tauri.conf.json", /^( {2}"version": )"[^"]*"/m, `$1"${version}"`);
-  replaceOnce("src-tauri/Cargo.toml", /^(\[package\]\nname = "nunya"\nversion = )"[^"]*"/m, `$1"${version}"`);
-  replaceOnce("src-tauri/Cargo.lock", /^(name = "nunya"\nversion = )"[^"]*"/m, `$1"${version}"`);
-  // The lockfile names the root package twice: at the top, and as the "" entry under packages.
-  replaceOnce("package-lock.json", /^( {2}"version": )"[^"]*"/m, `$1"${version}"`);
-  replaceOnce("package-lock.json", /^( {4}"": \{\n {6}"name": "[^"]*",\n {6}"version": )"[^"]*"/m, `$1"${version}"`);
+  for (const [path, pattern] of VERSION_FIELDS) replaceOnce(path, pattern, `$1"${version}"`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

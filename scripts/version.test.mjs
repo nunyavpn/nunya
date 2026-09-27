@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { newestTag, nextVersion } from "./version.mjs";
+import { newestTag, nextVersion, VERSION_FIELDS } from "./version.mjs";
 
 test("a fix bumps the last number", () => {
   assert.equal(nextVersion("0.1.0", ["fix(net): move to ureq 3 (#79)"]), "0.1.1");
@@ -38,4 +39,15 @@ test("the newest tag is compared as numbers, and suffixed tags are ignored", () 
   assert.equal(newestTag(["v0.3.0", "v1.0.0-rc.1", ""]), "v0.3.0");
   assert.equal(newestTag(["v0.3.0", "v1.0.0"]), "v1.0.0");
   assert.equal(newestTag([""]), null);
+});
+
+test("every version field is found once, with LF or with CRLF line endings", () => {
+  for (const [path, pattern] of VERSION_FIELDS) {
+    const lf = readFileSync(new URL(`../${path}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const crlf = lf.replace(/\n/g, "\r\n");
+    for (const [endings, text] of [["LF", lf], ["CRLF", crlf]]) {
+      const found = text.match(new RegExp(pattern.source, pattern.flags + "g"))?.length ?? 0;
+      assert.equal(found, 1, `${path} with ${endings}: found ${found}`);
+    }
+  }
 });
