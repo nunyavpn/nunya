@@ -73,5 +73,3 @@ jobs:
       # The integration tests that need a live core or a real TUN are #[ignore]d; this runs the rest.
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
-
-
