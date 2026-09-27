@@ -2,7 +2,7 @@
 
 Thank you for helping. This is the developer's guide: how to build Nunya from source, how to work on
 it day to day, how the pieces fit together, and how a change gets from an idea to a release.
-For what the app does and how to use it, see the [README](README.md).
+For what the app does and how to use it, see the [README](../README.md).
 
 - [How work is done](#how-work-is-done)
 - [Building from source](#building-from-source)
@@ -41,7 +41,7 @@ Every change follows the same path, so it can be traced from an issue to a singl
 | [nunyavpn/nunya](https://github.com/nunyavpn/nunya) | this one: the UI, config generation, share links, the transports |
 | [nunyavpn/nunya-core](https://github.com/nunyavpn/nunya-core) | the sing-box / Xray engine and its RPC surface |
 
-This repository does **not** build the core. It pins a core release in [`core.lock`](core.lock), and
+This repository does **not** build the core. It pins a core release in [`core.lock`](../core.lock), and
 `scripts/fetch-core.sh` downloads that release's assets, verifying each one against a `SHA256SUMS`
 whose own digest is pinned in the lockfile. A bad or re-cut release fails the check instead of
 being installed, and the RPC contract between the two repositories is a published, versioned
@@ -170,7 +170,7 @@ A page that renders the design system out of the app rather than describing it: 
 read from `src/styles.css` through the browser's own CSSOM, the icons are enumerated from
 `views/icons.ts`, and the status card is the real component mounted with a plain model. Both
 themes are shown side by side, because the app follows the system setting. It is dev-only, and
-nothing under `design/` is bundled. See [design/README.md](design/README.md).
+nothing under `design/` is bundled. See [design/README.md](../design/README.md).
 
 ### Working on the core at the same time
 
@@ -301,7 +301,7 @@ development the parent is `cargo`. Every published core enforces the check.
 Until the packet tunnel extension below can be signed (a paid Apple Developer membership), VPN mode
 on macOS runs the core as root. Readiness reports `canGrant`, the status card notes that VPN mode
 will ask for the password, and Connect — from the card, the popover or the tray — opens the
-*Allow VPN mode* sheet ([views/grant-access.ts](src/views/grant-access.ts)) instead of doing nothing.
+*Allow VPN mode* sheet ([views/grant-access.ts](../src/views/grant-access.ts)) instead of doing nothing.
 The sheet says why, that the password goes to macOS, and that proxy mode needs none; only on
 Continue does `request_permission` run `core_proc::grant_root`, which asks for the password through
 `osascript … with administrator privileges`, makes the bundled core `root:wheel 4755`, and restarts
@@ -458,7 +458,7 @@ an empty one.
 ## Releasing
 
 **Every merge to `main` is a release.** Nobody types a version:
-[`release.yml`](.github/workflows/release.yml) works it out with `scripts/version.mjs` from the
+[`release.yml`](../.github/workflows/release.yml) works it out with `scripts/version.mjs` from the
 newest `vX.Y.Z` tag and the commits since it, and publishes a **beta** (a GitHub pre-release).
 
 | The merge is | The version goes | e.g. |
@@ -506,7 +506,7 @@ the packet tunnel extension (VPN mode on macOS) needs an Apple Developer account
   that never passes traffic.
 - **Test names are sentences**: `the_tunnel_takes_the_default_route_and_gives_it_back`.
 - **No framework in the frontend.** Every shipped byte is something a user has to trust;
-  [`src/dom.ts`](src/dom.ts) is the whole abstraction.
+  [`src/dom.ts`](../src/dom.ts) is the whole abstraction.
 - **Do not edit `.xcodeproj`**: it is generated from `project.yml` by XcodeGen, and gitignored.
 - There is no JS linter and **no `cargo fmt` gate**: the tree is not rustfmt-clean, so do not
   reformat files you are not otherwise editing.

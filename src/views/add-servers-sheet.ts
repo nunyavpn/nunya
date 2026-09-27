@@ -1,6 +1,6 @@
 /**
  * The Add servers sheet: paste a link, read a QR code, or fill in a form — the last sheet still in
- * `main.ts`, extracted out per `ENGINEERING_STANDARDS.md`. `features/add-servers.ts` (#67) is the
+ * `main.ts`, extracted out per `docs/ENGINEERING_STANDARDS.md`. `features/add-servers.ts` (#67) is the
  * pure classification this sheet's Link tab calls into; this module is its DOM.
  *
  * All three tabs end up in the same place. A QR code is only a link in another form, so reading

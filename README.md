@@ -248,7 +248,7 @@ Follow along, or suggest something, in the [issues](https://github.com/nunyavpn/
 ## Contributing
 
 Bug reports, ideas and pull requests are welcome. Building from source, running in development and
-mock modes, tests, and how the app is put together are all in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+mock modes, tests, and how the app is put together are all in **[CONTRIBUTING.md](docs/CONTRIBUTING.md)**.
 
 ## Supporting Nunya
 

@@ -1,6 +1,6 @@
 /**
  * Connecting and disconnecting the tunnel, and the connection-state fields every screen renders
- * from — extracted out of `main.ts`'s own "tunnel" section per `ENGINEERING_STANDARDS.md`.
+ * from — extracted out of `main.ts`'s own "tunnel" section per `docs/ENGINEERING_STANDARDS.md`.
  *
  * Connect, disconnect and reconnect run through one `Serial` queue, one at a time: a Disconnect
  * that ran while Connect was still setting the system proxy once put the user's settings back and

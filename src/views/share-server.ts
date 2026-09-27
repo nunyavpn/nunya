@@ -1,7 +1,7 @@
 /**
  * The Share server sheet — a link or a wg-quick config, with a QR code and a copy button — and
  * the clipboard helper it uses, extracted out of `main.ts`'s own "sheets" section per
- * `ENGINEERING_STANDARDS.md`.
+ * `docs/ENGINEERING_STANDARDS.md`.
  *
  * The link is generated here, from the profile, rather than kept from whatever was pasted: the
  * profile is what the app actually connects with, so an edit made since import is what gets

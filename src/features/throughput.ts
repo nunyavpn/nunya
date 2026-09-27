@@ -1,6 +1,6 @@
 /**
  * The tunnel's live throughput and the usage counters it feeds — extracted out of `main.ts`'s own
- * "blocking" section per `ENGINEERING_STANDARDS.md`, which named this exact code as the proof
+ * "blocking" section per `docs/ENGINEERING_STANDARDS.md`, which named this exact code as the proof
  * that a comment banner is not a module boundary: it lived under "blocking" alongside code about
  * block lists, sharing nothing with it beyond proximity.
  *

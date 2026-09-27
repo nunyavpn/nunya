@@ -16,7 +16,7 @@ Deliberately out of scope: OTP, global hotkeys, speed tests, WARP registration, 
 installer, diagnostics capture.
 
 `README.md` is for users: what the app does and how to use it, with screenshots from the mock
-fixture (`docs/screenshots/`). `CONTRIBUTING.md` is the developer's long-form rationale — building,
+fixture (`docs/screenshots/`). `docs/CONTRIBUTING.md` is the developer's long-form rationale — building,
 dev and mock modes, the core link, macOS privilege, releasing and the issue → branch → PR flow —
 read it before any substantial change. Keep both current when you change behaviour they describe,
 and retake a screenshot when its screen changes (`VITE_MOCK=1 npm run dev`; `mockcore.ts` lets the
@@ -109,7 +109,7 @@ one built with `--source`.
 number, anything else the last, and the first never moves on its own — publishes a beta
 (pre-release), and commits the number back to `main` as `chore(release): vX.Y.Z`. **So the PR
 title decides the bump.** A stable release is a `vX.Y.Z` tag a person pushes, published as Latest.
-Do not bump versions by hand in a PR (see CONTRIBUTING.md's *Releasing*). The default macOS build is ad-hoc signed and carries **no** entitlements; the
+Do not bump versions by hand in a PR (see docs/CONTRIBUTING.md's *Releasing*). The default macOS build is ad-hoc signed and carries **no** entitlements; the
 NetworkExtension ones need an Apple Developer team, and macOS kills an app that claims them without
 one — they are merged in only by `build-app.sh`, from `tauri.networkextension.conf.json`.
 `fetch-core.sh` fetches `NunyaCore.xcframework.zip` only when the release lists it.
@@ -159,7 +159,7 @@ the sheet says why before macOS asks. Continue calls `request_permission`, which
 `chmod 4755` on the bundled core) and restarts the core; the app then connects by itself. Setuid rather than `sudo`, because anything wrapping the core becomes its parent
 and fails both the core's parent check and `rpc/peer.rs`. Only a core beside `Nunya` is granted,
 since the release core's parent check is the only thing keeping other programs from driving it,
-and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle carries one. See CONTRIBUTING.md's *Privilege today*.
+and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle carries one. See docs/CONTRIBUTING.md's *Privilege today*.
 
 ### Where things actually live (Rust)
 
@@ -824,7 +824,7 @@ hit-tests before it moves, which is every automation tool.
   and a list for HTTP/2; plain TCP means *no* `transport` key). Every transport is therefore checked
   against a real core in `tests/core_link.rs::every_transport_is_accepted_by_the_core`.
 
-`ENGINEERING_STANDARDS.md` holds the rules for structural change specifically: when a module is
+`docs/ENGINEERING_STANDARDS.md` holds the rules for structural change specifically: when a module is
 large enough to split (and where the actual seams are, not just where a comment banner claims one
 is), the `store.update()` state pattern, reusable-view conventions for the `dom.ts` approach, and
 CSS token discipline. It also records, in writing, that this project considered and rejected

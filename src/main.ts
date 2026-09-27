@@ -1145,7 +1145,7 @@ function locateHomeNow() {
 
 // Connecting, disconnecting, reconnecting, and the exit lookup that follows a connect now live in
 // features/tunnel.ts (buildRequest, working, connect, disconnect, reconnect, toggleConnection);
-// see ENGINEERING_STANDARDS.md for why, and initTunnel below for the callbacks it uses instead of
+// see docs/ENGINEERING_STANDARDS.md for why, and initTunnel below for the callbacks it uses instead of
 // reaching back into this file.
 
 // ---------------------------------------------------------------- blocking
@@ -1247,7 +1247,7 @@ function watchMode() {
 }
 
 // poll/sample/readCounters/saveUsage, and the counters they own, now live in
-// features/throughput.ts — the exact code ENGINEERING_STANDARDS.md names as proof that this
+// features/throughput.ts — the exact code docs/ENGINEERING_STANDARDS.md names as proof that this
 // "blocking" banner was never really one concern.
 
 async function refreshReadiness() {
@@ -1375,19 +1375,19 @@ function connectedServerId(): string | null {
 // What a pasted line turns out to be, and adding a subscription for one, now live in
 // features/add-servers.ts (Pasted, IMPORT_LINK, subscriptionName, classify, manualGroupName,
 // addSubscription). The sheet itself (buildAddServers, openAddServers) is now
-// views/add-servers-sheet.ts. See ENGINEERING_STANDARDS.md.
+// views/add-servers-sheet.ts. See docs/ENGINEERING_STANDARDS.md.
 
 // ---------------------------------------------------------------- sheets
 
 // openSheet, sheetHead, confirmSheet, isLive, openUsage, confirmDeleteServer and
-// confirmDeleteGroup now live in views/sheets.ts; see ENGINEERING_STANDARDS.md. openEditServer,
+// confirmDeleteGroup now live in views/sheets.ts; see docs/ENGINEERING_STANDARDS.md. openEditServer,
 // openShareServer and buildAddServers (above) stay here — each needs its own larger machinery
 // (the profile editor, QR/clipboard, the add-servers parser) and is a separate future extraction.
 
-// openEditServer now lives in views/edit-server.ts; see ENGINEERING_STANDARDS.md.
+// openEditServer now lives in views/edit-server.ts; see docs/ENGINEERING_STANDARDS.md.
 // openShareServer and buildAddServers stay here for now, separate future extractions.
 
-// openShareServer and copyText now live in views/share-server.ts; see ENGINEERING_STANDARDS.md.
+// openShareServer and copyText now live in views/share-server.ts; see docs/ENGINEERING_STANDARDS.md.
 // buildAddServers (above) is the remaining sheet still here, tied to features/add-servers.ts.
 
 /**

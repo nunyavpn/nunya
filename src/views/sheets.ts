@@ -2,7 +2,7 @@
  * Generic sheet plumbing (`openSheet`/`sheetHead`/`confirmSheet`), and the sheets built directly
  * on it that need nothing beyond the store and the tunnel's connection state: Usage and the two
  * delete confirmations — extracted out of `main.ts`'s own "sheets" section per
- * `ENGINEERING_STANDARDS.md`.
+ * `docs/ENGINEERING_STANDARDS.md`.
  *
  * `openEditServer`, `openShareServer` and `buildAddServers` stay in `main.ts` for now: each pulls
  * in its own larger dependency (the profile editor, QR codes and the clipboard, the add-servers
