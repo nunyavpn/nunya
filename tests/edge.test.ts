@@ -7,8 +7,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { entryCountry, entryLine, entryPlace, isAnycast, type Edge, type EdgeReport } from "./edge.ts";
-import type { Spot } from "./store.ts";
+import { entryCountry, entryLine, entryPlace, isAnycast, type Edge, type EdgeReport } from "../src/edge.ts";
+import type { Spot } from "../src/store.ts";
 
 /** What GeoIP says of the anycast address from the issue: Los Angeles. */
 const anycast: Spot = {

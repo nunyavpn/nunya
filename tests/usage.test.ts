@@ -12,9 +12,9 @@ process.env.TZ = "Europe/Berlin";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { configKey, matchExisting } from "./identity.ts";
-import type { Profile } from "./share.ts";
-import { addUsage, advance, dayKey, firstDay, lastDays, niceCeiling, total, type Usage } from "./usage.ts";
+import { configKey, matchExisting } from "../src/identity.ts";
+import type { Profile } from "../src/share.ts";
+import { addUsage, advance, dayKey, firstDay, lastDays, niceCeiling, total, type Usage } from "../src/usage.ts";
 
 const MB = 1024 ** 2;
 const GB = 1024 ** 3;

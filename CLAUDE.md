@@ -687,10 +687,10 @@ stacked daily SVG chart, and for a group a per-config breakdown. It repaints on 
 open, so the numbers climb during a session. **Clear history** confirms in the footer by saying
 what goes — the history, never the configs. No chart library: see *Frontend*.
 
-`npm test` runs `src/**/*.test.ts` under Node's built-in runner, which strips types itself. Tested
+`npm test` runs `tests/*.test.ts` under Node's built-in runner, which strips types itself. Tested
 modules must not import anything with a runtime value (type imports are erased), which is why
-`usage.ts` and `identity.ts` stand apart from the store. Test files are excluded from `tsc`, which
-would need `@types/node` to check them.
+`usage.ts` and `identity.ts` stand apart from the store. Test files live in `tests/`, outside `tsc`'s
+`include`, since checking them would need `@types/node`.
 
 ### Quick Connect
 
@@ -815,6 +815,10 @@ hit-tests before it moves, which is every automation tool.
   (mKCP, XHTTP, SplitHTTP, meek) is refused with a reason. Quietly treating it as TCP produces a
   config the core accepts and a tunnel that never passes traffic.
 - **Test names are sentences** — `the_tunnel_takes_the_default_route_and_gives_it_back`.
+- **Tests live apart from the code.** A Rust module's unit tests go in a sibling `tests.rs`
+  (`foo.rs` declares `#[cfg(test)] mod tests;`, the body is `foo/tests.rs`; `lib.rs`'s is
+  `src/tests.rs`), so they keep private access. Tests that use only the public API go in
+  `src-tauri/tests/`. Frontend tests go in the top-level `tests/`.
 - **Do not edit `.xcodeproj`**: it is generated from `project.yml` by XcodeGen and gitignored.
 - Emitted config shapes differ from what unit tests here can see (`host` is a string for HTTPUpgrade
   and a list for HTTP/2; plain TCP means *no* `transport` key). Every transport is therefore checked

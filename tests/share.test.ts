@@ -16,7 +16,7 @@ import {
   toWgQuick,
   wgQuickRefusal,
   type Profile,
-} from "./share.ts";
+} from "../src/share.ts";
 
 /** A plain WireGuard server, parsed from the link form the app already reads. */
 const plain = (): Profile =>

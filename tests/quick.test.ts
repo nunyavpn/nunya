@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { fastestFirst, quickPicks, type Candidate } from "./quick.ts";
+import { fastestFirst, quickPicks, type Candidate } from "../src/quick.ts";
 
 const HOUR = 3_600_000;
 const GB = 1024 ** 3;
