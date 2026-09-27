@@ -224,6 +224,8 @@ export interface Settings {
   blockAds: boolean;
   /** Refuse the telemetry built into systems, devices and apps (HaGeZi Native Tracker). */
   blockTrackers: boolean;
+  /** Offer betas (GitHub pre-releases) as updates too, not only stable releases; see `update.rs`. */
+  betaUpdates: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -250,6 +252,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // into, and a site it breaks should not be a mystery to someone who never turned it on.
   blockAds: false,
   blockTrackers: false,
+  // On while Nunya is in beta: every release is a beta until 1.0, so off would mean no updates at
+  // all. Stable-only is one switch away for anyone who wants it.
+  betaUpdates: true,
 };
 
 export interface AppData {

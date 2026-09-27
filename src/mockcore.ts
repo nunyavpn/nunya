@@ -211,6 +211,19 @@ export async function mockInvoke<T>(command: string, args: Record<string, unknow
     case "open_external":
       return answer(null);
 
+    // A release a little newer than this one, so the notice and the settings group can be seen.
+    case "check_update":
+      await wait(800);
+      return answer({ version: "0.9.0", prerelease: Boolean(args.beta), notes: null });
+    case "download_update": {
+      const total = 24_000_000;
+      for (let received = 0; received < total; received += 3_000_000) {
+        emit("update-progress", [received, total]);
+        await wait(250);
+      }
+      return answer(null);
+    }
+
     default:
       throw new Error(`"${command}" is not simulated in the browser preview`);
   }

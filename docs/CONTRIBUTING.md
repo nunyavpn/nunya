@@ -495,6 +495,21 @@ workflow keeps its Linux steps, so bringing Linux back is a row in the build mat
 A release whose build failed leaves its tag behind with no release; the next merge moves past it
 rather than reusing the number.
 
+**Every release is an update.** The build signs the packages the app installs (the macOS
+`.app.tar.gz` and the Windows installer) with the updater key, and the publish job writes
+`latest.json` naming each with its signature (`scripts/updater-manifest.mjs`). The app lists the
+releases, picks the newest it may take, and installs only what matches the public key compiled into
+it (`plugins.updater.pubkey` in `tauri.conf.json`); see `src-tauri/src/update.rs`.
+
+The key is two repository secrets, `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; a release stops at *Updater signing key* without them. The
+private key is kept outside the repository (`~/.tauri/nunya-updater.key` on the machine that made
+it, its password in that machine's keychain). **Back it up.** Installed copies trust only its public
+half, so a lost key means no copy already out there can update again; they would all have to be
+reinstalled by hand after a new key ships. A local build does not sign anything
+(`createUpdaterArtifacts` is switched on by the workflow, not in `tauri.conf.json`), so no key is
+needed to develop.
+
 The Windows installer is not code-signed, so SmartScreen warns before its first run
 (**More info → Run anyway**). It installs the core beside `Nunya.exe`, which is where the release
 core's parent check requires it.

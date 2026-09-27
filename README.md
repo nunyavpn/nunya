@@ -236,6 +236,17 @@ This beta is built around **proxy mode**. VPN mode works on macOS after an admin
 prompt, and on Windows when Nunya is started with **Run as administrator**. On Linux it follows once
 the app can set up network-admin rights.
 
+### Updating
+
+Nunya looks for a new release a little after it starts and then every hour. When it finds one it
+downloads it, checks its signature against the key built into the app, and tells you it is ready:
+**Restart to update** installs it and opens the new version. It never restarts on its own, so a
+connection you are using is not dropped for an update. Betas are offered too, unless you turn off
+**Beta versions** under Advanced → Updates.
+
+Updating works from the first version that has it; a copy older than that has to be replaced by
+hand once. On macOS, VPN mode asks for your administrator password again after an update.
+
 ## Roadmap
 
 - More protocols: Shadowsocks, Hysteria2, TUIC, SSH, AmneziaWG, and more

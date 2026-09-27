@@ -719,6 +719,36 @@ The prompt repaints on store changes while open, like the usage sheet.
 `quick.ts` is generic over the item and imports nothing, so `npm test` covers it on plain objects;
 the store turns servers into candidates (`quickCandidates`, `quickPicks`).
 
+### Updates
+
+The app updates itself with Tauri's updater plugin, because it **verifies** what it downloads: the
+release workflow signs each update package, and the public key is compiled in
+(`plugins.updater.pubkey`). A VPN client that installed any file handed to it would be one tampered
+download away from running someone else's code with the user's traffic.
+
+**The plugin cannot choose which release**, since its endpoint is one URL and GitHub has a fixed one
+only for the newest stable release, while every merge publishes a beta. So `update::newest` lists
+the releases and picks the newest by version (drafts never, pre-releases only with
+`Settings.betaUpdates`, and only releases that carry a `latest.json`), and `check_update` points the
+updater at that release's manifest. The updater refuses anything not newer than this copy, so
+turning betas off never installs an older stable. **`betaUpdates` defaults to on** while every
+release is a beta; off would mean no updates at all.
+
+[features/updates.ts](src/features/updates.ts) checks 30 s after launch, then hourly, and when the
+switch changes, through the listener in proxy mode like the block lists. What it finds is
+downloaded at once and kept in memory (`update::Staged`); the user is told only when it is ready,
+in a bar across the map pane ([views/update-bar.ts](src/views/update-bar.ts)) with no close
+button, and in Advanced's Updates group, which sits **outside** the locked fieldset (updating is not
+a tunnel setting) and repaints alone (`paintUpdates`) so progress events never wipe a field being
+typed in. It is **never installed by itself**: installing restarts the app. `installUpdate`
+disconnects through the tunnel queue first (so the system proxy is put back), then `install_update`
+stops the core (Windows cannot replace a running `nunya-core.exe`, and its installer ends the
+process without the quit cleanup) and restarts; a failed install gets its core back.
+
+`tauri-plugin-updater` is pinned to `=2.12.0`: 2.13 needs Tauri 2.12, which brings tray-icon 0.25
+(see *The menu-bar popover*). Update packages are made only in `release.yml`
+(`--config '{"bundle":{"createUpdaterArtifacts":true}}'`), since a local build has no key.
+
 ### Support (donations)
 
 Donations have exactly **two channels, Buy Me a Coffee and crypto wallets**, written once in

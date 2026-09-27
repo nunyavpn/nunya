@@ -66,6 +66,8 @@ import {
   shownRate,
   startSession,
 } from "./features/throughput";
+import { checkForUpdates, initUpdates, installUpdate, updates } from "./features/updates";
+import { renderUpdateBar } from "./views/update-bar";
 import { quickOptions } from "./views/quickpick";
 import {
   confirmDeleteGroup,
@@ -134,7 +136,26 @@ const bypass = new BypassPanel(panelHost);
 const settings = new SettingsPanel(panelHost, {
   onDisconnect: () => void disconnect(),
   blockList: (list) => blockLists[list],
+  version: () => appVersion,
+  updates: () => updates,
+  onCheckUpdates: () => void checkForUpdates(),
+  onInstallUpdate: () => void installUpdate(),
 });
+
+/** This copy's version, for the Updates group; asked once, since only an update changes it. */
+let appVersion: string | null = null;
+if (inTauri) {
+  void import("@tauri-apps/api/app").then(async ({ getVersion }) => {
+    appVersion = await getVersion();
+    settings.paintUpdates();
+  });
+}
+
+/** The update notice and the settings group: all that shows where updating stands. */
+function paintUpdates() {
+  renderUpdateBar(qs("#update-bar"), updates, connection !== "off", () => void installUpdate());
+  settings.paintUpdates();
+}
 const diagnostics = new DiagnosticsPanel(panelHost, {
   onClear: () => {
     logLines.length = 0;
@@ -562,6 +583,8 @@ function refresh() {
   paintShield(shield);
   syncTray(server, blockedReason() === null, shield);
   syncPopover(shield, blockedReason() === null);
+  // Its wording follows the connection: updating disconnects first.
+  paintUpdates();
 }
 
 function currentShield(): Shield {
@@ -1503,6 +1526,10 @@ const dataLoaded = (async () => {
   // A data file that would not load is for the window to say at once, not after an animation.
   if (store.storageError) splash.leave();
 })();
+
+// After the data file, so the beta switch it reads is the saved one. Nothing to check without a
+// backend; under VITE_MOCK=1 mockcore.ts offers a pretend release.
+if (hasBackend) void dataLoaded.then(() => initUpdates({ log, refresh: paintUpdates }));
 
 void listen<string>("core-log", (line) => {
   log(`[core] ${line}`);

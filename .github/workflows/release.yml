@@ -24,6 +24,11 @@ name: release
 #
 # The Windows build is an NSIS installer, unsigned: SmartScreen warns before the first run. It puts
 # the core beside Nunya.exe, which is where the release core's parent check requires it.
+#
+# Every release is also an update. The packages the app installs (the macOS .app.tar.gz, the
+# Windows installer) are signed with the updater key in TAURI_SIGNING_PRIVATE_KEY, whose public
+# half is compiled into the app, and `latest.json` names them with their signatures. The app
+# reads it from the newest release it may take (src-tauri/src/update.rs).
 
 on:
   push:
@@ -134,11 +139,27 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: node scripts/version.mjs set "${VERSION%%-*}"
 
+      # A release without update packages would be one installed copies never hear of, so a
+      # missing key stops the release here rather than publishing it.
+      - name: Updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::the TAURI_SIGNING_PRIVATE_KEY secret is not set; see CONTRIBUTING.md, Releasing"
+            exit 1
+          fi
+
+      # Update packages only here, not in tauri.conf.json: a local build has no key to sign with.
       - name: Build
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+        run: >-
+          npm run tauri build -- --bundles ${{ matrix.bundles }}
+          --config '{"bundle":{"createUpdaterArtifacts":true}}'
         env:
           # linuxdeploy is itself an AppImage, and the runners have no FUSE to mount it with.
           APPIMAGE_EXTRACT_AND_RUN: 1
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Collect the bundles
         run: |
@@ -148,8 +169,13 @@ jobs:
             cp "$bundle"/dmg/*.dmg out/
             # The app itself too, for anyone who would rather not mount a disk image.
             ditto -c -k --keepParent "$bundle/macos/Nunya.app" "out/Nunya_${{ needs.version.outputs.version }}_aarch64.app.zip"
+            # The update package, named for its version and architecture like everything else.
+            update="out/Nunya_${{ needs.version.outputs.version }}_aarch64.app.tar.gz"
+            cp "$bundle/macos/Nunya.app.tar.gz" "$update"
+            cp "$bundle/macos/Nunya.app.tar.gz.sig" "$update.sig"
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            cp "$bundle"/nsis/*-setup.exe out/
+            # The installer is the update package too; its signature is beside it.
+            cp "$bundle"/nsis/*-setup.exe "$bundle"/nsis/*-setup.exe.sig out/
           else
             cp "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage out/
           fi
@@ -181,6 +207,16 @@ jobs:
           path: out
           merge-multiple: true
 
+      # The signatures go into the manifest and are not published on their own.
+      - name: Updater manifest
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          node scripts/updater-manifest.mjs out "$VERSION" "$GITHUB_REPOSITORY" > latest.json
+          rm out/*.sig
+          mv latest.json out/
+          cat out/latest.json
+
       - name: Checksums
         run: cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
@@ -202,6 +238,10 @@ jobs:
           SmartScreen may warn before it runs: choose **More info → Run anyway**.
 
           **Linux**: not in this build yet. It comes next.
+
+          **Updating**: from this version on, Nunya checks for new releases every hour and downloads them
+          itself; **Restart to update** installs one. Betas are offered unless **Beta versions** is turned
+          off in Advanced. \`Nunya_${VERSION}_aarch64.app.tar.gz\` and \`latest.json\` are what it downloads.
 
           Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
 

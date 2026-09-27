@@ -12,17 +12,26 @@
 import { listLine, type BlockList, type ListState } from "../blocking";
 import { DEFAULT_SETTINGS, store, type Settings } from "../store";
 import { h, render } from "../dom";
+import type { Updates } from "../features/updates";
+import { updateLine } from "./update-bar";
 
 export interface SettingsCallbacks {
   onDisconnect: () => void;
   /** Where a block list stands: on disk since when, being fetched, or failed. */
   blockList: (list: BlockList) => ListState;
+  /** This copy's version, once known. */
+  version: () => string | null;
+  updates: () => Updates;
+  onCheckUpdates: () => void;
+  onInstallUpdate: () => void;
 }
 
 export class SettingsPanel {
   /** Whether this is the panel on screen; see `BypassPanel.active`. */
   active = false;
   private locked = false;
+  /** The Updates group's own box, repainted alone as a download progresses; see `paintUpdates`. */
+  private updatesHost: HTMLElement | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -67,6 +76,55 @@ export class SettingsPanel {
         // A disabled fieldset disables every control inside it natively — keyboard included —
         // rather than each control having to be told.
         h("fieldset", { class: "set-lock", disabled: this.locked }, ...this.groups(s)),
+        // Outside the fieldset: updating has nothing to do with the tunnel, so it is not locked
+        // while connected.
+        (this.updatesHost = h("div", { class: "set-group" })),
+      ),
+    );
+    this.paintUpdates();
+  }
+
+  /**
+   * Repaints only the Updates group. Download progress arrives several times a second, and
+   * re-rendering the whole panel for it would throw away whatever is being typed into a field.
+   */
+  paintUpdates() {
+    if (!this.active || !this.updatesHost?.isConnected) return;
+    const s = store.settings();
+    const updates = this.callbacks.updates();
+    const version = this.callbacks.version();
+    render(
+      this.updatesHost,
+      h("h4", {}, "Updates"),
+      this.toggle(
+        "Beta versions",
+        "offer every beta release as an update, not only stable ones",
+        s.betaUpdates,
+        (v) => store.updateSettings({ betaUpdates: v }),
+      ),
+      h(
+        "div",
+        { class: "srow" },
+        this.label(version ? `Nunya ${version}` : "Nunya", updateLine(updates, Date.now())),
+        updates.ready
+          ? h(
+              "button",
+              {
+                class: "btn brand",
+                disabled: updates.installing,
+                onclick: () => this.callbacks.onInstallUpdate(),
+              },
+              "Restart to update",
+            )
+          : h(
+              "button",
+              {
+                class: "ghost",
+                disabled: updates.checking || updates.installing,
+                onclick: () => this.callbacks.onCheckUpdates(),
+              },
+              "Check now",
+            ),
       ),
     );
   }
@@ -148,7 +206,9 @@ export class SettingsPanel {
           "button",
           {
             class: "ghost wide",
-            onclick: () => store.updateSettings({ ...DEFAULT_SETTINGS }),
+            // The update channel is not a tunnel setting, and its switch is not under this button.
+            onclick: () =>
+              store.updateSettings({ ...DEFAULT_SETTINGS, betaUpdates: store.settings().betaUpdates }),
           },
           "Reset to defaults",
         ),
