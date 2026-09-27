@@ -8,8 +8,12 @@
 //! protected" while the tunnel was never up.
 //!
 //! These checks close that gap. They are cheap and they run before a single byte is read.
+//!
+//! On Windows the link is a named pipe, and the core checks it the same way from its side
+//! (`GetNamedPipeServerProcessId`, `internal/ipc/ipc_windows.go`); `verify_pipe` is our half.
 
 use std::io;
+#[cfg(unix)]
 use std::os::unix::io::RawFd;
 
 /// `getsockopt` level for `AF_UNIX` socket options on Darwin.
@@ -25,7 +29,7 @@ const LOCAL_PEERPID: libc::c_int = 0x002;
 /// `getpeereid` is a BSD interface. Linux has no such call and answers all three questions — pid,
 /// uid and gid — from a single `SO_PEERCRED` option instead, which is why the two platforms split
 /// here rather than sharing one implementation.
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
@@ -97,6 +101,7 @@ pub fn peer_pid(fd: RawFd) -> io::Result<u32> {
 /// Rejects a connection that is not the core process we spawned.
 ///
 /// `expected_pid` of 0 means no core has been spawned yet, so nothing should be connecting at all.
+#[cfg(unix)]
 pub fn verify(fd: RawFd, expected_pid: u32) -> Result<(), String> {
     let ours = unsafe { libc::geteuid() };
     let theirs = peer_uid(fd).map_err(|e| format!("cannot read peer uid: {e}"))?;
@@ -110,18 +115,43 @@ pub fn verify(fd: RawFd, expected_pid: u32) -> Result<(), String> {
     }
 
     if expected_pid == 0 {
-        return Err("a peer connected before any core was spawned".to_string());
+        return Err(NOT_SPAWNED.to_string());
     }
-
     let pid = peer_pid(fd).map_err(|e| format!("cannot read peer pid: {e}"))?;
+    is_the_core(pid, expected_pid)
+}
+
+/// Rejects a pipe client that is not the core process we spawned.
+///
+/// There is no uid to compare: the pid is the whole identity, and it is the child we started.
+#[cfg(windows)]
+pub fn verify_pipe(pipe: std::os::windows::io::RawHandle, expected_pid: u32) -> Result<(), String> {
+    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+
+    if expected_pid == 0 {
+        return Err(NOT_SPAWNED.to_string());
+    }
+    let mut pid = 0u32;
+    // SAFETY: `pipe` is a live, connected pipe server handle; `pid` is a valid out-param.
+    if unsafe { GetNamedPipeClientProcessId(pipe, &mut pid) } == 0 {
+        return Err(format!("cannot read peer pid: {}", io::Error::last_os_error()));
+    }
+    is_the_core(pid, expected_pid)
+}
+
+const NOT_SPAWNED: &str = "a peer connected before any core was spawned";
+
+fn is_the_core(pid: u32, expected_pid: u32) -> Result<(), String> {
     if pid != expected_pid {
         return Err(format!(
             "peer pid {pid} is not the core we spawned ({expected_pid})"
         ));
     }
-
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, windows))]
+mod windows_tests;

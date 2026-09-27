@@ -588,7 +588,7 @@ impl ProbeSession {
 
         let (link, listener) =
             CoreLink::bind(&socket).map_err(|e| format!("could not bind the probe socket: {e}"))?;
-        let process = CoreProcess::spawn(core_path, &socket, &dir, |line| {
+        let process = CoreProcess::spawn(core_path, link.socket_path(), &dir, |line| {
             log::debug!("probe core: {line}");
         })
         .map_err(|e| format!("could not start a core for the probe: {e}"))?;

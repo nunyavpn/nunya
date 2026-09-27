@@ -41,6 +41,8 @@ done
 
 host_triple_os() { case "$(uname -s)" in Darwin) echo darwin ;; Linux) echo linux ;; *) echo windows ;; esac; }
 host_arch()      { case "$(uname -m)" in arm64|aarch64) echo arm64 ;; *) echo amd64 ;; esac; }
+# macOS has shasum and no sha256sum; Git Bash on Windows may have only sha256sum. Same output, same -c.
+sha256() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"; else sha256sum "$@"; fi; }
 
 # Tauri resolves sidecars by <name>-<target-triple> and refuses to build — even `cargo check` —
 # while the file named in externalBin is missing. Staging it here is what makes the tree compile
@@ -123,7 +125,7 @@ MSG
   exit 1
 fi
 
-ACTUAL="$(shasum -a 256 "$TMP/SHA256SUMS" | awk '{print $1}')"
+ACTUAL="$(sha256 "$TMP/SHA256SUMS" | awk '{print $1}')"
 
 if [[ "$MODE" == "update" ]]; then
   echo "==> repinning core.lock to $TAG ($ACTUAL)"
@@ -168,7 +170,7 @@ echo "==> verifying"
 for asset in "${ASSETS[@]}"; do
   line="$(grep -F "  $asset" "$TMP/SHA256SUMS" || true)"
   [[ -n "$line" ]] || { echo "error: $asset is not listed in SHA256SUMS" >&2; exit 1; }
-  ( cd "$TMP" && printf '%s\n' "$line" | shasum -a 256 -c - >/dev/null ) \
+  ( cd "$TMP" && printf '%s\n' "$line" | sha256 -c - >/dev/null ) \
     || { echo "error: $asset failed its checksum" >&2; exit 1; }
   echo "    ok  $asset"
 done

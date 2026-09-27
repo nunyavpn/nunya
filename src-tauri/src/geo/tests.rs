@@ -261,18 +261,22 @@ fn serve_empty_502() -> u16 {
             }
             let _ = stream.write_all(HEAD);
             std::thread::sleep(std::time::Duration::from_micros((n % 60) as u64));
-            // SO_LINGER 0: closing sends a reset rather than a FIN.
-            let linger = libc::linger { l_onoff: 1, l_linger: 0 };
-            // SAFETY: a live socket and a correctly sized option value.
-            unsafe {
-                use std::os::fd::AsRawFd;
-                libc::setsockopt(
-                    stream.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_LINGER,
-                    &linger as *const _ as *const libc::c_void,
-                    std::mem::size_of::<libc::linger>() as libc::socklen_t,
-                );
+            // SO_LINGER 0: closing sends a reset rather than a FIN. Unix only; on Windows the close
+            // is a FIN, which is the milder of the two cases this test is about.
+            #[cfg(unix)]
+            {
+                let linger = libc::linger { l_onoff: 1, l_linger: 0 };
+                // SAFETY: a live socket and a correctly sized option value.
+                unsafe {
+                    use std::os::fd::AsRawFd;
+                    libc::setsockopt(
+                        stream.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_LINGER,
+                        &linger as *const _ as *const libc::c_void,
+                        std::mem::size_of::<libc::linger>() as libc::socklen_t,
+                    );
+                }
             }
             drop(reader);
             drop(stream);
