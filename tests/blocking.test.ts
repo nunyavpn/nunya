@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { listLine, listsToFetch, STALE_MS, type ListState } from "./blocking.ts";
+import { listLine, listsToFetch, STALE_MS, type ListState } from "../src/blocking.ts";
 
 const NOW = 1_800_000_000_000;
 const none: ListState = { updatedAt: null, busy: false, error: null };

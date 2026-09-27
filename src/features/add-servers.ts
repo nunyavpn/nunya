@@ -1,7 +1,7 @@
 /**
  * Sorting a pasted line into a server, a subscription, or a rejection, and adding a subscription
  * group for one — extracted out of `main.ts`'s own "add servers" section per
- * `ENGINEERING_STANDARDS.md`.
+ * `docs/ENGINEERING_STANDARDS.md`.
  *
  * The sheet that collects the paste (`buildAddServers`, still in `main.ts`) stays there: it is
  * view code, built with `dom.ts`'s `h`/`render`, and belongs with the rest of the sheets rather

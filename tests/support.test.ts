@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { acceptsDonations, payable, SUPPORT, supportProblems, type Support, type Wallet } from "./support.ts";
+import { acceptsDonations, payable, SUPPORT, supportProblems, type Support, type Wallet } from "../src/support.ts";
 
 test("the channels this build ships are well formed", () => {
   assert.deepEqual(supportProblems(SUPPORT), []);

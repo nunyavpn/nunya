@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { shieldState, type ShieldInput } from "./shield.ts";
+import { shieldState, type ShieldInput } from "../src/shield.ts";
 
 const input = (change: Partial<ShieldInput>): ShieldInput => ({
   connection: "off",

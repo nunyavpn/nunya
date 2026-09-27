@@ -1,6 +1,6 @@
 /**
  * The Edit server sheet: a form over the profile, opened from a row's actions menu — extracted
- * out of `main.ts`'s own "sheets" section per `ENGINEERING_STANDARDS.md`.
+ * out of `main.ts`'s own "sheets" section per `docs/ENGINEERING_STANDARDS.md`.
  *
  * Not a share link in a text box: a link is a serialisation, and changing a port by finding it
  * between an `@` and a `?` makes the user the parser. A typo there does not fail — it produces a

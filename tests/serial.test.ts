@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { Serial } from "./serial.ts";
+import { Serial } from "../src/serial.ts";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
