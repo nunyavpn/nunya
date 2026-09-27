@@ -15,13 +15,18 @@ permissions:
 
 jobs:
   check:
-    # Both platforms the beta ships on: a change that only breaks the Linux build (the tray, the
-    # GNOME and KDE system proxy) or only the macOS one would otherwise reach a release first.
+    # Every platform the app builds on: a change that only breaks the Linux build (the tray, the
+    # GNOME and KDE system proxy), the Windows one (the core pipe, the registry proxy) or only the
+    # macOS one would otherwise reach a release first.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-22.04]
+        os: [macos-14, ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Git Bash on Windows, so the scripts run the same everywhere.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +38,7 @@ jobs:
             libxdo-dev libssl-dev protobuf-compiler
 
       - uses: arduino/setup-protoc@v3
-        if: runner.os == 'macOS'
+        if: runner.os != 'Linux'
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 

@@ -92,6 +92,7 @@ As the CI release builds them, without the packet tunnel extension:
 ```bash
 npm run tauri build -- --bundles app,dmg        # macOS
 npm run tauri build -- --bundles deb,appimage   # Linux
+npm run tauri build -- --bundles nsis           # Windows, from Git Bash
 ```
 
 With the packet tunnel extension, which needs an Apple Developer team:
@@ -246,11 +247,12 @@ it. Everything above it (config generation, share-link parsing, the UI) is share
 | Platform | Mechanism | Core runs as | Privilege |
 | --- | --- | --- | --- |
 | macOS | `NEPacketTunnelProvider` in a bundled `.appex` | a linked library | none; the system owns the utun |
-| Windows | a service with WinTun | a subprocess | the service |
+| Windows | Wintun, carried inside the core | a subprocess | Nunya run as administrator |
 | Linux | systemd unit or `CAP_NET_ADMIN` | a subprocess | capability on the core |
 
-The subprocess transport is implemented and tested; the NetworkExtension one is a skeleton, and
-Windows is not built yet ([#34](https://github.com/nunyavpn/nunya/issues/34)).
+The subprocess transport is implemented and tested; the NetworkExtension one is a skeleton. On
+Windows the core has administrator rights exactly when Nunya does, so VPN mode there needs Nunya
+started with *Run as administrator*; a service would remove that step.
 
 ### Replacing the core
 
@@ -265,8 +267,8 @@ Nothing in the UI, the share-link parser or the bypass rules depends on the core
 ## How the client talks to the core
 
 Despite the `service NunyaCoreService` block in the core's `proto/nunya.proto`, **nothing on the
-wire is gRPC**. The core reads two little-endian frames over a unix socket and dispatches through a
-map of handlers:
+wire is gRPC**. The core reads two little-endian frames over a unix socket (a named pipe on
+Windows) and dispatches through a map of handlers:
 
 ```text
 request   [u32 id][u16 method_len][method][u32 payload_len][protobuf]
@@ -486,12 +488,16 @@ That commit starts no workflow (GitHub's rule for its own token), so it releases
 version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come next with
 `node scripts/version.mjs next`.
 
-Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`) against the core pinned in
-`core.lock`, and publishes it with a `SHA256SUMS`. Releases are macOS only for now: Linux `.deb`
-and `.AppImage` builds come back next (the arm64 AppImage fails in linuxdeploy), then Windows.
-The workflow keeps its Linux steps, so bringing Linux back is a row in the build matrix. Releases run one at a time, never cancelled, so two quick merges are two releases.
+Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`) and a **Windows x86-64** NSIS
+installer against the core pinned in `core.lock`, and publishes them with a `SHA256SUMS`. Linux
+`.deb` and `.AppImage` builds come back next (the arm64 AppImage fails in linuxdeploy). The
+workflow keeps its Linux steps, so bringing Linux back is a row in the build matrix. Releases run one at a time, never cancelled, so two quick merges are two releases.
 A release whose build failed leaves its tag behind with no release; the next merge moves past it
 rather than reusing the number.
+
+The Windows installer is not code-signed, so SmartScreen warns before its first run
+(**More info → Run anyway**). It installs the core beside `Nunya.exe`, which is where the release
+core's parent check requires it.
 
 The macOS build is ad-hoc signed, not notarised: the first time it's opened, macOS asks the user to
 allow it in **System Settings → Privacy & Security → Open Anyway**. A signed, notarised build with

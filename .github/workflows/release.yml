@@ -18,9 +18,12 @@ name: release
 # core as root instead, after the administrator prompt (`core_proc::grant_root`).
 # scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
 #
-# Releases are macOS only for now. Linux comes back next (the arm64 AppImage fails in linuxdeploy),
-# then Windows. The Linux dependency step and bundle collection are kept, so a Linux row in the matrix is
-# all it takes to bring it back once its build passes.
+# Releases are macOS and Windows for now. Linux comes back next (the arm64 AppImage fails in
+# linuxdeploy). The Linux dependency step and bundle collection are kept, so a Linux row in the
+# matrix is all it takes to bring it back once its build passes.
+#
+# The Windows build is an NSIS installer, unsigned: SmartScreen warns before the first run. It puts
+# the core beside Nunya.exe, which is where the release core's parent check requires it.
 
 on:
   push:
@@ -84,7 +87,14 @@ jobs:
           - runner: macos-14
             label: macos-arm64
             bundles: app,dmg
+          - runner: windows-latest
+            label: windows-x86_64
+            bundles: nsis
     runs-on: ${{ matrix.runner }}
+    # Git Bash on Windows, so the scripts run the same everywhere.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -96,7 +106,7 @@ jobs:
             libxdo-dev libssl-dev protobuf-compiler patchelf file
 
       - uses: arduino/setup-protoc@v3
-        if: runner.os == 'macOS'
+        if: runner.os != 'Linux'
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -138,6 +148,8 @@ jobs:
             cp "$bundle"/dmg/*.dmg out/
             # The app itself too, for anyone who would rather not mount a disk image.
             ditto -c -k --keepParent "$bundle/macos/Nunya.app" "out/Nunya_${{ needs.version.outputs.version }}_aarch64.app.zip"
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$bundle"/nsis/*-setup.exe out/
           else
             cp "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage out/
           fi
@@ -186,15 +198,18 @@ jobs:
           refuse. Open **System Settings → Privacy & Security** and choose **Open Anyway**. (Or, in Terminal:
           \`xattr -dr com.apple.quarantine /Applications/Nunya.app\`.)
 
-          **Linux and Windows**: not in this build yet. Linux comes next, then Windows.
+          **Windows (x86-64)**: run \`Nunya_${VERSION}_x64-setup.exe\`. This build is not yet code-signed, so
+          SmartScreen may warn before it runs: choose **More info → Run anyway**.
+
+          **Linux**: not in this build yet. It comes next.
 
           Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
 
           ## In this build
 
           **Proxy mode**: a local SOCKS/HTTP listener, which can also be set as the system proxy while connected.
-          **VPN mode** asks for your administrator password the first time you connect in it (and again after an
-          update).
+          **VPN mode** on macOS asks for your administrator password the first time you connect in it (and again
+          after an update). On Windows it needs Nunya started with **Run as administrator**.
           NOTES
           flags=(--title "Nunya $VERSION" --notes-file notes.md --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then

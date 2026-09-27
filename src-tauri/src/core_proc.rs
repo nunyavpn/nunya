@@ -58,6 +58,11 @@ impl CoreProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // The core is a console program, and Windows gives a console program started from a GUI
+        // app a window of its own. CREATE_NO_WINDOW runs it without one; its output still comes
+        // through the pipes above.
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000);
 
         let mut child = cmd.spawn()?;
         let pid = child.id().unwrap_or(0);
@@ -173,5 +178,5 @@ pub fn find_core(exe_dir: &Path) -> PathBuf {
     if let Ok(explicit) = std::env::var("NUNYA_CORE_PATH") {
         return PathBuf::from(explicit);
     }
-    exe_dir.join("nunya-core")
+    exe_dir.join(format!("nunya-core{}", std::env::consts::EXE_SUFFIX))
 }

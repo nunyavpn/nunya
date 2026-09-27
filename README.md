@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/nunyavpn/nunya/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/nunyavpn/nunya/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="macOS and Linux" src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux-4c6ef5">
+  <img alt="macOS, Windows and Linux" src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-4c6ef5">
   <img alt="Beta" src="https://img.shields.io/badge/status-beta-f59f00">
   <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-2f9e44"></a>
 </p>
@@ -227,17 +227,20 @@ stable versions, from 1.0 on, are marked *Latest*.
 - **macOS** (Apple Silicon, macOS 12 or later): open the `.dmg` and drag Nunya into Applications.
   The beta isn't signed by an Apple Developer account yet, so the first time you open it, go to
   **System Settings → Privacy & Security** and choose **Open Anyway**.
-- **Linux**: next. It runs from source today, and release builds come after macOS.
-- **Windows**: planned after Linux ([#34](https://github.com/nunyavpn/nunya/issues/34)).
+- **Windows** (x86-64, Windows 10 or later): run `Nunya_<version>_x64-setup.exe`. The beta isn't
+  code-signed yet, so SmartScreen may stop it the first time: choose **More info**, then
+  **Run anyway**.
+- **Linux**: next. It runs from source today, and release builds come after macOS and Windows.
 
 This beta is built around **proxy mode**. VPN mode works on macOS after an administrator password
-prompt; on Linux it follows once the app can set up network-admin rights.
+prompt, and on Windows when Nunya is started with **Run as administrator**. On Linux it follows once
+the app can set up network-admin rights.
 
 ## Roadmap
 
 - More protocols: Shadowsocks, Hysteria2, TUIC, SSH, AmneziaWG, and more
 - Proxy chains, routing rules and a built-in ad blocker
-- VPN mode out of the box on macOS and Linux, and Windows support
+- VPN mode out of the box on every platform, with no administrator step
 - Cloudflare WARP: create and register configs from the app
 - On the server side: **nunya-server-core** (Docker), **nunya-cluster** (auto-scaling across nodes)
   and **nunya-server-panel** (config and user management)

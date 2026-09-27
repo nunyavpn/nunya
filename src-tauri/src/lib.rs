@@ -132,6 +132,17 @@ async fn tunnel_readiness(
     let can_grant = cfg!(target_os = "macos")
         && state.tunnel_kind == transport::select::Kind::Subprocess
         && matches!(state_or_err, Some(TunnelState::NeedsPermission));
+
+    // On Windows the core has administrator rights exactly when Nunya does, so there is no prompt
+    // to offer: the way in is starting Nunya with them, and the status card has to say so.
+    #[cfg(windows)]
+    let detail = detail.or_else(|| {
+        matches!(state_or_err, Some(TunnelState::NeedsPermission)).then(|| {
+            "VPN mode needs administrator rights on Windows. Quit Nunya, then right-click it and \
+             choose Run as administrator. Proxy mode needs none."
+                .to_string()
+        })
+    });
     Ok(Readiness {
         mode: mode.as_str(),
         transport: state.tunnel_kind.as_str(),
@@ -819,8 +830,9 @@ pub fn run() {
             // `setup` runs outside the async runtime, but tokio's process machinery registers a
             // SIGCHLD handler with the reactor and `pump` calls `tokio::spawn`, so this has to be
             // entered on the runtime even though the call itself is not async.
+            // The link's own address, not `socket`: on Windows it is a pipe name, not that path.
             let core = tauri::async_runtime::block_on(async {
-                spawn_core(app.handle(), &core_path, &socket, &runtime_dir)
+                spawn_core(app.handle(), &core_path, link.socket_path(), &runtime_dir)
             })?;
 
             // Must happen before the first accept, so the peer check has something to compare
