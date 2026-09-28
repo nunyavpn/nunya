@@ -45,6 +45,7 @@ use tauri::menu::MenuItem;
 use tauri::menu::{Menu, PredefinedMenuItem};
 #[cfg(not(target_os = "linux"))]
 use tauri::tray::{TrayIcon, TrayIconBuilder};
+#[cfg(not(target_os = "macos"))]
 use tauri::Emitter;
 #[cfg(not(target_os = "linux"))]
 use tauri::Wry;

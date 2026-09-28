@@ -502,7 +502,9 @@ releases, picks the newest it may take, and installs only what matches the publi
 it (`plugins.updater.pubkey` in `tauri.conf.json`); see `src-tauri/src/update.rs`.
 
 The key is two repository secrets, `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; a release stops at *Updater signing key* without them. The
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Without them (as through the beta, until the key is
+added) a release is published with no update packages and no `latest.json`, which the app skips, so
+installed copies are not told of it; setting the secrets turns updates on with no workflow change. The
 private key is kept outside the repository (`~/.tauri/nunya-updater.key` on the machine that made
 it, its password in that machine's keychain). **Back it up.** Installed copies trust only its public
 half, so a lost key means no copy already out there can update again; they would all have to be
