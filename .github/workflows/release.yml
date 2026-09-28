@@ -29,6 +29,7 @@ name: release
 # Windows installer) are signed with the updater key in TAURI_SIGNING_PRIVATE_KEY, whose public
 # half is compiled into the app, and `latest.json` names them with their signatures. The app
 # reads it from the newest release it may take (src-tauri/src/update.rs).
+# Without the key (the beta, for now) the release is published with no update packages.
 
 on:
   push:
@@ -139,22 +140,19 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: node scripts/version.mjs set "${VERSION%%-*}"
 
-      # A release without update packages would be one installed copies never hear of, so a
-      # missing key stops the release here rather than publishing it.
-      - name: Updater signing key
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::error::the TAURI_SIGNING_PRIVATE_KEY secret is not set; see CONTRIBUTING.md, Releasing"
-            exit 1
-          fi
-
       # Update packages only here, not in tauri.conf.json: a local build has no key to sign with.
+      # Nor, during the beta, does this one. Without TAURI_SIGNING_PRIVATE_KEY the release goes out
+      # with no update packages and no latest.json, which update.rs skips; installed copies hear of
+      # releases again once the secret is set, with no change here.
       - name: Build
-        run: >-
-          npm run tauri build -- --bundles ${{ matrix.bundles }}
-          --config '{"bundle":{"createUpdaterArtifacts":true}}'
+        run: |
+          updater=()
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            updater=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: releasing without update packages"
+          fi
+          npm run tauri build -- --bundles ${{ matrix.bundles }} "${updater[@]}"
         env:
           # linuxdeploy is itself an AppImage, and the runners have no FUSE to mount it with.
           APPIMAGE_EXTRACT_AND_RUN: 1
@@ -170,12 +168,17 @@ jobs:
             # The app itself too, for anyone who would rather not mount a disk image.
             ditto -c -k --keepParent "$bundle/macos/Nunya.app" "out/Nunya_${{ needs.version.outputs.version }}_aarch64.app.zip"
             # The update package, named for its version and architecture like everything else.
-            update="out/Nunya_${{ needs.version.outputs.version }}_aarch64.app.tar.gz"
-            cp "$bundle/macos/Nunya.app.tar.gz" "$update"
-            cp "$bundle/macos/Nunya.app.tar.gz.sig" "$update.sig"
+            if [ -f "$bundle/macos/Nunya.app.tar.gz.sig" ]; then
+              update="out/Nunya_${{ needs.version.outputs.version }}_aarch64.app.tar.gz"
+              cp "$bundle/macos/Nunya.app.tar.gz" "$update"
+              cp "$bundle/macos/Nunya.app.tar.gz.sig" "$update.sig"
+            fi
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            # The installer is the update package too; its signature is beside it.
-            cp "$bundle"/nsis/*-setup.exe "$bundle"/nsis/*-setup.exe.sig out/
+            # The installer is the update package too; its signature, when signed, is beside it.
+            cp "$bundle"/nsis/*-setup.exe out/
+            if ls "$bundle"/nsis/*-setup.exe.sig >/dev/null 2>&1; then
+              cp "$bundle"/nsis/*-setup.exe.sig out/
+            fi
           else
             cp "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage out/
           fi
@@ -207,11 +210,15 @@ jobs:
           path: out
           merge-multiple: true
 
-      # The signatures go into the manifest and are not published on their own.
+      # The signatures go into the manifest and are not published on their own. None, no manifest.
       - name: Updater manifest
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          if ! ls out/*.sig >/dev/null 2>&1; then
+            echo "No update packages: publishing without latest.json"
+            exit 0
+          fi
           node scripts/updater-manifest.mjs out "$VERSION" "$GITHUB_REPOSITORY" > latest.json
           rm out/*.sig
           mv latest.json out/
@@ -226,6 +233,14 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
+          # Only a release carrying update packages can say it updates itself.
+          UPDATING=""
+          if [ -f out/latest.json ]; then
+            UPDATING="**Updating**: from this version on, Nunya checks for new releases every hour and downloads them
+          itself; **Restart to update** installs one. Betas are offered unless **Beta versions** is turned
+          off in Advanced. \`Nunya_${VERSION}_aarch64.app.tar.gz\` and \`latest.json\` are what it downloads.
+          "
+          fi
           cat > notes.md <<NOTES
           ## Installing
 
@@ -239,10 +254,7 @@ jobs:
 
           **Linux**: not in this build yet. It comes next.
 
-          **Updating**: from this version on, Nunya checks for new releases every hour and downloads them
-          itself; **Restart to update** installs one. Betas are offered unless **Beta versions** is turned
-          off in Advanced. \`Nunya_${VERSION}_aarch64.app.tar.gz\` and \`latest.json\` are what it downloads.
-
+          ${UPDATING}
           Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
 
           ## In this build
