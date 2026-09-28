@@ -18,9 +18,9 @@ name: release
 # core as root instead, after the administrator prompt (`core_proc::grant_root`).
 # scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
 #
-# Linux is an AppImage, for every distribution (Arch and its kin included, which cannot install
-# a .deb), and a .deb for Debian and Ubuntu, each for x86-64 and arm64. The AppImage is what
-# updates itself; a .deb belongs to the package manager.
+# Linux is an x86-64 AppImage, for every distribution (Arch and its kin included, which cannot
+# install a .deb), and a .deb for Debian and Ubuntu on x86-64 and arm64. The AppImage is what
+# updates itself; a .deb belongs to the package manager. There is no arm64 AppImage: see the matrix.
 #
 # The Windows build is an NSIS installer, unsigned: SmartScreen warns before the first run. It puts
 # the core beside Nunya.exe, which is where the release core's parent check requires it.
@@ -107,9 +107,12 @@ jobs:
           - runner: ubuntu-22.04
             label: linux-x86_64
             bundles: deb,appimage
+          # A .deb only: linuxdeploy rewrites the bundled core with patchelf, and the arm64 build of
+          # it does not survive that (ldd fails, and the core never starts). x86-64 is what Linux
+          # desktops are, so its AppImage is the Linux download.
           - runner: ubuntu-22.04-arm
             label: linux-arm64
-            bundles: deb,appimage
+            bundles: deb
     runs-on: ${{ matrix.runner }}
     # Git Bash on Windows, so the scripts run the same everywhere.
     defaults:
@@ -166,8 +169,7 @@ jobs:
           else
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: releasing without update packages"
           fi
-          npm run tauri build -- --bundles ${{ matrix.bundles }} "${updater[@]}" \
-            ${{ runner.os == 'Linux' && '--verbose' || '' }}
+          npm run tauri build -- --bundles ${{ matrix.bundles }} "${updater[@]}"
         env:
           # linuxdeploy is itself an AppImage, and the runners have no FUSE to mount it with.
           APPIMAGE_EXTRACT_AND_RUN: 1
@@ -272,10 +274,10 @@ jobs:
           **Windows (x86-64)**: run \`Nunya_${VERSION}_x64-setup.exe\`. This build is not yet code-signed, so
           SmartScreen may warn before it runs: choose **More info → Run anyway**.
 
-          **Linux**: download the AppImage for your machine (\`amd64\` for Intel and AMD, \`aarch64\` for ARM),
-          make it executable and run it: \`chmod +x Nunya_${VERSION}_amd64.AppImage && ./Nunya_${VERSION}_amd64.AppImage\`.
-          It runs on any distribution, Arch, Manjaro and Fedora included; on Debian and Ubuntu the \`.deb\` works too
-          (\`sudo apt install ./Nunya_${VERSION}_amd64.deb\`). Proxy mode works everywhere; VPN mode is not in the
+          **Linux (x86-64)**: download \`Nunya_${VERSION}_amd64.AppImage\`, make it executable and run it:
+          \`chmod +x Nunya_${VERSION}_amd64.AppImage && ./Nunya_${VERSION}_amd64.AppImage\`. It runs on any
+          distribution, Arch, Manjaro and Fedora included; on Debian and Ubuntu the \`.deb\` works too
+          (\`sudo apt install ./Nunya_${VERSION}_amd64.deb\`). ARM machines: the \`arm64.deb\`, on Debian and Ubuntu. Proxy mode works everywhere; VPN mode is not in the
           Linux build yet.
 
           ${UPDATING}

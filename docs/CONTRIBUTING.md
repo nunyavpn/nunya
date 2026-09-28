@@ -489,10 +489,11 @@ version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come n
 `node scripts/version.mjs next`.
 
 Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`), a **Windows x86-64** NSIS
-installer, and a **Linux** AppImage and `.deb` for both x86-64 and arm64, against the core pinned in
+installer, a **Linux x86-64** AppImage and `.deb`, and an **arm64** `.deb`, against the core pinned in
 `core.lock`, and publishes them with a `SHA256SUMS`. The AppImage is the Linux download that matters:
 it runs on every distribution, Arch-based ones included, which cannot install a `.deb`, and it is
-the one Linux package the updater replaces. Releases run one at a time, never cancelled, so two
+the one Linux package the updater replaces. There is no arm64 AppImage: linuxdeploy rewrites the
+bundled core with patchelf, which the arm64 core does not survive. Releases run one at a time, never cancelled, so two
 quick merges are two releases. A pull request that touches `release.yml`, the updater manifest or
 `tauri.conf.json` runs the builds without publishing, which is how a change to them is tried.
 A release whose build failed leaves its tag behind with no release; the next merge moves past it
