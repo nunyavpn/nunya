@@ -19,6 +19,9 @@ import { fileURLToPath } from "node:url";
 const PLATFORMS = [
   ["darwin-aarch64", (name) => name.endsWith("_aarch64.app.tar.gz")],
   ["windows-x86_64", (name) => name.endsWith("_x64-setup.exe")],
+  // The AppImage replaces itself; a .deb belongs to the package manager and is never updated here.
+  ["linux-x86_64", (name) => name.endsWith("_amd64.AppImage")],
+  ["linux-aarch64", (name) => name.endsWith("_aarch64.AppImage")],
 ];
 
 /**

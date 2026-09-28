@@ -488,10 +488,13 @@ That commit starts no workflow (GitHub's rule for its own token), so it releases
 version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come next with
 `node scripts/version.mjs next`.
 
-Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`) and a **Windows x86-64** NSIS
-installer against the core pinned in `core.lock`, and publishes them with a `SHA256SUMS`. Linux
-`.deb` and `.AppImage` builds come back next (the arm64 AppImage fails in linuxdeploy). The
-workflow keeps its Linux steps, so bringing Linux back is a row in the build matrix. Releases run one at a time, never cancelled, so two quick merges are two releases.
+Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`), a **Windows x86-64** NSIS
+installer, and a **Linux** AppImage and `.deb` for both x86-64 and arm64, against the core pinned in
+`core.lock`, and publishes them with a `SHA256SUMS`. The AppImage is the Linux download that matters:
+it runs on every distribution, Arch-based ones included, which cannot install a `.deb`, and it is
+the one Linux package the updater replaces. Releases run one at a time, never cancelled, so two
+quick merges are two releases. A pull request that touches `release.yml`, the updater manifest or
+`tauri.conf.json` runs the builds without publishing, which is how a change to them is tried.
 A release whose build failed leaves its tag behind with no release; the next merge moves past it
 rather than reusing the number.
 

@@ -230,7 +230,11 @@ stable versions, from 1.0 on, are marked *Latest*.
 - **Windows** (x86-64, Windows 10 or later): run `Nunya_<version>_x64-setup.exe`. The beta isn't
   code-signed yet, so SmartScreen may stop it the first time: choose **More info**, then
   **Run anyway**.
-- **Linux**: next. It runs from source today, and release builds come after macOS and Windows.
+- **Linux** (x86-64 and arm64): the **AppImage** runs on any distribution, Arch, Manjaro and
+  Fedora included. Make it executable and run it:
+  `chmod +x Nunya_<version>_amd64.AppImage && ./Nunya_<version>_amd64.AppImage` (`aarch64` on ARM).
+  On Debian and Ubuntu the `.deb` works too: `sudo apt install ./Nunya_<version>_amd64.deb`. The
+  AppImage updates itself; a `.deb` is updated by installing the new one.
 
 This beta is built around **proxy mode**. VPN mode works on macOS after an administrator password
 prompt, and on Windows when Nunya is started with **Run as administrator**. On Linux it follows once

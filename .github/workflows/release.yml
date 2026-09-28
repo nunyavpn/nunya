@@ -18,15 +18,15 @@ name: release
 # core as root instead, after the administrator prompt (`core_proc::grant_root`).
 # scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
 #
-# Releases are macOS and Windows for now. Linux comes back next (the arm64 AppImage fails in
-# linuxdeploy). The Linux dependency step and bundle collection are kept, so a Linux row in the
-# matrix is all it takes to bring it back once its build passes.
+# Linux is an AppImage, for every distribution (Arch and its kin included, which cannot install
+# a .deb), and a .deb for Debian and Ubuntu, each for x86-64 and arm64. The AppImage is what
+# updates itself; a .deb belongs to the package manager.
 #
 # The Windows build is an NSIS installer, unsigned: SmartScreen warns before the first run. It puts
 # the core beside Nunya.exe, which is where the release core's parent check requires it.
 #
 # Every release is also an update. The packages the app installs (the macOS .app.tar.gz, the
-# Windows installer) are signed with the updater key in TAURI_SIGNING_PRIVATE_KEY, whose public
+# Windows installer, the AppImages) are signed with the updater key in TAURI_SIGNING_PRIVATE_KEY, whose public
 # half is compiled into the app, and `latest.json` names them with their signatures. The app
 # reads it from the newest release it may take (src-tauri/src/update.rs).
 # Without the key (the beta, for now) the release is published with no update packages.
@@ -35,12 +35,20 @@ on:
   push:
     branches: [main]
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  # A pull request that changes how releases are built gets the builds, never the release: the
+  # only other way to find out whether a bundle builds would be to merge and publish it.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/updater-manifest.mjs
+      - src-tauri/tauri.conf.json
 
 # One release at a time, and never cancelled: two merges close together are two releases, the
-# second computed from the first's tag, not one release that silently swallows the other.
+# second computed from the first's tag, not one release that silently swallows the other. A pull
+# request's trial builds queue apart from them, and a newer push to it replaces the older run.
 concurrency:
-  group: release
-  cancel-in-progress: false
+  group: release-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -96,6 +104,12 @@ jobs:
           - runner: windows-latest
             label: windows-x86_64
             bundles: nsis
+          - runner: ubuntu-22.04
+            label: linux-x86_64
+            bundles: deb,appimage
+          - runner: ubuntu-22.04-arm
+            label: linux-arm64
+            bundles: deb,appimage
     runs-on: ${{ matrix.runner }}
     # Git Bash on Windows, so the scripts run the same everywhere.
     defaults:
@@ -152,7 +166,8 @@ jobs:
           else
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: releasing without update packages"
           fi
-          npm run tauri build -- --bundles ${{ matrix.bundles }} "${updater[@]}"
+          npm run tauri build -- --bundles ${{ matrix.bundles }} "${updater[@]}" \
+            ${{ runner.os == 'Linux' && '--verbose' || '' }}
         env:
           # linuxdeploy is itself an AppImage, and the runners have no FUSE to mount it with.
           APPIMAGE_EXTRACT_AND_RUN: 1
@@ -181,6 +196,10 @@ jobs:
             fi
           else
             cp "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage out/
+            # The AppImage is the update package; its signature, when signed, is beside it.
+            if ls "$bundle"/appimage/*.AppImage.sig >/dev/null 2>&1; then
+              cp "$bundle"/appimage/*.AppImage.sig out/
+            fi
           fi
           ls -la out
 
@@ -192,6 +211,7 @@ jobs:
 
   publish:
     needs: [version, build]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -252,7 +272,11 @@ jobs:
           **Windows (x86-64)**: run \`Nunya_${VERSION}_x64-setup.exe\`. This build is not yet code-signed, so
           SmartScreen may warn before it runs: choose **More info → Run anyway**.
 
-          **Linux**: not in this build yet. It comes next.
+          **Linux**: download the AppImage for your machine (\`amd64\` for Intel and AMD, \`aarch64\` for ARM),
+          make it executable and run it: \`chmod +x Nunya_${VERSION}_amd64.AppImage && ./Nunya_${VERSION}_amd64.AppImage\`.
+          It runs on any distribution, Arch, Manjaro and Fedora included; on Debian and Ubuntu the \`.deb\` works too
+          (\`sudo apt install ./Nunya_${VERSION}_amd64.deb\`). Proxy mode works everywhere; VPN mode is not in the
+          Linux build yet.
 
           ${UPDATING}
           Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.

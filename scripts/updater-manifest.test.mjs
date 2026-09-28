@@ -9,6 +9,11 @@ const files = {
   "Nunya_0.2.0_aarch64.app.tar.gz.sig": "mac-signature\n",
   "Nunya_0.2.0_x64-setup.exe": "",
   "Nunya_0.2.0_x64-setup.exe.sig": "windows-signature\n",
+  "Nunya_0.2.0_amd64.deb": "",
+  "Nunya_0.2.0_amd64.AppImage": "",
+  "Nunya_0.2.0_amd64.AppImage.sig": "linux-signature\n",
+  "Nunya_0.2.0_aarch64.AppImage": "",
+  "Nunya_0.2.0_aarch64.AppImage.sig": "linux-arm-signature\n",
 };
 const read = (name) => files[name];
 const at = new Date("2026-09-27T12:00:00Z");
@@ -27,6 +32,14 @@ test("each platform gets its package and that package's signature", () => {
       "windows-x86_64": {
         signature: "windows-signature",
         url: "https://github.com/o/r/releases/download/v0.2.0/Nunya_0.2.0_x64-setup.exe",
+      },
+      "linux-x86_64": {
+        signature: "linux-signature",
+        url: "https://github.com/o/r/releases/download/v0.2.0/Nunya_0.2.0_amd64.AppImage",
+      },
+      "linux-aarch64": {
+        signature: "linux-arm-signature",
+        url: "https://github.com/o/r/releases/download/v0.2.0/Nunya_0.2.0_aarch64.AppImage",
       },
     },
   });
