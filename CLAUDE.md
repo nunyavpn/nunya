@@ -378,15 +378,31 @@ artwork changes; do not edit the path data by hand.
 
 **The first status creates the tray**, not `setup`, so the full-colour app icon never flashes in
 the bar before the tinted mark. Closing the window hides it only once the tray is up (`tray::is_up` in
-`hide_on_close`); until then — or with no tray library on Linux — closing quits as before, because
+`hide_on_close`); until then — or where no watcher answers on Linux — closing quits as before, because
 a hidden window with no icon leaves a tunnel nobody can reach. The Dock icon (`RunEvent::Reopen`)
 brings the window back on macOS. The style guide shows all four states in both appearances.
+
+**On Linux the item is ours, not tray-icon's** ([sni.rs](src-tauri/src/sni.rs)): a
+StatusNotifierItem and its DBusMenu spoken directly over `dbus`, which tao already links. Two of
+libayatana's choices could not be undone from above it. It always declares an `Activate` method,
+and tray-icon's GTK backend never handles one — so GNOME's appindicator extension, which reads
+`supportsActivation` off the item's introspection, had to wait a full double-click interval (400 ms)
+before opening the menu, and a second click meanwhile cancelled that and called the empty method.
+Omitting `Activate` is what makes the menu open on the first click; `ItemIsMenu` is true for the
+same reason. And libayatana takes the icon as a *file*, which tray-icon unlinks before announcing
+its replacement, so the shell's async load raced a deleted path — `Failed to recognize image
+format`, a blank icon, at nearly every launch. The pixels now travel as `IconPixmap`. Windows keeps
+tray-icon's menu, which has neither problem.
 
 ### The menu-bar popover (macOS)
 
 A click on the tray icon opens a panel under it, NordVPN's shape: the connection and a big
 switch, the server, Quick Connect, a search over the configs, Proxy / VPN, and the two blockers.
-Linux keeps the menu, since a StatusNotifierItem gets no clicks to anchor a panel to.
+Linux keeps the menu, since a StatusNotifierItem gets no clicks to anchor a panel to. That is the
+shell's rule, not tray-icon's, and writing our own item (`sni.rs`) did not change it: GNOME's
+appindicator extension forwards `Activate` only on a *double* click, and only to an item that
+exports no menu — where a single click then matches nothing at all. So a popover on Linux would
+cost the menu and answer to a gesture nobody would find.
 
 **On macOS the status item carries no menu at all.** On macOS 27 a menu attached to it takes every
 click, the left one included, before tray-icon sees it: the popover never opened and the menu did,

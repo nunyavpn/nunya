@@ -19,6 +19,14 @@ prost-build = "0.13"
 [target.'cfg(target_os = "macos")'.build-dependencies]
 cc = "1"
 
+# The tray on Linux is our own StatusNotifierItem rather than tray-icon's libayatana one; `sni.rs`
+# says why. `dbus` is already linked into the binary by tao, so this adds a method-dispatch layer
+# over a library the build was paying for anyway rather than a second D-Bus stack (zbus would be
+# that, and pure-Rust async buys nothing here: the item lives on one thread of its own).
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+dbus-crossroads = "0.5"
+
 [dependencies]
 # `macos-private-api`: the menu-bar popover is a transparent window, which on macOS Tauri can
 # only make through a private AppKit call (see `popover.rs`). This app is not sold through the
