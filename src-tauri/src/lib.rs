@@ -377,15 +377,19 @@ async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
     if let Some(core) = slot.take() {
         core.stop().await;
     }
-    match staged.update.install(staged.bytes.as_deref().unwrap_or_default()) {
-        // On Windows `install` has already ended the process; the installer starts the new copy.
-        Ok(()) => app.restart(),
-        Err(e) => {
-            // Still the old copy: give it its core back so it keeps working.
-            respawn_core(&app, &state, &mut slot)?;
-            Err(format!("could not install the update: {e}"))
-        }
+    // On Windows a successful `install` has already ended the process; the installer starts the
+    // new copy.
+    if let Err(e) = staged.update.install(staged.bytes.as_deref().unwrap_or_default()) {
+        // Still the old copy: give it its core back so it keeps working.
+        respawn_core(&app, &state, &mut slot)?;
+        return Err(format!("could not install the update: {e}"));
     }
+    // Before restarting, never across it. From a command, `restart` asks the event loop to exit
+    // and then sleeps on this thread for good, while the exit (`RunEvent::ExitRequested` in `run`)
+    // takes this same lock on the main thread to stop the core. Held here, that was a deadlock: the
+    // new copy already in place and the old one frozen until force-quit (macOS).
+    drop(slot);
+    app.restart()
 }
 
 #[tauri::command]
