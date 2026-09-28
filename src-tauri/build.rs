@@ -14,7 +14,7 @@ fn main() {
         proto.display()
     );
 
-    // A release bundle is what `grant_root` makes setuid root, and a core built from source has its
+    // A release bundle is what `platform::grant` on macOS makes setuid root, and a core built from source has its
     // parent check compiled out — the only thing that keeps other programs from driving it. So a
     // release build refuses one here, for every path to a bundle, not just `build-app.sh`.
     let origin = Path::new("../vendor/core/.origin");

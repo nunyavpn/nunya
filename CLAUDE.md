@@ -155,7 +155,7 @@ nothing runs as root, nothing is setuid. The app side is only the control plane 
 it is pressed, opens the *Allow VPN mode* sheet (`askGrant` → [views/grant-access.ts](src/views/grant-access.ts))
 while readiness says `canGrant`; a password prompt that appears unexplained reads as an attack, so
 the sheet says why before macOS asks. Continue calls `request_permission`, which runs
-`core_proc::grant_root` (the administrator password through `osascript`, then `chown root:wheel` and
+`platform::grant` in `platform/macos.rs` (the administrator password through `osascript`, then `chown root:wheel` and
 `chmod 4755` on the bundled core) and restarts the core; the app then connects by itself. Setuid rather than `sudo`, because anything wrapping the core becomes its parent
 and fails both the core's parent check and `rpc/peer.rs`. Only a core beside `Nunya` is granted,
 since the release core's parent check is the only thing keeping other programs from driving it,
@@ -166,6 +166,15 @@ and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle
 `main.rs` is a five-line shim. **All Tauri commands and the startup sequence are in
 [lib.rs](src-tauri/src/lib.rs)**, as a library so integration tests use the same modules the binary
 does.
+
+- [platform/](src-tauri/src/platform/mod.rs) — what differs between macOS, Linux and Windows, one
+  file per OS behind one interface, only the target's compiled. **New platform-specific code goes
+  here, not in `#[cfg]` branches inside shared code**; the rest of the tree moves in over time
+  (issue #100). Today it holds VPN-mode privilege: `GRANT` (the grant sheet's words, `None` where
+  there is no grant) and `grant` — setuid core on macOS, a UAC relaunch of the app on Windows.
+- [applog.rs](src-tauri/src/applog.rs) — the app's own log goes to Diagnostics as well as stderr,
+  with a backlog for what was logged before the window listened. A Windows release build has no
+  console, so without it a core that failed to start left no trace.
 
 - [config.rs](src-tauri/src/config.rs) — the only file that assumes *which* core is running. It
   emits sing-box JSON, always validated by the core's `CheckConfig` before anything starts. The

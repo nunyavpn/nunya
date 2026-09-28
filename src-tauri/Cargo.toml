@@ -66,7 +66,7 @@ tauri-plugin-updater = "=2.12.0"
 # The core link on Windows is a named pipe, and our half of the peer check asks the pipe for its
 # client's pid. 0.61 is the version tokio already brings, so this adds nothing to the build.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 # A VPN client is a trust artifact: smaller and stripped means less to audit and a smaller

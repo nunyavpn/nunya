@@ -1,6 +1,7 @@
 /**
- * The sheet between Connect and macOS's password prompt, in VPN mode without the packet tunnel
- * extension (`core_proc::grant_root`).
+ * The sheet between Connect and the system's own prompt (macOS's password, Windows' UAC), in VPN
+ * mode without the packet tunnel
+ * extension (`platform::grant` in `platform/macos.rs`).
  *
  * A password dialog that appears unannounced after a click on Connect looks like something trying
  * to take over the machine, and a user who has learnt to cancel those is right to. So the app says
@@ -8,20 +9,23 @@
  * macOS asks only once the user has said yes. The shape before this — a Connect that did nothing,
  * and a small "Allow…" beside an amber tag — left most people stuck at the first half.
  *
- * The sheet owns no logic: allowing and switching to proxy mode are `main.ts`'s, passed in.
+ * The sheet owns no logic: allowing and switching to proxy mode are `main.ts`'s, passed in. Nor
+ * does it know the platform: its words come from the backend's platform layer (`platform::GRANT`),
+ * beside the code that makes them true.
  */
 import { h } from "../dom";
+import type { GrantCopy } from "../features/tunnel";
 import { icon } from "./icons";
 import { openSheet, sheetHead } from "./sheets";
 
 export interface GrantAccessActions {
-  /** Asks macOS, then connects. Resolves with why it did not work, or null once it has. */
+  /** Asks the system, then connects. Resolves with why it did not work, or null once it has. */
   allow(): Promise<string | null>;
-  /** Connects in proxy mode instead, which needs no password. */
+  /** Connects in proxy mode instead, which needs no privilege. */
   useProxy(): void;
 }
 
-export function openGrantAccess(actions: GrantAccessActions) {
+export function openGrantAccess(copy: GrantCopy, actions: GrantAccessActions) {
   openSheet((close) => {
     const error = h("p", { class: "grant-error", role: "alert", hidden: true });
     const label = h("span", {}, "Continue");
@@ -33,7 +37,7 @@ export function openGrantAccess(actions: GrantAccessActions) {
           allow.disabled = true;
           allow.classList.add("busy");
           allow.prepend(h("span", { class: "btn-spin", "aria-hidden": "true" }));
-          label.textContent = "Waiting for macOS…";
+          label.textContent = copy.waiting;
           error.hidden = true;
           const why = await actions.allow();
           if (!why) return close();
@@ -56,24 +60,12 @@ export function openGrantAccess(actions: GrantAccessActions) {
         "div",
         { class: "grant-body" },
         h("span", { class: "grant-badge" }, icon("lock", 22)),
-        h("p", { class: "grant-lede" }, "VPN mode needs your administrator password"),
-        h(
-          "p",
-          {},
-          "To send all of this Mac's traffic through the tunnel, Nunya creates a network " +
-            "interface, and macOS allows that only with an administrator's approval.",
-        ),
+        h("p", { class: "grant-lede" }, copy.lede),
+        h("p", {}, copy.why),
         h(
           "ul",
           { class: "grant-facts" },
-          h("li", {}, h("b", {}, "macOS asks, not Nunya."), " The password goes to macOS; Nunya never sees it."),
-          h("li", {}, h("b", {}, "Once."), " You're asked again only after Nunya updates."),
-          h(
-            "li",
-            {},
-            h("b", {}, "What changes."),
-            " Nunya's tunnel engine keeps administrator rights, and runs only when Nunya starts it.",
-          ),
+          ...copy.facts.map((f) => h("li", {}, h("b", {}, f.title), ` ${f.text}`)),
         ),
         error,
         h(
@@ -91,7 +83,7 @@ export function openGrantAccess(actions: GrantAccessActions) {
             },
             "Use proxy mode",
           ),
-          " — no password, but it covers only apps set to use it.",
+          ` — ${copy.alt}`,
         ),
       ),
       h(
