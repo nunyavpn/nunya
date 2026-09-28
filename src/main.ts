@@ -822,7 +822,7 @@ async function observeEdge(server: Server | undefined) {
 
 /**
  * VPN mode without the packet tunnel extension: the core needs root to create a utun, and the
- * app can ask for it (`core_proc::grant_root`). Not a reason Connect is blocked — Connect is
+ * app can ask for it (`platform::grant` in `platform/macos.rs`). Not a reason Connect is blocked — Connect is
  * what explains and asks (`askGrant`).
  */
 function needsGrant(): boolean {
@@ -832,12 +832,14 @@ function needsGrant(): boolean {
 /** From Connect wherever it was pressed; the popover and the tray have no room for the sheet. */
 function askGrant() {
   if (inTauri) void invoke("show_main_window").catch(() => {});
-  openGrantAccess({ allow: allowVpn, useProxy: () => void connectInProxyMode() });
+  if (!readiness?.grant) return;
+  openGrantAccess(readiness.grant, { allow: allowVpn, useProxy: () => void connectInProxyMode() });
 }
 
 /**
- * Asks macOS, waits for the core to come back with the access, then connects — the user pressed
- * Connect, and a second press after the password would be a step for nothing.
+ * Asks the system, waits for the core to come back with the access, then connects — the user
+ * pressed Connect, and a second press after the password would be a step for nothing. On Windows
+ * the grant is an elevated copy of the app, and this one quits before the loop below matters.
  */
 async function allowVpn(): Promise<string | null> {
   try {
@@ -1530,6 +1532,15 @@ const dataLoaded = (async () => {
 // After the data file, so the beta switch it reads is the saved one. Nothing to check without a
 // backend; under VITE_MOCK=1 mockcore.ts offers a pretend release.
 if (hasBackend) void dataLoaded.then(() => initUpdates({ log, refresh: paintUpdates }));
+
+// The Rust side's own log (`applog.rs`): the backlog from before this page was listening, then
+// each line as it comes. A release build on Windows has no console, so this is the only place
+// a core that would not start leaves its reason.
+void listen<string>("app-log", (line) => log(`[app] ${line}`)).then(() =>
+  invoke<string[]>("app_log_backlog")
+    .then((lines) => lines.forEach((line) => log(`[app] ${line}`)))
+    .catch(() => {}),
+);
 
 void listen<string>("core-log", (line) => {
   log(`[core] ${line}`);

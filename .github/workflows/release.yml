@@ -261,7 +261,7 @@ jobs:
 
           **Proxy mode**: a local SOCKS/HTTP listener, which can also be set as the system proxy while connected.
           **VPN mode** on macOS asks for your administrator password the first time you connect in it (and again
-          after an update). On Windows it needs Nunya started with **Run as administrator**.
+          after an update). On Windows it restarts Nunya as administrator, through Windows' own prompt.
           NOTES
           flags=(--title "Nunya $VERSION" --notes-file notes.md --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then

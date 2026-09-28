@@ -1,6 +1,7 @@
 //! Application library. `main.rs` is a shim over `run()` so that integration tests can use
 //! the same modules the binary does.
 
+mod applog;
 pub mod blocklists;
 pub mod cloudflare;
 pub mod config;
@@ -8,6 +9,7 @@ pub mod core_proc;
 pub mod external;
 pub mod geo;
 mod netwatch;
+mod platform;
 pub mod rpc;
 pub mod storage;
 pub mod subscription;
@@ -105,10 +107,18 @@ struct Readiness {
     state: TunnelState,
     /// Present when the transport cannot run: an unprivileged core, or an unapproved VPN profile.
     detail: Option<String>,
-    /// `needsPermission` is one the app can clear itself, with the administrator password
-    /// (`request_permission`). Only on macOS: Linux has no such prompt yet, and offering one there
-    /// would be a button that always fails.
+    /// `needsPermission` is one the app can clear itself (`request_permission`), where the
+    /// platform has a way to (`platform::GRANT`); offering one elsewhere would be a button that
+    /// always fails.
     can_grant: bool,
+    /// What the sheet that asks for it says, in this platform's terms.
+    grant: Option<&'static platform::GrantCopy>,
+}
+
+/// The app's log lines from before the window was listening; see `applog`.
+#[tauri::command]
+fn app_log_backlog() -> Vec<String> {
+    applog::backlog()
 }
 
 #[tauri::command]
@@ -134,24 +144,15 @@ async fn tunnel_readiness(
         Err(e) => (None, Some(e.to_string())),
     };
 
-    let can_grant = cfg!(target_os = "macos")
+    let can_grant = platform::GRANT.is_some()
         && state.tunnel_kind == transport::select::Kind::Subprocess
         && matches!(state_or_err, Some(TunnelState::NeedsPermission));
 
-    // On Windows the core has administrator rights exactly when Nunya does, so there is no prompt
-    // to offer: the way in is starting Nunya with them, and the status card has to say so.
-    #[cfg(windows)]
-    let detail = detail.or_else(|| {
-        matches!(state_or_err, Some(TunnelState::NeedsPermission)).then(|| {
-            "VPN mode needs administrator rights on Windows. Quit Nunya, then right-click it and \
-             choose Run as administrator. Proxy mode needs none."
-                .to_string()
-        })
-    });
     Ok(Readiness {
         mode: mode.as_str(),
         transport: state.tunnel_kind.as_str(),
         can_grant,
+        grant: platform::GRANT.as_ref(),
         ready: matches!(state_or_err, Some(TunnelState::Disconnected)),
         state: state_or_err.unwrap_or(TunnelState::NeedsPermission),
         detail,
@@ -188,34 +189,43 @@ async fn check_config(
     Ok(pretty)
 }
 
-/// Asks for whatever consent the platform requires, once.
+/// Asks for whatever consent the platform requires (`platform::grant`), once.
 ///
-/// On macOS without the extension, that is the administrator password: the core is made setuid
-/// root (`core_proc::grant_root`) and restarted, because the running one was started without it.
-/// The restart looks to the frontend like the core going away and coming back, which re-asks
-/// readiness on its own.
+/// What follows depends on how the platform grants it. Where the core binary itself is given the
+/// privilege (macOS), the running core, started without it, is restarted; that looks to the
+/// frontend like the core going away and coming back, which re-asks readiness on its own. Where
+/// an elevated copy of the app was started instead (Windows), this one quits.
 #[tauri::command]
 async fn request_permission(
-    #[allow(unused_variables)] app: tauri::AppHandle,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    if state.tunnel_kind == transport::select::Kind::Subprocess {
-        // A restart would drop a running tunnel (a proxy-mode one, since VPN mode is what needs this).
+    if platform::GRANT.is_some() && state.tunnel_kind == transport::select::Kind::Subprocess {
+        // Either way the core goes away, and a running tunnel (a proxy-mode one, since VPN mode is
+        // what needs this) with it.
         if matches!(state.tunnel.state().await, Ok(TunnelState::Connected)) {
-            return Err("disconnect first: the core restarts to take administrator access".into());
+            return Err("disconnect first: Nunya restarts its engine to take administrator access".into());
         }
         let core_path = state.core_path.clone();
-        tokio::task::spawn_blocking(move || core_proc::grant_root(&core_path))
+        let granted = tokio::task::spawn_blocking(move || platform::grant(&core_path))
             .await
             .map_err(|e| e.to_string())??;
 
-        let mut slot = state.core.lock().await;
-        if let Some(old) = slot.take() {
-            old.stop().await;
+        match granted {
+            platform::Granted::RestartCore => {
+                let mut slot = state.core.lock().await;
+                if let Some(old) = slot.take() {
+                    old.stop().await;
+                }
+                let pid = respawn_core(&app, &state, &mut slot)?;
+                log::info!("core restarted with administrator access (pid {pid})");
+            }
+            // Through the usual exit, so the system proxy is put back and the core stopped.
+            platform::Granted::Relaunched => {
+                log::info!("an elevated copy of Nunya is starting; quitting this one");
+                app.exit(0);
+            }
         }
-        let pid = respawn_core(&app, &state, &mut slot)?;
-        log::info!("core restarted with administrator access (pid {pid})");
         return Ok(());
     }
     state
@@ -346,7 +356,7 @@ async fn download_update(app: tauri::AppHandle, state: State<'_, AppState>) -> R
 /// The frontend disconnects first, through its own queue, so the system proxy is put back the
 /// usual way. The core is stopped here: on Windows the installer cannot replace a running
 /// `nunya-core.exe`, and it ends this process without the cleanup a quit runs. On macOS the new
-/// core loses the setuid bit, so VPN mode asks for the password once more (`core_proc::grant_root`).
+/// core loses the setuid bit, so VPN mode asks for the password once more (`platform::grant` in `platform/macos.rs`).
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     if matches!(state.tunnel.state().await, Ok(TunnelState::Connected)) {
@@ -963,12 +973,13 @@ fn spawn_core(
 }
 
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    applog::init();
 
     tauri::Builder::default()
         // Verifies and installs updates; which release to take is `update.rs`'s decision.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            applog::attach(app.handle().clone());
             // Per-user private directory. On macOS `temp_dir` is already inside the user's
             // sandboxed `/var/folders/...` tree, which keeps the socket path well under the
             // 104-byte `sun_path` limit.
@@ -1045,6 +1056,7 @@ pub fn run() {
             core_connected,
             tunnel_readiness,
             request_permission,
+            app_log_backlog,
             check_config,
             start_tunnel,
             stop_tunnel,

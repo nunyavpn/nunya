@@ -233,7 +233,8 @@ stable versions, from 1.0 on, are marked *Latest*.
 - **Linux**: next. It runs from source today, and release builds come after macOS and Windows.
 
 This beta is built around **proxy mode**. VPN mode works on macOS after an administrator password
-prompt, and on Windows when Nunya is started with **Run as administrator**. On Linux it follows once
+prompt, and on Windows after Windows' own prompt, which restarts Nunya as administrator (or start
+it with **Run as administrator** to skip that). On Linux it follows once
 the app can set up network-admin rights.
 
 ### Updating

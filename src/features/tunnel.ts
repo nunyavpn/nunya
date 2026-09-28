@@ -26,8 +26,20 @@ export interface Readiness {
   ready: boolean;
   state: "disconnected" | "connecting" | "connected" | "needsPermission";
   detail: string | null;
-  /** The app can clear `needsPermission` itself, with the administrator password (macOS). */
+  /** The app can clear `needsPermission` itself (macOS: the password; Windows: a UAC restart). */
   canGrant: boolean;
+  /** What the sheet asking for it says on this platform; mirrors `platform::GrantCopy`. */
+  grant: GrantCopy | null;
+}
+
+export interface GrantCopy {
+  lede: string;
+  why: string;
+  facts: { title: string; text: string }[];
+  /** The button's label while the system's prompt is up. */
+  waiting: string;
+  /** Why proxy mode is the lighter choice here. */
+  alt: string;
 }
 
 /** Mirrors `geo::Exit` without its place: what the status card shows. */

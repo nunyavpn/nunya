@@ -71,6 +71,25 @@ export async function mockInvoke<T>(command: string, args: Record<string, unknow
         state: needs ? "needsPermission" : "disconnected",
         detail: null,
         canGrant: needs,
+        // macOS's words, from `platform/macos.rs`; the preview is of a Mac.
+        grant: needs
+          ? {
+              lede: "VPN mode needs your administrator password",
+              why:
+                "To send all of this Mac's traffic through the tunnel, Nunya creates a network " +
+                "interface, and macOS allows that only with an administrator's approval.",
+              facts: [
+                { title: "macOS asks, not Nunya.", text: "The password goes to macOS; Nunya never sees it." },
+                { title: "Once.", text: "You're asked again only after Nunya updates." },
+                {
+                  title: "What changes.",
+                  text: "Nunya's tunnel engine keeps administrator rights, and runs only when Nunya starts it.",
+                },
+              ],
+              waiting: "Waiting for macOS…",
+              alt: "no password, but it covers only apps set to use it.",
+            }
+          : null,
       });
     }
 

@@ -251,8 +251,9 @@ it. Everything above it (config generation, share-link parsing, the UI) is share
 | Linux | systemd unit or `CAP_NET_ADMIN` | a subprocess | capability on the core |
 
 The subprocess transport is implemented and tested; the NetworkExtension one is a skeleton. On
-Windows the core has administrator rights exactly when Nunya does, so VPN mode there needs Nunya
-started with *Run as administrator*; a service would remove that step.
+Windows the core has administrator rights exactly when Nunya does, so the first Connect in VPN mode
+offers to restart Nunya elevated through UAC (`platform/windows.rs`); starting it with *Run as
+administrator* skips that, and a service would remove the step altogether.
 
 ### Replacing the core
 
@@ -305,7 +306,7 @@ on macOS runs the core as root. Readiness reports `canGrant`, the status card no
 will ask for the password, and Connect — from the card, the popover or the tray — opens the
 *Allow VPN mode* sheet ([views/grant-access.ts](../src/views/grant-access.ts)) instead of doing nothing.
 The sheet says why, that the password goes to macOS, and that proxy mode needs none; only on
-Continue does `request_permission` run `core_proc::grant_root`, which asks for the password through
+Continue does `request_permission` run `platform::grant` in `platform/macos.rs`, which asks for the password through
 `osascript … with administrator privileges`, makes the bundled core `root:wheel 4755`, and restarts
 it. The app waits for the new core to report itself privileged, then connects. Preview the sheet
 with `VITE_MOCK=1 npm run dev` and `/?needsAdmin` (add `&refuseAdmin` for a cancelled prompt).
