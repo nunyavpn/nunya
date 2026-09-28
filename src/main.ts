@@ -1552,12 +1552,19 @@ void listen<string>("core-log", (line) => {
   }
 });
 
-// A new network is a new place to draw routes from. With the tunnel up the lookup would go
-// through it, and a disconnect looks again anyway.
+// A new network is a new place to draw routes from.
+//
+// Not while a VPN-mode tunnel is up, coming up or going down: then the "change" is the route
+// moving into the TUN or out of it, not this machine moving. Forgetting the edges then is what
+// made a Cloudflare-fronted config's entry hop vanish a few seconds after connecting — the
+// observation from the physical network was dropped, and none can be made again through the
+// tunnel (`observeEdge`), so the route fell back to you → exit, as if the config were direct. A
+// real move made meanwhile is not lost: leaving the TUN is always one more change, and it comes
+// once the tunnel is down.
 void listen<null>("network-changed", () => {
+  if (!canLocateHome()) return;
   // Made from the old network; the same address can answer from another data center here.
   edges.clear();
-  if (!canLocateHome()) return;
   log("[ui] the network changed; finding where this machine is now");
   locateHomeNow();
 });

@@ -12,8 +12,10 @@
 //! case.
 //!
 //! In VPN mode the route leads into the TUN, so connecting and disconnecting change the answer as
-//! well. That costs nothing: the frontend looks the location up only with the tunnel down, and
-//! after every disconnect anyway.
+//! well. The frontend ignores a change while a tunnel is up or changing state (the `network-changed`
+//! listener in `main.ts`): what it would forget there — the Cloudflare edges observed from the
+//! physical network — cannot be observed again through the tunnel. Leaving the TUN is itself a
+//! change, so a real move made while connected is still seen, once the tunnel is down.
 
 use std::net::{IpAddr, UdpSocket};
 use std::time::Duration;
