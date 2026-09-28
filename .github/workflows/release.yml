@@ -197,10 +197,14 @@ jobs:
               cp "$bundle"/nsis/*-setup.exe.sig out/
             fi
           else
-            cp "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage out/
-            # The AppImage is the update package; its signature, when signed, is beside it.
-            if ls "$bundle"/appimage/*.AppImage.sig >/dev/null 2>&1; then
-              cp "$bundle"/appimage/*.AppImage.sig out/
+            cp "$bundle"/deb/*.deb out/
+            # Only where the matrix asks for one (not arm64). It is the update package, and its
+            # signature, when signed, is beside it.
+            if [[ "${{ matrix.bundles }}" == *appimage* ]]; then
+              cp "$bundle"/appimage/*.AppImage out/
+              if ls "$bundle"/appimage/*.AppImage.sig >/dev/null 2>&1; then
+                cp "$bundle"/appimage/*.AppImage.sig out/
+              fi
             fi
           fi
           ls -la out
