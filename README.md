@@ -14,6 +14,7 @@
   <img alt="macOS, Windows and Linux" src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-4c6ef5">
   <img alt="Beta" src="https://img.shields.io/badge/status-beta-f59f00">
   <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-2f9e44"></a>
+  <a href="https://github.com/nunyavpn/nunya/releases"><img src="https://img.shields.io/github/downloads/nunyavpn/nunya/total" alt="Downloads"></a>
 </p>
 
 <p align="center">
