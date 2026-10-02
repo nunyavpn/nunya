@@ -176,8 +176,9 @@ does.
   with a backlog for what was logged before the window listened. A Windows release build has no
   console, so without it a core that failed to start left no trace.
 
-- [config.rs](src-tauri/src/config.rs) — the only file that assumes *which* core is running. It
-  emits sing-box JSON, always validated by the core's `CheckConfig` before anything starts. The
+- [config.rs](src-tauri/src/config.rs) builds sing-box routing; [config/runtime.rs](src-tauri/src/config/runtime.rs)
+  prepares XHTTP through the bundled Xray engine and its authenticated loopback SOCKS bridges.
+  Production checks, starts and probes use `config::runtime`; both engines are validated before connect. The
   long-term plan is to move generation into the core behind a `GenerateConfig` RPC.
 - [storage.rs](src-tauri/src/storage.rs) — the data file holds every server credential, so it is
   written like a key file: owner-only dir and file, replaced atomically. Payload is opaque JSON; the
@@ -867,7 +868,7 @@ hit-tests before it moves, which is every automation tool.
   decision and the alternative rejected. Match this — it is the codebase's defining characteristic,
   and a change that arrives without it will read as foreign.
 - **Reject by name; never silently downgrade.** A share link with an unrunnable transport
-  (mKCP, XHTTP, SplitHTTP, meek) is refused with a reason. Quietly treating it as TCP produces a
+  (mKCP, meek) is refused with a reason. Quietly treating it as TCP produces a
   config the core accepts and a tunnel that never passes traffic.
 - **Test names are sentences** — `the_tunnel_takes_the_default_route_and_gives_it_back`.
 - **Tests live apart from the code.** A Rust module's unit tests go in a sibling `tests.rs`

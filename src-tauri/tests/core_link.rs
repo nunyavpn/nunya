@@ -677,3 +677,109 @@ mod tempdir {
         }
     }
 }
+
+/// A real local XHTTP server, not a mock of the config schema. The Test RPC, probe sessions and
+/// the normal subprocess transport must all deliver HTTP through it, with no external service.
+#[tokio::test]
+#[ignore = "needs a development core; set NUNYA_CORE_PATH"]
+async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
+    use nunya_lib::transport::{subprocess::SubprocessTransport, TunnelTransport};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use serde_json::json;
+
+    let (server_link, server_proc, _server_dir) = connect_core().await;
+    let (client_link, client_proc, _client_dir) = connect_core().await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let server_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let uuid = "8f3c9d2e-4a17-4b8e-9c21-7de5f0a63b14";
+    let server_xray = json!({
+        "log": { "loglevel": "warning" },
+        "inbounds": [{ "listen": "127.0.0.1", "port": server_port, "protocol": "vless",
+            "settings": { "clients": [{ "id": uuid }], "decryption": "none" },
+            "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/nunya-test" } } }],
+        "outbounds": [{ "protocol": "freedom", "settings": { "finalRules": [{ "ip": ["127.0.0.1/32"], "action": "allow" }] } }]
+    });
+    let resp: gen::ErrorResp = server_link.call(method::START, &gen::LoadConfigReq {
+        core_config: Some(json!({"outbounds": [{"type":"direct"}]}).to_string()),
+        need_extra_process: Some(false), need_xray: Some(true), xray_config: Some(server_xray.to_string()),
+        ..Default::default()
+    }).await.unwrap();
+    assert_eq!(resp.error.unwrap_or_default(), "");
+
+    let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/xhttp", http.local_addr().unwrap());
+    let http_task = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http.accept().await {
+            tokio::spawn(async move {
+                let mut buffer = [0u8; 4096];
+                let _ = stream.read(&mut buffer).await;
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nxhttp-ok").await;
+            });
+        }
+    });
+    // The supplied provider format, using documentation addresses and fixture credentials.
+    let sample = Profile {
+        server: "192.0.2.10".into(), port: 443, uuid: uuid.into(),
+        tls: TlsOptions { enabled: true, sni: "cdn.example.net".into(),
+            fingerprint: "firefox".into(), alpn: vec!["h2".into(), "h3".into()], ..Default::default() },
+        transport: Transport { kind: TransportKind::Xhttp, path: "/".into(), host: "cdn.example.net".into(),
+            mode: "auto".into(), extra: serde_json::from_value(json!({"mode":"auto", "xPaddingBytes":"100-1000"})).unwrap(),
+            ..Default::default() }, ..Default::default()
+    };
+    config::runtime::build_test(&[sample]).unwrap().0.check(&client_link).await.unwrap();
+    let mut p = Profile { server: "127.0.0.1".into(), port: server_port, uuid: uuid.into(),
+        transport: Transport { kind: TransportKind::Xhttp, path: "/nunya-test".into(), ..Default::default() },
+        ..Default::default() };
+    for mode in ["auto", "packet-up", "stream-up", "stream-one"] {
+        p.transport.mode = mode.into();
+        let (cfg, tags) = config::runtime::build_test(&[p.clone()]).unwrap();
+        cfg.check(&client_link).await.expect("both configs validate");
+        let result: gen::TestResp = client_link.call(method::TEST, &gen::TestReq {
+            outbound_tags: tags, url: Some(url.clone()), test_timeout_ms: Some(5000),
+            max_concurrency: Some(1), ..cfg.test_request()
+        }).await.unwrap();
+        assert_eq!(result.results.len(), 1, "{mode}");
+        assert_eq!(result.results[0].error.as_deref().unwrap_or_default(), "", "{mode}");
+    }
+    p.transport.mode = "packet-up".into();
+    let probe = nunya_lib::geo::ProbeSession::start(&core_path().unwrap(), &[p.clone()]).await.unwrap();
+    async fn fetch(port: u16, url: String) {
+        let body = tokio::task::spawn_blocking(move || {
+            let proxy = ureq::Proxy::new(&format!("http://127.0.0.1:{port}")).unwrap();
+            let agent: ureq::Agent = ureq::Agent::config_builder().proxy(Some(proxy))
+                .timeout_global(Some(Duration::from_secs(5))).build().into();
+            agent.get(&url).call().unwrap().body_mut().read_to_string().unwrap()
+        }).await.unwrap();
+        assert_eq!(body, "xhttp-ok");
+    }
+    fetch(probe.ports[0], url.clone()).await;
+    probe.shut_down().await;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut req = sample_request();
+    req.profile = p;
+    req.mode = Mode::Proxy;
+    req.proxy.port = proxy_port;
+    let transport = SubprocessTransport::new(client_link.clone());
+    transport.start(&req).await.unwrap();
+    fetch(proxy_port, url.clone()).await;
+    assert!(matches!(transport.state().await.unwrap(), nunya_lib::transport::TunnelState::Connected));
+    transport.stop().await.unwrap();
+    // The production LAN bypass correctly sends the loopback HTTP target direct. Remove only
+    // that rule for this fixture so the normal runtime's counters also see actual XHTTP traffic.
+    let mut cfg = config::runtime::build(&req).unwrap();
+    cfg.core["route"]["rules"] = json!([]);
+    let resp: gen::ErrorResp = client_link.call(method::START, &gen::LoadConfigReq {
+        disable_stats: Some(false), ..cfg.load_request()
+    }).await.unwrap();
+    assert_eq!(resp.error.unwrap_or_default(), "");
+    fetch(proxy_port, url.clone()).await;
+    assert!(transport.throughput().await.unwrap().downlink > 0);
+    transport.stop().await.unwrap();
+    server_proc.stop().await;
+    client_proc.stop().await;
+    http_task.abort();
+}

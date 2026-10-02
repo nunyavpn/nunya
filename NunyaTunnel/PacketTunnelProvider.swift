@@ -18,7 +18,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var platform: PlatformBridge?
 
     override func startTunnel(options _: [String: NSObject]?) async throws {
-        // The app puts the generated sing-box config into providerConfiguration when it saves the
+        // The app puts the generated engine configurations into providerConfiguration when it saves the
         // VPN profile, so the extension never has to generate one itself.
         guard
             let proto = protocolConfiguration as? NETunnelProviderProtocol,
@@ -34,7 +34,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let bridge = PlatformBridge(log: log)
         let options = MobileStartOptions()
-        options.coreConfig = config
+        // New profiles carry both engines. Accept older sing-box-only saved VPN profiles too.
+        let payload = try JSONSerialization.jsonObject(with: Data(config.utf8)) as? [String: Any]
+        if let core = payload?["core"] {
+            options.coreConfig = String(decoding: try JSONSerialization.data(withJSONObject: core), as: UTF8.self)
+            if let xray = payload?["xray"] as? [String: Any] {
+                options.needXray = true
+                options.xrayConfig = String(decoding: try JSONSerialization.data(withJSONObject: xray), as: UTF8.self)
+                options.xrayOutboundDNSStrategy = "UseIP"
+            }
+        } else {
+            options.coreConfig = config
+        }
 
         guard let instance = MobileInstance(bridge, options: options) else {
             throw TunnelError.coreStartFailed("could not create the core instance")

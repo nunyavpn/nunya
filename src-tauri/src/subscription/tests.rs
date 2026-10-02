@@ -743,3 +743,25 @@ fn a_clash_yaml_configuration_is_refused_by_name_rather_than_scanned() {
     assert!(matches!(err, SubscriptionError::Rejected(_)), "{err}");
     assert!(err.to_string().contains("Clash"), "{err}");
 }
+
+#[test]
+fn xhttp_subscription_settings_survive_the_share_link_conversion() {
+    for network in ["xhttp", "splithttp"] {
+        let mut outbound = serde_json::json!({
+            "protocol": "vless", "tag": "proxy",
+            "settings": { "vnext": [{ "address": "example.net", "port": 443,
+                "users": [{ "id": "8f3c9d2e-4a17-4b8e-9c21-7de5f0a63b14" }] }] },
+            "streamSettings": { "network": network, "security": "tls" }
+        });
+        let settings = serde_json::json!({ "host": "cdn.example.net", "path": "/a?x=1&y=2",
+            "mode": "packet-up", "extra": { "headers": { "X-Test": "a&b" }, "noSSEHeader": true } });
+        outbound["streamSettings"][format!("{network}Settings")] = settings.clone();
+        let link = xray_link(&outbound, "XHTTP").unwrap();
+        let url = tauri::Url::parse(&link).unwrap();
+        let query = url.query_pairs().collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(query["path"], "/a?x=1&y=2");
+        assert_eq!(query["host"], "cdn.example.net");
+        assert_eq!(query["mode"], "packet-up");
+        assert_eq!(serde_json::from_str::<Value>(&query["extra"]).unwrap(), settings["extra"]);
+    }
+}

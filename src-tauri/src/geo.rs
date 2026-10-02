@@ -572,7 +572,7 @@ impl ProbeSession {
             ));
         }
         let ports = free_ports(profiles.len()).map_err(|e| format!("no free local ports: {e}"))?;
-        let cfg = config::build_probe(profiles, &ports);
+        let cfg = config::runtime::build_probe(profiles, &ports)?;
 
         // A directory of its own, so this cannot collide with the running core's socket.
         let dir = std::env::temp_dir().join(format!(
@@ -619,15 +619,9 @@ impl ProbeSession {
             .call(
                 method::START,
                 &gen::LoadConfigReq {
-                    core_config: Some(cfg.to_string()),
                     disable_stats: Some(true),
                     tun_ipv4_cidr: Some(String::new()),
-                    // Unset optionals are dereferenced by the core's Start without a nil check, so
-                    // omitting these panics it rather than returning an error. See the same note in
-                    // `transport/subprocess.rs`.
-                    need_extra_process: Some(false),
-                    need_xray: Some(false),
-                    ..Default::default()
+                    ..cfg.load_request()
                 },
             )
             .await;

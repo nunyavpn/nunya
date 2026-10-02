@@ -312,6 +312,8 @@ struct Node {
     path: String,
     host: String,
     service_name: String,
+    mode: String,
+    extra: String,
     sni: String,
     fingerprint: String,
     public_key: String,
@@ -336,6 +338,8 @@ impl Node {
             ("path", self.path.clone()),
             ("host", self.host.clone()),
             ("serviceName", self.service_name.clone()),
+            ("mode", self.mode.clone()),
+            ("extra", self.extra.clone()),
             ("sni", self.sni.clone()),
             ("fp", self.fingerprint.clone()),
             ("pbk", self.public_key.clone()),
@@ -676,6 +680,21 @@ fn xray_link(outbound: &Value, remarks: &str) -> Option<String> {
             node.path = text(hu, "path");
             node.host = text(hu, "host");
         }
+        "xhttp" | "splithttp" => {
+            let settings = at("xhttpSettings").or_else(|| at("splithttpSettings"));
+            node.path = text(settings, "path");
+            node.host = text(settings, "host");
+            node.mode = text(settings, "mode");
+            if let Some(settings) = settings.and_then(Value::as_object) {
+                // Xray's extra replaces the other advanced fields; keep exactly that precedence.
+                let extra = settings.get("extra").cloned().unwrap_or_else(|| {
+                    Value::Object(settings.iter()
+                        .filter(|(k, _)| !["host", "path", "mode"].contains(&k.as_str()))
+                        .map(|(k, v)| (k.clone(), v.clone())).collect())
+                });
+                node.extra = extra.to_string();
+            }
+        }
         "grpc" => node.service_name = text(at("grpcSettings"), "serviceName"),
         "http" | "h2" | "h3" => {
             let http = at("httpSettings");
@@ -707,6 +726,9 @@ fn xray_link(outbound: &Value, remarks: &str) -> Option<String> {
     let user = outbound.pointer("/settings/vnext/0/users/0");
     if protocol == "vless" {
         node.flow = text(user, "flow");
+        if matches!(node.network.as_str(), "xhttp" | "splithttp") {
+            node.cipher = text(user, "encryption");
+        }
     }
     if protocol == "vmess" {
         node.cipher = text(user, "security");
