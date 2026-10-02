@@ -1,4 +1,4 @@
-//! Builds the sing-box configuration the core is handed.
+//! Builds sing-box routing. `runtime` prepares the final sing-box/Xray pair for the core.
 //!
 //! This is deliberately small. The Qt build generates configs in `src/configs/generate.cpp`
 //! (~2700 lines) because it supports 28 protocols, three transport modes and chained outbounds.
@@ -8,6 +8,8 @@
 //!
 //! Anything emitted here is validated by the core's own `CheckConfig` before it is started, so a
 //! mistake surfaces as a readable error rather than a half-up tunnel.
+
+pub mod runtime;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -67,7 +69,7 @@ pub enum Protocol {
     Wireguard,
 }
 
-/// The V2Ray transports sing-box implements.
+/// The V2Ray transports the client runs (XHTTP is delegated to Xray by `runtime`).
 ///
 /// `Tcp` is the absence of a transport rather than one of them: sing-box expects no `transport` key
 /// at all for plain TCP, and emitting `{"type":"tcp"}` is rejected.
@@ -81,6 +83,7 @@ pub enum TransportKind {
     Http,
     Httpupgrade,
     Quic,
+    Xhttp,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -101,6 +104,10 @@ pub struct Transport {
     pub max_early_data: u32,
     #[serde(default)]
     pub early_data_header: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub extra: Map<String, Value>,
 }
 
 /// One server.
@@ -414,6 +421,9 @@ fn transport_value(t: &Transport) -> Option<Value> {
                 m.insert("path".into(), json!(t.path));
             }
         }
+        // runtime::prepare replaces this with the authenticated Xray bridge before any RPC.
+        // Keeping its real type here makes an unprepared config fail instead of falling back to TCP.
+        TransportKind::Xhttp => { m.insert("type".into(), json!("xhttp")); }
         TransportKind::Quic => {
             m.insert("type".into(), json!("quic"));
         }

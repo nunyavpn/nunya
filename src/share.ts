@@ -34,8 +34,8 @@ export interface TlsOptions {
 
 export type Protocol = "vless" | "vmess" | "trojan" | "wireguard";
 
-/** The transports sing-box implements. Anything else is rejected rather than approximated. */
-export type TransportKind = "tcp" | "ws" | "grpc" | "http" | "httpupgrade" | "quic";
+/** XHTTP uses the bundled Xray engine; the other transports use sing-box. */
+export type TransportKind = "tcp" | "ws" | "grpc" | "http" | "httpupgrade" | "quic" | "xhttp";
 
 export interface Transport {
   kind: TransportKind;
@@ -55,6 +55,9 @@ export interface Transport {
    */
   maxEarlyData: number;
   earlyDataHeader: string;
+  /** XHTTP only. Optional so older saved profiles keep working. */
+  mode?: string;
+  extra?: Record<string, unknown>;
 }
 
 /**
@@ -132,7 +135,7 @@ const KNOWN_SCHEMES: Record<string, string> = {
  * Link transport names to the ones sing-box uses.
  *
  * `raw` is Xray's newer name for plain TCP. `h2` and `http` are the same transport. `kcp` and
- * `xhttp` are deliberately absent: the core cannot run them, and a link carrying one is rejected
+ * `meek` are deliberately absent: this client cannot run them, and a link carrying one is rejected
  * rather than quietly downgraded to TCP, which would connect to the wrong thing.
  */
 const TRANSPORTS: Record<string, TransportKind> = {
@@ -148,14 +151,14 @@ const TRANSPORTS: Record<string, TransportKind> = {
   h3: "http",
   httpupgrade: "httpupgrade",
   quic: "quic",
+  xhttp: "xhttp",
+  splithttp: "xhttp",
 };
 
 /** Transports a link may name that this core has no implementation for. */
 const UNRUNNABLE: Record<string, string> = {
   kcp: "mKCP",
   mkcp: "mKCP",
-  xhttp: "XHTTP",
-  splithttp: "SplitHTTP",
   meek: "meek",
 };
 
@@ -193,6 +196,47 @@ function splitEarlyData(rawPath: string): { path: string; maxEarlyData: number; 
   };
 }
 
+/** Kept in step with config/runtime.rs; Xray ignores unknown JSON keys, so we refuse them first. */
+const XHTTP_EXTRA = new Set([
+  "host", "path", "mode", "headers", "xPaddingBytes", "noGRPCHeader", "noSSEHeader", "scMaxEachPostBytes",
+  "scMinPostsIntervalMs", "scMaxBufferedPosts", "scStreamUpServerSecs", "xmux",
+]);
+const XHTTP_XMUX = new Set([
+  "maxConcurrency", "maxConnections", "cMaxReuseTimes", "hMaxRequestTimes",
+  "hMaxReusableSecs", "hKeepAlivePeriod",
+]);
+
+export function parseXhttpExtra(raw: unknown): Record<string, unknown> {
+  let extra = raw;
+  if (typeof raw === "string") {
+    try { extra = JSON.parse(raw || "{}"); }
+    catch { throw new ParseError("XHTTP extra must be a JSON object."); }
+  }
+  if (!extra || typeof extra !== "object" || Array.isArray(extra)) {
+    throw new ParseError("XHTTP extra must be a JSON object.");
+  }
+  for (const key of Object.keys(extra)) {
+    if (!XHTTP_EXTRA.has(key)) throw new ParseError(`XHTTP extra option "${key}" is not supported.`);
+  }
+  const result = extra as Record<string, unknown>;
+  if (result.xmux !== undefined) {
+    if (!result.xmux || typeof result.xmux !== "object" || Array.isArray(result.xmux)) {
+      throw new ParseError("XHTTP xmux must be a JSON object.");
+    }
+    for (const key of Object.keys(result.xmux)) {
+      if (!XHTTP_XMUX.has(key)) throw new ParseError(`XHTTP xmux option "${key}" is not supported.`);
+    }
+  }
+  return result;
+}
+
+export function validateXhttp(t: Transport): void {
+  if (!["auto", "packet-up", "stream-up", "stream-one"].includes(t.mode || "auto")) {
+    throw new ParseError(`XHTTP mode "${t.mode}" is not supported.`);
+  }
+  parseXhttpExtra(t.extra ?? {});
+}
+
 /** Builds the transport from the fields a link carries, whichever syntax it used to carry them. */
 function transportFrom(fields: {
   kind: string;
@@ -201,6 +245,8 @@ function transportFrom(fields: {
   host?: string;
   serviceName?: string;
   method?: string;
+  mode?: string;
+  extra?: unknown;
 }): Transport {
   const named = fields.kind.trim().toLowerCase();
 
@@ -220,6 +266,13 @@ function transportFrom(fields: {
   const host = (fields.host ?? "").split(",")[0]?.trim() ?? "";
 
   switch (transport.kind) {
+    case "xhttp":
+      transport.path = fields.path || "/";
+      transport.host = fields.host ?? "";
+      transport.mode = fields.mode || "auto";
+      transport.extra = parseXhttpExtra(fields.extra ?? {});
+      validateXhttp(transport);
+      break;
     case "ws": {
       const { path, maxEarlyData, earlyDataHeader } = splitEarlyData(fields.path || "/");
       transport.path = path || "/";
@@ -328,7 +381,19 @@ function parseUrlForm(link: string, protocol: Protocol): Profile {
     host: q.get("host") ?? undefined,
     serviceName: q.get("serviceName") ?? undefined,
     method: q.get("method") ?? undefined,
+    mode: q.get("mode") ?? undefined,
+    extra: q.get("extra") ?? undefined,
   });
+
+  if (transport.kind === "xhttp") {
+    if (protocol === "vless" && q.get("flow")) throw new ParseError("XHTTP requires VLESS flow to be empty.");
+    if (protocol === "vless" && q.has("encryption") && q.get("encryption") !== "none") {
+      throw new ParseError("XHTTP VLESS encryption is not supported; encryption must be none.");
+    }
+    if (protocol === "vmess" && Number(q.get("alterId") ?? 0) !== 0) {
+      throw new ParseError("XHTTP requires VMess AEAD (alterId 0).");
+    }
+  }
 
   const tls = tlsFrom(security, {
     sni: q.get("sni") ?? undefined,
@@ -399,11 +464,17 @@ function parseVmessJson(body: string): Profile {
   const transport = transportFrom({
     kind: str("net") || "tcp",
     headerType: str("type"),
+    mode: str("mode"),
+    extra: raw.extra,
     path: str("path"),
     host: str("host"),
     // The JSON form has no serviceName; gRPC puts it in `path`.
     serviceName: str("net").toLowerCase() === "grpc" ? str("path") : undefined,
   });
+
+  if (transport.kind === "xhttp" && Number(str("aid") || 0) !== 0) {
+    throw new ParseError("XHTTP requires VMess AEAD (alterId 0).");
+  }
 
   const tls = tlsFrom(str("tls") || "none", {
     sni: str("sni"),
@@ -762,6 +833,13 @@ export function toShareLink(profile: Profile): string {
   q.set("security", profile.tls.reality ? "reality" : profile.tls.enabled ? "tls" : "none");
 
   switch (t.kind) {
+    case "xhttp":
+      validateXhttp(t);
+      q.set("path", t.path || "/");
+      if (t.host) q.set("host", t.host);
+      q.set("mode", t.mode || "auto");
+      if (t.extra && Object.keys(t.extra).length) q.set("extra", JSON.stringify(t.extra));
+      break;
     case "ws":
       // `ed` lives inside the path in the link syntax, which is where it was read from.
       q.set("path", t.maxEarlyData ? `${t.path}?ed=${t.maxEarlyData}` : t.path);

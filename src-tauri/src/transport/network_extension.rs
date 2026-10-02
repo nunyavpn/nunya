@@ -152,7 +152,7 @@ impl NetworkExtensionTransport {
 
     /// Writes the configuration, creating the profile on first use.
     ///
-    /// Carries the whole generated sing-box config, so it is rewritten before every connect rather
+    /// Carries both generated engine configurations, rewritten before every connect rather
     /// than only once.
     async fn save(&self, server: &str, config_json: &str) -> Result<(), TransportError> {
         let server = CString::new(server)
@@ -214,7 +214,8 @@ impl TunnelTransport for NetworkExtensionTransport {
     }
 
     async fn start(&self, request: &BuildRequest) -> Result<(), TransportError> {
-        let cfg = config::build(request).to_string();
+        let cfg = config::runtime::build(request).map_err(TransportError::Core)?;
+        let cfg = serde_json::to_string(&cfg).map_err(|e| TransportError::Core(e.to_string()))?;
         self.save(&request.profile.server, &cfg).await?;
 
         let outcome = call(|ctx, cb| unsafe { nunya_ne_start(ctx, cb) }).await?;

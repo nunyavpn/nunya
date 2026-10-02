@@ -18,6 +18,8 @@
 
 import { h, render } from "../dom";
 import {
+  parseXhttpExtra,
+  validateXhttp,
   type Profile,
   type Protocol,
   type TransportKind,
@@ -44,6 +46,7 @@ const TRANSPORTS: [TransportKind, string][] = [
   ["http", "HTTP/2"],
   ["httpupgrade", "HTTPUpgrade"],
   ["quic", "QUIC"],
+  ["xhttp", "XHTTP"],
 ];
 
 /** The ciphers sing-box accepts for VMess. `auto` is right unless a panel says otherwise. */
@@ -85,6 +88,8 @@ function securityOf(profile: Profile): Security {
 
 export class ProfileEditor {
   private draft: Profile;
+  private extraError = "";
+  private extraText: string;
 
   constructor(
     private root: HTMLElement,
@@ -95,6 +100,7 @@ export class ProfileEditor {
     // A deep copy, so closing without saving changes nothing. The profile is plain JSON by
     // construction — it is what gets written to the data file.
     this.draft = JSON.parse(JSON.stringify(profile)) as Profile;
+    this.extraText = JSON.stringify(profile.transport.extra ?? {});
   }
 
   /** The edited profile. Only meaningful when `problems()` is empty. */
@@ -144,6 +150,13 @@ export class ProfileEditor {
       });
     }
 
+    if (p.protocol !== "wireguard" && p.transport.kind === "xhttp") {
+      try { validateXhttp(p.transport); }
+      catch (e) { found.push({ field: "xhttp", message: String(e) }); }
+      if (p.protocol === "vless" && p.flow) found.push({ field: "flow", message: "XHTTP requires Flow to be none." });
+      if (p.protocol === "vmess" && p.alterId) found.push({ field: "alterId", message: "XHTTP requires Alter ID to be 0." });
+      if (this.extraError) found.push({ field: "extra", message: this.extraError });
+    }
     return found;
   }
 
@@ -317,6 +330,21 @@ export class ProfileEditor {
           }),
         );
         break;
+      case "xhttp":
+        rows.push(
+          this.text("Path", null, t.path || "/", (v) => { t.path = v; }),
+          this.text("Host", "defaults to the server name", t.host, (v) => { t.host = v; }),
+          this.seg("Mode", null,
+            ["auto", "packet-up", "stream-up", "stream-one"].map((v) => [v, v]),
+            t.mode || "auto", (v) => { t.mode = v; this.touched(); }),
+          this.text("Extra (JSON)", "headers, padding, upload limits and xmux; empty means defaults",
+            this.extraText, (v) => {
+              this.extraText = v;
+              try { t.extra = parseXhttpExtra(v); this.extraError = ""; }
+              catch (e) { this.extraError = String(e); }
+            }),
+        );
+        break;
       case "httpupgrade":
         rows.push(
           this.text("Path", null, t.path, (v) => {
@@ -481,6 +509,7 @@ export class ProfileEditor {
       this.label(title, hint),
       h("input", {
         type: "text",
+        "aria-label": title,
         class: "val",
         spellcheck: false,
         autocapitalize: "off",

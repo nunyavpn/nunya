@@ -199,10 +199,21 @@ when something doesn't connect, and what to include in a bug report.
 | | |
 | --- | --- |
 | **Protocols** | VLESS, VMess, Trojan, WireGuard (Cloudflare WARP included) |
-| **Transports** | TCP, WebSocket, gRPC, HTTP/2, HTTPUpgrade, QUIC |
+| **Transports** | TCP, WebSocket, gRPC, HTTP/2, HTTPUpgrade, QUIC, XHTTP |
 | **Security** | TLS and Reality, with browser fingerprints and ALPN |
 | **Subscriptions** | lists of share links (plain or base64), Xray, sing-box and Clash (JSON) configurations, and sing-box and Clash import links |
 | **Coming** | Shadowsocks, Hysteria2, TUIC, SSH, AmneziaWG, proxy chains, and more ([roadmap](#roadmap)) |
+
+XHTTP works with VLESS, VMess AEAD and Trojan using the bundled Xray engine, including TLS and
+Reality. Import an XHTTP link (the legacy `splithttp` name is accepted), then edit its **Path**,
+**Host**, **Mode** and **Extra (JSON)** in the server editor. Modes are `auto`, `packet-up`,
+`stream-up` and `stream-one`. Extra supports `headers`, `xPaddingBytes`, `noGRPCHeader`,
+`noSSEHeader`, `scMaxEachPostBytes`, `scMinPostsIntervalMs`, `scMaxBufferedPosts`,
+`scStreamUpServerSecs` and `xmux`. Provider extras that repeat `host`, `path` or `mode` are
+preserved; the main fields take precedence, as in Xray. Other extras, including separate
+`downloadSettings`, are rejected with a reason. VLESS flow must be empty for XHTTP.
+
+[View the XHTTP editor](docs/screenshots/xhttp-editor.jpg).
 
 ## Privacy and security
 

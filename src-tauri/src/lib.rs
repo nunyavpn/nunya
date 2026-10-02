@@ -170,22 +170,9 @@ async fn check_config(
     mut req: BuildRequest,
 ) -> Result<String, String> {
     with_block_lists(&app, &mut req)?;
-    let cfg = config::build(&req);
-    let pretty = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-
-    let resp: gen::ErrorResp = state
-        .link
-        .call(
-            method::CHECK_CONFIG,
-            &gen::LoadConfigReq {
-                core_config: Some(cfg.to_string()),
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-    or_err(resp)?;
+    let cfg = config::runtime::build(&req)?;
+    let pretty = cfg.pretty()?;
+    cfg.check(&state.link).await?;
     Ok(pretty)
 }
 
@@ -591,7 +578,7 @@ async fn test_servers(
         }
 
         let subset: Vec<config::Profile> = pending.iter().map(|&i| profiles[i].clone()).collect();
-        let (cfg, tags) = config::build_test(&subset);
+        let (cfg, tags) = config::runtime::build_test(&subset)?;
         // The subset is re-tagged from t0 each round, so the mapping back to the caller's
         // indices has to be rebuilt with it.
         let by_tag: std::collections::HashMap<String, usize> = tags
@@ -605,12 +592,11 @@ async fn test_servers(
             .call(
                 method::TEST,
                 &gen::TestReq {
-                    config: Some(cfg.to_string()),
                     outbound_tags: tags,
                     url: Some(endpoint.clone()),
                     test_timeout_ms: Some(timeout_ms.unwrap_or(5000)),
                     max_concurrency: Some(concurrency.unwrap_or(10)),
-                    ..Default::default()
+                    ..cfg.test_request()
                 },
             )
             .await
@@ -656,17 +642,19 @@ async fn test_servers(
 async fn latency_of(link: &CoreLink, profile: &config::Profile, timeout_ms: i32) -> (i32, Option<String>) {
     let mut last = String::from("the core reported nothing for this server");
     for url in TEST_URLS {
-        let (cfg, tags) = config::build_test(std::slice::from_ref(profile));
+        let (cfg, tags) = match config::runtime::build_test(std::slice::from_ref(profile)) {
+            Ok(built) => built,
+            Err(error) => return (-1, Some(error)),
+        };
         let resp: Result<gen::TestResp, _> = link
             .call(
                 method::TEST,
                 &gen::TestReq {
-                    config: Some(cfg.to_string()),
                     outbound_tags: tags,
                     url: Some(url.to_string()),
                     test_timeout_ms: Some(timeout_ms),
                     max_concurrency: Some(1),
-                    ..Default::default()
+                    ..cfg.test_request()
                 },
             )
             .await;
@@ -934,7 +922,7 @@ async fn open_external(url: String) -> Result<(), String> {
 #[tauri::command]
 fn preview_config(app: tauri::AppHandle, mut req: BuildRequest) -> Result<String, String> {
     with_block_lists(&app, &mut req)?;
-    serde_json::to_string_pretty(&config::build(&req)).map_err(|e| e.to_string())
+    config::runtime::build(&req)?.pretty()
 }
 
 /// Makes closing the window hide it rather than quit — once there is a tray icon to bring it back.

@@ -78,30 +78,13 @@ impl TunnelTransport for SubprocessTransport {
     }
 
     async fn start(&self, request: &BuildRequest) -> Result<(), TransportError> {
-        let cfg = config::build(request);
-        let resp: gen::ErrorResp = self
-            .link
-            .call(
-                method::START,
-                &gen::LoadConfigReq {
-                    core_config: Some(cfg.to_string()),
-                    disable_stats: Some(false),
-                    tun_ipv4_cidr: Some(request.tun.ipv4_cidr.clone()),
-                    // Both are sent explicitly because the core's Start dereferences them without
-                    // a nil check (`*in.NeedExtraProcess` and `*in.NeedXray` in its
-                    // internal/rpc/lifecycle.go), so leaving either unset panics the core rather
-                    // than returning an error. Its CheckConfig reads the same fields through the
-                    // generated nil-safe getters, which is why a config can validate cleanly and
-                    // then bring the whole core down at Start.
-                    //
-                    // Neither feature is one this client uses: there is no extra process, and Xray
-                    // is not wired up.
-                    need_extra_process: Some(false),
-                    need_xray: Some(false),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        let cfg = config::runtime::build(request).map_err(TransportError::Core)?;
+        cfg.check(&self.link).await.map_err(TransportError::Core)?;
+        let resp: gen::ErrorResp = self.link.call(method::START, &gen::LoadConfigReq {
+            disable_stats: Some(false),
+            tun_ipv4_cidr: Some(if request.mode == Mode::Vpn { request.tun.ipv4_cidr.clone() } else { String::new() }),
+            ..cfg.load_request()
+        }).await?;
         Self::or_err(resp)
     }
 

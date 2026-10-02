@@ -440,11 +440,28 @@ would be worse than one that explains itself.
 | | |
 | --- | --- |
 | Protocols | VLESS, VMess (both share-link forms, including the base64 blob), Trojan, WireGuard |
-| Transports | TCP, WebSocket, gRPC, HTTP/2, HTTPUpgrade, QUIC |
+| Transports | TCP, WebSocket, gRPC, HTTP/2, HTTPUpgrade, QUIC, XHTTP |
 | Security | none, TLS, Reality, with uTLS fingerprints and ALPN |
-| Rejected by name | mKCP, XHTTP, SplitHTTP, meek: the core has no implementation, and silently downgrading one to TCP would connect to the wrong thing |
+| Rejected by name | mKCP and meek: this client has no implementation, and silently downgrading one to TCP would connect to the wrong thing |
 | Also rejected by name | multi-hop chains, until proxy chains exist ([#18](https://github.com/nunyavpn/nunya/issues/18)) |
 | Not yet | Shadowsocks, Hysteria2, TUIC, SSH and more: separate outbound types rather than another transport |
+
+XHTTP uses the Xray engine already shipped in the pinned nunya-core. `config::runtime` prepares
+both configurations: an authenticated loopback SOCKS bridge replaces each XHTTP outbound in
+sing-box, while Xray carries its original protocol, TLS/Reality and XHTTP settings. sing-box keeps
+routing, DNS, TUN and traffic counters. Every production start, check, latency test and location
+probe uses this preparation, including the NetworkExtension payload. CheckConfig needs two calls
+because the core checks only Xray when `need_xray` is true. The core binds Xray's egress to the
+physical interface and resolves server names through `dns-direct` with `UseIP`.
+
+The extra-option allowlists in `src/share.ts` and `config/runtime.rs` reject fields Xray would
+otherwise silently ignore. Extend both together. The local integration test needs no external
+server and covers all four modes, Test RPC, location probes, connect/disconnect and counters:
+
+```bash
+NUNYA_CORE_PATH=/path/to/development/nunya-core \
+  cargo test --manifest-path src-tauri/Cargo.toml --test core_link xhttp_carries_traffic -- --ignored
+```
 
 WireGuard is the one that is not an outbound at all. sing-box moved it to `endpoints`, because it is
 an interface with its own addresses rather than a dialer, and the core rejects the old outbound form
