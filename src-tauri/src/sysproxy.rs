@@ -152,7 +152,10 @@ pub fn remove_saved(data_dir: &Path) {
 
 // ---------------------------------------------------------------- which desktop
 
-enum Desktop {
+/// Which tool sets the system proxy. Each platform builds only its own variants
+/// (`platform::proxy_desktop`), hence the allowance.
+#[allow(dead_code)]
+pub(crate) enum Desktop {
     Gnome,
     /// The `kwriteconfig` generation that is installed; `kreadconfig` has the same suffix.
     Kde(String),
@@ -161,52 +164,18 @@ enum Desktop {
 }
 
 fn desktop() -> Result<Desktop, String> {
-    if cfg!(target_os = "macos") {
-        return Ok(Desktop::Mac);
-    }
-    if cfg!(target_os = "windows") {
-        return Ok(Desktop::Windows);
-    }
-    if !cfg!(target_os = "linux") {
-        return Err("setting the system proxy is not supported on this platform".into());
-    }
-
-    let current = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    if current.split(':').any(|d| d.eq_ignore_ascii_case("KDE")) {
-        for tool in ["kwriteconfig6", "kwriteconfig5"] {
-            if run(tool, &["--help"]).is_ok() {
-                return Ok(Desktop::Kde(tool.to_string()));
-            }
-        }
-        return Err("KDE is running, but neither kwriteconfig6 nor kwriteconfig5 was found".into());
-    }
-
-    // GNOME, and the desktops that share its settings schema (Budgie, Cinnamon's GTK apps,
-    // Pantheon, Unity). Asked of gsettings itself rather than inferred from the desktop name.
-    if run("gsettings", &["list-keys", "org.gnome.system.proxy"]).is_ok() {
-        return Ok(Desktop::Gnome);
-    }
-
-    Err(format!(
-        "no supported way to set the system proxy on this desktop ({}); GNOME and KDE are supported",
-        if current.is_empty() { "unknown" } else { &current }
-    ))
+    crate::platform::proxy_desktop()
 }
 
 /// Runs a tool and returns its trimmed stdout, or its stderr as the error.
 ///
 /// Also an error: output that says it is one. `networksetup` prints `** Error: …` and exits 0 for
 /// a bad service name or a rejected value, so its status alone would report a failure as done.
-fn run(program: &str, args: &[&str]) -> Result<String, String> {
+pub(crate) fn run(program: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(program);
     command.args(args);
-    // A GUI app starting a console tool on Windows gets a console window flashed up for each
-    // call; this flag (CREATE_NO_WINDOW) runs it without one.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
+    // A GUI app starting a console tool on Windows gets a console window flashed up for each call.
+    crate::platform::no_console_window(&mut command);
     let out = command.output().map_err(|e| format!("{program}: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if !out.status.success() || reports_error(&stdout) {

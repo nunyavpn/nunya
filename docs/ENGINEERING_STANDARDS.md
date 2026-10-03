@@ -171,6 +171,25 @@ inside each module and inside `CLAUDE.md`'s per-subsystem sections, not as a rul
   fast and pure.
 - **No `cargo fmt` gate.** The tree is not rustfmt-clean; do not reformat a file you are not
   otherwise editing, even in the middle of refactoring something else in it.
+- **Platform differences live in `platform/`, never in a `#[cfg]` inside shared code.** Shared code
+  calls `platform::…`. Each system has one file (`macos.rs`, `linux.rs`, `windows.rs`), only the
+  target's is compiled, and each must provide every item `platform/mod.rs` re-exports, so a platform
+  left behind is a compile error on its CI job. `mod.rs` is the only place a target is chosen.
+  Where two systems do the same thing, that code is shared in one file (`unix.rs`,
+  `tray_icon.rs`) and re-exported by name from each. Rules that follow:
+  - **Free functions and constants, not a trait.** A trait with one implementation per build only
+    adds a vtable. `TunnelTransport` is a trait because it is a *runtime* choice; it stays one.
+  - **A difference in data is data**: `TUN_NAME`, `GRANT`'s words, `NETWORK_EXTENSION`.
+  - **Runtime differences stay runtime.** GNOME, KDE and the rest run one Linux binary, so
+    `proxy_desktop` asks the desktop inside `linux.rs`. That is the one kind of branching a
+    platform file does on its own.
+  - **The mechanism moves; the rule stays.** `rpc/peer.rs` says who may connect, and the platform
+    only reads the peer's credentials. `tray.rs` says what the menu reads, and the platform only
+    puts it into its own kind of tray.
+  - **The frontend asks the same way.** It reads `OS` from `src/platform.ts`, which the Rust side
+    fills in (`platform::webview_plugin`), never `navigator.platform`.
+  - **Tests may still use `cfg`** when what they check exists on only one system (a unix file
+    mode, a pipe client's pid).
 
 Size guidance mirrors the frontend's, with the same caveat that a reason-to-change test beats a
 line count — see the note on `subscription.rs`/`config.rs`/`geo.rs` under *Splitting a large

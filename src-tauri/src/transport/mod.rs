@@ -20,9 +20,6 @@ use crate::config::{BuildRequest, Mode};
 pub mod select;
 pub mod subprocess;
 
-#[cfg(target_os = "macos")]
-pub mod network_extension;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TunnelState {

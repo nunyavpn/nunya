@@ -11,17 +11,28 @@
 //! as that administrator, with that account's (empty) data; the sheet says to use an account that
 //! is an administrator.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::os::windows::io::AsRawHandle;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::{AppHandle, Emitter};
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
 
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+pub use super::tray_icon::{tray_mirror, Tray};
+use super::tray_icon::MenuLines;
 use super::{Fact, GrantCopy, Granted};
+use crate::sysproxy::Desktop;
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
     lede: "VPN mode needs Nunya to run as administrator",
@@ -92,11 +103,164 @@ pub fn browser_command(url: &str) -> Command {
 
 /// The core is a console program, and Windows gives a console program started from a GUI app a
 /// window of its own. CREATE_NO_WINDOW runs it without one; its output still comes through the
-/// pipes the caller set up.
-pub fn no_console_window(cmd: &mut tokio::process::Command) {
+/// pipes the caller set up. The same goes for every tool the system proxy runs.
+pub fn no_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x0800_0000);
+}
+
+/// The TUN (wintun) adapter's name, as it shows in the adapter list.
+pub const TUN_NAME: Option<&str> = Some("nunya-tun");
+
+/// The registry is the system proxy on Windows (`sysproxy.rs`'s `windows`).
+pub fn proxy_desktop() -> Result<Desktop, String> {
+    Ok(Desktop::Windows)
+}
+
+// The core's link: a named pipe, which is what the core dials here (`ConnectIPC` in its
+// `internal/ipc/ipc_windows.go`). The core checks it from its side with
+// `GetNamedPipeServerProcessId`; `peer_pid` is our half.
+
+/// The pipe's name. tokio creates a pipe only on a runtime, and `ipc_bind` runs outside one, so the
+/// first instance is made by `IpcAcceptor::adopt`. The core does not notice the gap: it retries its
+/// dial for five seconds (`RunCore` in the core's `main.go`).
+pub type PendingListener = OsString;
+
+pub type IpcStream = NamedPipeServer;
+
+/// `socket_path` only names the directory the core works in; the address handed back is the
+/// pipe's name, which is what the core must be given.
+pub fn ipc_bind(_socket_path: PathBuf) -> io::Result<(PathBuf, PendingListener)> {
+    let name = pipe_name();
+    Ok((PathBuf::from(&name), name))
+}
+
+/// A pipe has no file; it goes when its last handle closes.
+pub fn ipc_unbind(_socket_path: &Path) {}
+
+/// A pipe instance carries one connection, so the next one is created before the connected one is
+/// handed over, and a core restarted meanwhile finds it.
+pub struct IpcAcceptor {
+    name: OsString,
+    server: NamedPipeServer,
+}
+
+impl IpcAcceptor {
+    /// `first_pipe_instance` makes creating the pipe fail if something else already made one of
+    /// this name, rather than joining it, so the pipe that is served is always ours.
+    pub fn adopt(name: PendingListener) -> io::Result<Self> {
+        let server = ServerOptions::new().first_pipe_instance(true).create(&name)?;
+        Ok(Self { name, server })
+    }
+
+    pub async fn accept(&mut self) -> io::Result<IpcStream> {
+        self.server.connect().await?;
+        let next = ServerOptions::new().create(&self.name).map_err(|e| {
+            io::Error::new(e.kind(), format!("could not create the next core pipe: {e}"))
+        })?;
+        Ok(std::mem::replace(&mut self.server, next))
+    }
+}
+
+/// There is no uid to compare: the pid is the whole identity, and it is the child we started.
+pub fn peer_user_ok(_stream: &IpcStream) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn peer_pid(stream: &IpcStream) -> io::Result<u32> {
+    let mut pid = 0u32;
+    // SAFETY: `stream` is borrowed, so its handle is live for this call; `pid` is a valid out-param.
+    if unsafe { GetNamedPipeClientProcessId(stream.as_raw_handle(), &mut pid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(pid)
+}
+
+/// A pipe name no other link will use: the main core's and every probe core's are bound from one
+/// process, and a name reused from a crashed run would fail `first_pipe_instance`.
+fn pipe_name() -> OsString {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!(
+        r"\\.\pipe\nunya-{}-{nanos}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+    .into()
 }
 
 fn wide(s: &OsStr) -> Vec<u16> {
     s.encode_wide().chain(std::iter::once(0)).collect()
 }
+
+const TOGGLE: &str = "toggle";
+const SHOW: &str = "show";
+const QUIT: &str = "quit";
+
+/// tray-icon's item with its menu: Windows has neither of the problems that keep the menu off
+/// macOS and replace the item on Linux.
+pub(super) fn install_tray(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Result<Tray> {
+    // Disabled: these are labels, and a clickable line invites a click that does nothing.
+    // The server is its own line because it matters most when disconnected — it is what
+    // Connect will connect to.
+    let server = MenuItem::with_id(app, "server", "No server selected", false, None::<&str>)?;
+    let status = MenuItem::with_id(app, "status", "Status: Disconnected", false, None::<&str>)?;
+    // Disabled until the frontend has said a connect could work; see `set_tray_status`.
+    let toggle = MenuItem::with_id(app, TOGGLE, "Connect", false, None::<&str>)?;
+    let show = MenuItem::with_id(app, SHOW, "Show Nunya", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, QUIT, "Quit Nunya", true, None::<&str>)?;
+
+    let menu = Menu::with_items(
+        app,
+        &[
+            &server,
+            &status,
+            &PredefinedMenuItem::separator(app)?,
+            &toggle,
+            &PredefinedMenuItem::separator(app)?,
+            &show,
+            &quit,
+        ],
+    )?;
+
+    let icon = super::tray_icon::base(icon, template)
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TOGGLE => {
+                let _ = app.emit("tray-toggle", ());
+            }
+            SHOW => crate::tray::show_window(app),
+            // Goes through `ExitRequested`, so the core is stopped and the routes given back
+            // exactly as when the last window closes.
+            QUIT => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(Tray {
+        icon,
+        menu: Some(MenuLines {
+            server,
+            status,
+            toggle,
+        }),
+    })
+}
+
+/// There is no popover here; the tray has a menu.
+pub fn hide_popover(_app: &tauri::AppHandle) {}
+
+/// Nothing here needs an application event the shared handler does not already take.
+pub fn on_run_event(_app: &tauri::AppHandle, _event: &tauri::RunEvent) {}
+
+/// No NetworkExtension outside macOS: the subprocess transport is the only one.
+pub const NETWORK_EXTENSION: bool = false;
+
+pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> {
+    None
+}
+
+pub const OS: &str = "windows";

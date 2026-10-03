@@ -15,10 +15,6 @@ pub mod storage;
 pub mod subscription;
 pub mod sysproxy;
 pub mod transport;
-#[cfg(target_os = "macos")]
-mod popover;
-#[cfg(target_os = "linux")]
-mod sni;
 mod tray;
 pub mod update;
 
@@ -970,6 +966,8 @@ pub fn run() {
     tauri::Builder::default()
         // Verifies and installs updates; which release to take is `update.rs`'s decision.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Tells the frontend which system this is (`src/platform.ts`).
+        .plugin(platform::webview_plugin())
         .setup(|app| {
             applog::attach(app.handle().clone());
             // Per-user private directory. On macOS `temp_dir` is already inside the user's
@@ -1072,25 +1070,14 @@ pub fn run() {
             download_update,
             install_update,
             tray::set_tray_status,
-            #[cfg(target_os = "macos")]
-            popover::hide_popover,
-            #[cfg(target_os = "macos")]
-            popover::show_main_window,
-            #[cfg(target_os = "macos")]
-            popover::quit,
+            tray::hide_popover,
+            tray::show_main_window,
+            tray::quit,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the application")
         .run(|app, event| {
-            // The Dock icon brings back a window closed to the menu bar, as in any Mac app.
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen {
-                has_visible_windows: false,
-                ..
-            } = event
-            {
-                tray::show_window(app);
-            }
+            platform::on_run_event(app, &event);
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // A core left running would keep the TUN interface and its routes installed, so
                 // the machine would lose connectivity after the UI disappeared.

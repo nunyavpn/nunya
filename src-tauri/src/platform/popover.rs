@@ -142,25 +142,5 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
-/// Escape, and anything in the popover that hands off to somewhere else.
-#[tauri::command]
-pub fn hide_popover(app: AppHandle) {
-    hide(&app);
-}
-
-/// The popover's "Open Nunya".
-#[tauri::command]
-pub fn show_main_window(app: AppHandle) {
-    hide(&app);
-    crate::tray::show_window(&app);
-}
-
-/// The popover's "Quit". Through `ExitRequested`, like the tray menu's, so the core is stopped and
-/// the system proxy put back.
-#[tauri::command]
-pub fn quit(app: AppHandle) {
-    app.exit(0);
-}
-
 #[cfg(test)]
 mod tests;
