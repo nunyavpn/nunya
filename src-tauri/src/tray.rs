@@ -24,7 +24,7 @@
 //!
 //! On Linux everything is a menu item, because a tray there delivers no click events on the icon
 //! itself: a click opens the menu, and that is all. The item is not tray-icon's, though —
-//! [`sni.rs`](crate::sni) publishes our own StatusNotifierItem, because libayatana's declares an
+//! `platform/sni.rs` publishes our own StatusNotifierItem, because libayatana's declares an
 //! `Activate` method nothing answers, which costs GNOME a 400 ms double-click wait before it will
 //! open the menu, and because it carries the icon as a file it deletes too early. That module's
 //! header has the detail. On macOS the icon carries no menu at all; a click opens the popover
@@ -33,72 +33,35 @@
 //!
 //! Windows keeps tray-icon's menu: it has neither problem, and a second implementation there would
 //! be one more thing to keep in step for no gain.
+//!
+//! This file is what every platform shares — what the menu says (`Lines`), the icon's pixels, the
+//! command. Building the tray and putting a state into it is the platform's (`platform::Tray`,
+//! `platform::tray_mirror`): `linux.rs` for the StatusNotifierItem, `tray_icon.rs` for what macOS
+//! and Windows share, and each of those two files for its own `install_tray`.
 
 use std::sync::OnceLock;
 
 use serde::Deserialize;
-#[cfg(not(target_os = "linux"))]
-use tauri::image::Image;
-#[cfg(not(target_os = "linux"))]
-use tauri::menu::MenuItem;
-#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
-use tauri::menu::{Menu, PredefinedMenuItem};
-#[cfg(not(target_os = "linux"))]
-use tauri::tray::{TrayIcon, TrayIconBuilder};
-#[cfg(not(target_os = "macos"))]
-use tauri::Emitter;
-#[cfg(not(target_os = "linux"))]
-use tauri::Wry;
 use tauri::{AppHandle, Manager};
 
-/// The icon, and the menu's lines where there is a menu; in managed state once the first status
-/// built them.
-#[cfg(not(target_os = "linux"))]
-pub struct Tray {
-    icon: TrayIcon<Wry>,
-    /// `None` on macOS, where the popover takes the menu's place.
-    menu: Option<MenuLines>,
-}
-
-/// The channel into the thread that owns the StatusNotifierItem. The item's state lives there, not
-/// here, because libdbus is not thread-safe; see [`sni`](crate::sni).
-#[cfg(target_os = "linux")]
-pub struct Tray {
-    updates: std::sync::mpsc::Sender<crate::sni::Update>,
-}
-
-/// The menu items whose text changes. Never built on macOS, where `Tray::menu` is always `None`.
-#[cfg(not(target_os = "linux"))]
-#[cfg_attr(target_os = "macos", allow(dead_code))]
-struct MenuLines {
-    server: MenuItem<Wry>,
-    status: MenuItem<Wry>,
-    toggle: MenuItem<Wry>,
-}
+use crate::platform;
 
 /// The icon as `trayicon.ts` painted it.
 #[derive(Deserialize)]
 pub struct Pixels {
-    width: u32,
-    height: u32,
+    pub width: u32,
+    pub height: u32,
     /// Straight RGBA, row by row.
-    rgba: Vec<u8>,
+    pub rgba: Vec<u8>,
     /// Draw it in the menu bar's own colour. macOS only; the frontend sets it for off. The Linux
-    /// item has no equivalent — a shell there tints nothing — so it goes unread in this build.
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
-    template: bool,
+    /// item has no equivalent — a shell there tints nothing — so it goes unread in that build.
+    #[allow(dead_code)]
+    pub template: bool,
 }
-
-#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
-const TOGGLE: &str = "toggle";
-#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
-const SHOW: &str = "show";
-#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
-const QUIT: &str = "quit";
 
 /// Whether the tray is up, and closing the window can therefore hide it rather than quit.
 pub fn is_up(app: &AppHandle) -> bool {
-    app.try_state::<Tray>().is_some()
+    app.try_state::<platform::Tray>().is_some()
 }
 
 /// Set once the tray has been found not to work here, so it is not attempted again.
@@ -107,138 +70,17 @@ static NO_TRAY: OnceLock<()> = OnceLock::new();
 /// Whether a tray is worth attempting at all.
 ///
 /// On Linux this used to dlopen libayatana, which tray-icon loads lazily and which panics when it is
-/// missing. Nothing loads it any more — [`sni`](crate::sni) speaks the protocol directly — so the
-/// only real question is whether a watcher answers, which `install` finds out by asking. A failure
+/// missing. Nothing loads it any more — `platform/sni.rs` speaks the protocol directly — so the
+/// only real question is whether a watcher answers, which installing finds out by asking. A failure
 /// is remembered rather than retried: the frontend reports a status every few seconds, and each
 /// attempt would wait on the bus before failing the same way.
-fn supported() -> bool {
+pub(crate) fn supported() -> bool {
     NO_TRAY.get().is_none()
 }
 
 /// Remembers that there is no tray here, so `set_tray_status` stops trying.
-fn give_up() {
+pub(crate) fn give_up() {
     let _ = NO_TRAY.set(());
-}
-
-/// Starts the StatusNotifierItem and the thread that answers its menu.
-///
-/// The actions come back on a channel rather than through a callback because the item's thread must
-/// not block on Tauri: a menu click that had to wait for the main thread would hold up the bus, and
-/// the shell would redraw the menu as unresponsive.
-#[cfg(target_os = "linux")]
-fn install(app: &AppHandle, lines: &Lines, icon: &Pixels, label: &str) -> Result<Tray, String> {
-    let (action_tx, action_rx) = std::sync::mpsc::channel::<crate::sni::Action>();
-    let updates = crate::sni::start(update_for(lines, icon, label), action_tx)?;
-
-    let app = app.clone();
-    std::thread::Builder::new()
-        .name("nunya-tray-actions".into())
-        .spawn(move || {
-            // Ends when the item's thread drops the sender, which is when the app is going away.
-            while let Ok(action) = action_rx.recv() {
-                let app = app.clone();
-                // Window and lifecycle calls belong to the main thread; `emit` would be safe
-                // anywhere, but routing all three the same way keeps the ordering obvious.
-                let _ = app.clone().run_on_main_thread(move || match action {
-                    crate::sni::Action::Toggle => {
-                        let _ = app.emit("tray-toggle", ());
-                    }
-                    crate::sni::Action::Show => show_window(&app),
-                    // Goes through `ExitRequested`, so the core is stopped and the routes given
-                    // back exactly as when the last window closes.
-                    crate::sni::Action::Quit => app.exit(0),
-                });
-            }
-        })
-        .map_err(|e| e.to_string())?;
-
-    Ok(Tray { updates })
-}
-
-#[cfg(not(target_os = "linux"))]
-fn base(icon: Image<'static>, template: bool) -> TrayIconBuilder<Wry> {
-    TrayIconBuilder::with_id("main")
-        .icon(icon)
-        .icon_as_template(template)
-        .tooltip("Nunya")
-}
-
-/// A status item with no menu, whose clicks open the popover.
-///
-/// No menu, rather than one moved to the right click: on macOS 27 a menu attached to the status
-/// item takes every click, the left one included, before tray-icon sees it — so the popover never
-/// opened and the menu did, whatever `show_menu_on_left_click` said. tray-icon 0.25.1 fixes it by
-/// attaching the menu only while showing it, but Tauri 2 is held to 0.24. The popover carries all
-/// the menu did (the status, Connect/Disconnect, Open Nunya, Quit), so either button opens it, as
-/// NordVPN's does.
-#[cfg(target_os = "macos")]
-fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Result<Tray> {
-    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
-
-    crate::popover::create(app)?;
-    let icon = base(icon, template)
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left | MouseButton::Right,
-                button_state: MouseButtonState::Up,
-                rect,
-                ..
-            } = event
-            {
-                crate::popover::toggle(tray.app_handle(), rect);
-            }
-        })
-        .build(app)?;
-    Ok(Tray { icon, menu: None })
-}
-
-#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
-fn install(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Result<Tray> {
-    // Disabled: these are labels, and a clickable line invites a click that does nothing.
-    // The server is its own line because it matters most when disconnected — it is what
-    // Connect will connect to.
-    let server = MenuItem::with_id(app, "server", "No server selected", false, None::<&str>)?;
-    let status = MenuItem::with_id(app, "status", "Status: Disconnected", false, None::<&str>)?;
-    // Disabled until the frontend has said a connect could work; see `set_tray_status`.
-    let toggle = MenuItem::with_id(app, TOGGLE, "Connect", false, None::<&str>)?;
-    let show = MenuItem::with_id(app, SHOW, "Show Nunya", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, QUIT, "Quit Nunya", true, None::<&str>)?;
-
-    let menu = Menu::with_items(
-        app,
-        &[
-            &server,
-            &status,
-            &PredefinedMenuItem::separator(app)?,
-            &toggle,
-            &PredefinedMenuItem::separator(app)?,
-            &show,
-            &quit,
-        ],
-    )?;
-
-    let icon = base(icon, template)
-        .menu(&menu)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            TOGGLE => {
-                let _ = app.emit("tray-toggle", ());
-            }
-            SHOW => show_window(app),
-            // Goes through `ExitRequested`, so the core is stopped and the routes given back
-            // exactly as when the last window closes.
-            QUIT => app.exit(0),
-            _ => {}
-        })
-        .build(app)?;
-
-    Ok(Tray {
-        icon,
-        menu: Some(MenuLines {
-            server,
-            status,
-            toggle,
-        }),
-    })
 }
 
 pub fn show_window(app: &AppHandle) {
@@ -251,11 +93,11 @@ pub fn show_window(app: &AppHandle) {
 
 /// What the menu says, worked out from what the frontend reported.
 #[derive(Debug, PartialEq)]
-struct Lines {
-    server: String,
-    status: String,
-    toggle: &'static str,
-    toggle_enabled: bool,
+pub struct Lines {
+    pub server: String,
+    pub status: String,
+    pub toggle: &'static str,
+    pub toggle_enabled: bool,
 }
 
 impl Lines {
@@ -319,90 +161,7 @@ pub fn set_tray_status(
         detail.as_deref(),
         can_connect,
     );
-    mirror(&app, &lines, icon, &label)
-}
-
-/// Puts the state into the platform's tray, creating it the first time.
-///
-/// Split from `set_tray_status` rather than branched inside it, so each platform's path reads as one
-/// whole thing — the same reason `install` is two functions.
-#[cfg(target_os = "linux")]
-fn mirror(app: &AppHandle, lines: &Lines, icon: Pixels, label: &str) -> Result<(), String> {
-    match app.try_state::<Tray>() {
-        // A closed channel means the item's thread is gone, which only happens on the way out.
-        Some(tray) => {
-            let _ = tray.updates.send(update_for(lines, &icon, label));
-        }
-        None => {
-            if !supported() {
-                // The window is the whole UI; there is nothing to mirror into.
-                return Ok(());
-            }
-            match install(app, lines, &icon, label) {
-                Ok(tray) => {
-                    app.manage(tray);
-                }
-                Err(e) => {
-                    log::warn!("could not create the tray icon: {e}");
-                    give_up();
-                    // Not an error to the frontend: a desktop with no tray is a supported shape,
-                    // and the window has nothing to do about it.
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn mirror(app: &AppHandle, lines: &Lines, icon: Pixels, label: &str) -> Result<(), String> {
-    let image = Image::new_owned(icon.rgba, icon.width, icon.height);
-    let tray = match app.try_state::<Tray>() {
-        Some(tray) => {
-            tray.icon
-                .set_icon_with_as_template(Some(image), icon.template)
-                .map_err(|e| e.to_string())?;
-            tray
-        }
-        None => {
-            if !supported() {
-                return Ok(());
-            }
-            let tray = install(app, image, icon.template).map_err(|e| {
-                log::warn!("could not create the tray icon: {e}");
-                give_up();
-                e.to_string()
-            })?;
-            app.manage(tray);
-            app.state::<Tray>()
-        }
-    };
-
-    if let Some(menu) = &tray.menu {
-        menu.server.set_text(&lines.server).map_err(|e| e.to_string())?;
-        menu.status.set_text(&lines.status).map_err(|e| e.to_string())?;
-        menu.toggle.set_text(lines.toggle).map_err(|e| e.to_string())?;
-        menu.toggle
-            .set_enabled(lines.toggle_enabled)
-            .map_err(|e| e.to_string())?;
-    }
-    let _ = tray.icon.set_tooltip(Some(format!("Nunya — {label}")));
-    Ok(())
-}
-
-/// Packs what the frontend reported into the item thread's message.
-#[cfg(target_os = "linux")]
-fn update_for(lines: &Lines, icon: &Pixels, label: &str) -> crate::sni::Update {
-    crate::sni::Update {
-        rgba: icon.rgba.clone(),
-        width: icon.width as i32,
-        height: icon.height as i32,
-        tooltip: format!("Nunya — {label}"),
-        server: lines.server.clone(),
-        status: lines.status.clone(),
-        toggle: lines.toggle.to_string(),
-        toggle_enabled: lines.toggle_enabled,
-    }
+    platform::tray_mirror(&app, &lines, icon, &label)
 }
 
 #[cfg(test)]

@@ -20,12 +20,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::{AppHandle, Emitter};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
 
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+pub use super::tray_icon::{tray_mirror, Tray};
+use super::tray_icon::MenuLines;
 use super::{Fact, GrantCopy, Granted};
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
@@ -179,4 +184,58 @@ fn pipe_name() -> OsString {
 
 fn wide(s: &OsStr) -> Vec<u16> {
     s.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+const TOGGLE: &str = "toggle";
+const SHOW: &str = "show";
+const QUIT: &str = "quit";
+
+/// tray-icon's item with its menu: Windows has neither of the problems that keep the menu off
+/// macOS and replace the item on Linux.
+pub(super) fn install_tray(app: &AppHandle, icon: Image<'static>, template: bool) -> tauri::Result<Tray> {
+    // Disabled: these are labels, and a clickable line invites a click that does nothing.
+    // The server is its own line because it matters most when disconnected — it is what
+    // Connect will connect to.
+    let server = MenuItem::with_id(app, "server", "No server selected", false, None::<&str>)?;
+    let status = MenuItem::with_id(app, "status", "Status: Disconnected", false, None::<&str>)?;
+    // Disabled until the frontend has said a connect could work; see `set_tray_status`.
+    let toggle = MenuItem::with_id(app, TOGGLE, "Connect", false, None::<&str>)?;
+    let show = MenuItem::with_id(app, SHOW, "Show Nunya", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, QUIT, "Quit Nunya", true, None::<&str>)?;
+
+    let menu = Menu::with_items(
+        app,
+        &[
+            &server,
+            &status,
+            &PredefinedMenuItem::separator(app)?,
+            &toggle,
+            &PredefinedMenuItem::separator(app)?,
+            &show,
+            &quit,
+        ],
+    )?;
+
+    let icon = super::tray_icon::base(icon, template)
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TOGGLE => {
+                let _ = app.emit("tray-toggle", ());
+            }
+            SHOW => crate::tray::show_window(app),
+            // Goes through `ExitRequested`, so the core is stopped and the routes given back
+            // exactly as when the last window closes.
+            QUIT => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(Tray {
+        icon,
+        menu: Some(MenuLines {
+            server,
+            status,
+            toggle,
+        }),
+    })
 }

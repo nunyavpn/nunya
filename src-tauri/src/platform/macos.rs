@@ -9,6 +9,7 @@ pub use super::unix::{
     ipc_bind, ipc_unbind, no_console_window, peer_pid, peer_user_ok, restrict_dir, restrict_file,
     tighten, IpcAcceptor, IpcStream, PendingListener,
 };
+pub use super::tray_icon::{tray_mirror, Tray};
 use super::{Fact, GrantCopy, Granted};
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
@@ -126,4 +127,36 @@ pub(super) fn pid_of_peer(fd: RawFd) -> io::Result<u32> {
         return Err(io::Error::last_os_error());
     }
     Ok(pid as u32)
+}
+
+/// A status item with no menu, whose clicks open the popover.
+///
+/// No menu, rather than one moved to the right click: on macOS 27 a menu attached to the status
+/// item takes every click, the left one included, before tray-icon sees it — so the popover never
+/// opened and the menu did, whatever `show_menu_on_left_click` said. tray-icon 0.25.1 fixes it by
+/// attaching the menu only while showing it, but Tauri 2 is held to 0.24. The popover carries all
+/// the menu did (the status, Connect/Disconnect, Open Nunya, Quit), so either button opens it, as
+/// NordVPN's does.
+pub(super) fn install_tray(
+    app: &tauri::AppHandle,
+    icon: tauri::image::Image<'static>,
+    template: bool,
+) -> tauri::Result<Tray> {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+
+    crate::popover::create(app)?;
+    let icon = super::tray_icon::base(icon, template)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left | MouseButton::Right,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = event
+            {
+                crate::popover::toggle(tray.app_handle(), rect);
+            }
+        })
+        .build(app)?;
+    Ok(Tray { icon, menu: None })
 }

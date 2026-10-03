@@ -175,8 +175,9 @@ does.
   owner-only files (`restrict_dir`, `restrict_file`, `tighten`), the system browser
   (`browser_command`), the core's console window (`no_console_window`), and the core link's
   endpoint (`ipc_bind`, `IpcAcceptor`) and peer credentials (`peer_user_ok`, `peer_pid`), whose
-  rule stays in `rpc/peer.rs`. What macOS and Linux share is in `unix.rs`, which their files
-  re-export.
+  rule stays in `rpc/peer.rs`, and the tray (`Tray`, `tray_mirror`; what it says stays in
+  `tray.rs`). What macOS and Linux share is in `unix.rs`, and what macOS and Windows share of the
+  tray in `tray_icon.rs`, which their files re-export.
 - [applog.rs](src-tauri/src/applog.rs) — the app's own log goes to Diagnostics as well as stderr,
   with a backlog for what was logged before the window listened. A Windows release build has no
   console, so without it a core that failed to start left no trace.
@@ -372,7 +373,7 @@ mode it names what the listener covers, never the device.
 The tray icon is the app's mark in the rail shield's colours, in the macOS menu bar and the Linux
 top bar — the way OpenVPN's changes colour — with, on Linux, a menu of the server, the status,
 Connect/Disconnect, Show and Quit, and on macOS the popover below
-([tray.rs](src-tauri/src/tray.rs)). The menu owns no connection logic: Connect emits `tray-toggle`
+([tray.rs](src-tauri/src/tray.rs), and the per-platform half in `platform/`). The menu owns no connection logic: Connect emits `tray-toggle`
 and the frontend runs `toggleConnection`; the frontend reports every change through
 `set_tray_status` (`syncTray` in `main.ts`).
 
@@ -397,7 +398,7 @@ the bar before the tinted mark. Closing the window hides it only once the tray i
 a hidden window with no icon leaves a tunnel nobody can reach. The Dock icon (`RunEvent::Reopen`)
 brings the window back on macOS. The style guide shows all four states in both appearances.
 
-**On Linux the item is ours, not tray-icon's** ([sni.rs](src-tauri/src/sni.rs)): a
+**On Linux the item is ours, not tray-icon's** ([platform/sni.rs](src-tauri/src/platform/sni.rs)): a
 StatusNotifierItem and its DBusMenu spoken directly over `dbus`, which tao already links. Two of
 libayatana's choices could not be undone from above it. It always declares an `Activate` method,
 and tray-icon's GTK backend never handles one — so GNOME's appindicator extension, which reads

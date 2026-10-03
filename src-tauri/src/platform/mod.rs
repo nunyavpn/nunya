@@ -8,7 +8,7 @@
 //! error on that platform's CI job rather than a gap found by a user.
 //!
 //! Moved here so far: VPN-mode privilege, owner-only files, the system browser, the core's
-//! console window, and the core's link (its endpoint and who is on the other end of it). The rest moves in one concern at a time (issue #100).
+//! console window, the core's link (its endpoint and who is on the other end of it), and the tray. The rest moves in one concern at a time (issue #100).
 
 use std::fs;
 use std::io;
@@ -25,6 +25,14 @@ mod imp;
 /// What macOS and Linux share; only their files use it.
 #[cfg(unix)]
 mod unix;
+
+/// The tray on macOS and Windows, which both use tray-icon's item.
+#[cfg(not(target_os = "linux"))]
+mod tray_icon;
+
+/// Linux's own StatusNotifierItem, in place of tray-icon's.
+#[cfg(target_os = "linux")]
+mod sni;
 
 /// What the "Allow VPN mode" sheet says on this platform, or `None` where the app has no way to
 /// obtain privilege for VPN mode and must not offer a button that always fails.
@@ -75,6 +83,12 @@ pub use imp::peer_user_ok;
 /// The pid of the process on the other end of the link.
 pub use imp::peer_pid;
 
+/// The tray, in managed state once the first status built it (`tray::is_up`).
+pub use imp::Tray;
+
+/// Puts what the frontend reported into the platform's tray, creating the tray the first time.
+pub use imp::tray_mirror;
+
 /// What the caller has to do once `grant` has succeeded. Each platform builds only the variant
 /// its grant produces, hence the allowance.
 #[allow(dead_code)]
@@ -122,6 +136,16 @@ fn _signature_check(
     let _: io::Result<(PathBuf, PendingListener)> = ipc_bind(core.to_path_buf());
     ipc_unbind(core);
     grant(core)
+}
+
+/// The same, for the tray.
+#[allow(dead_code)]
+fn _tray_signature_check(
+    app: &tauri::AppHandle,
+    lines: &crate::tray::Lines,
+    icon: crate::tray::Pixels,
+) -> Result<(), String> {
+    tray_mirror(app, lines, icon, "")
 }
 
 /// The same, for the link's types and its async half.
