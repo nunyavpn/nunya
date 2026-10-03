@@ -3320,7 +3320,9 @@ button:disabled {
     bottom: 0;
     margin: 0;
     padding-top: 0;
-    transform: translateY(var(--sheet-y, 0px));
+    /* The handle, the first line and the padding under it: what a closed sheet leaves in view. */
+    --peek: 74px;
+    transform: translateY(var(--sheet-y, calc(100% - var(--peek))));
     transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
     /* The drag is ours; the page must not scroll or pull to refresh under it. */
     touch-action: none;
@@ -3409,6 +3411,11 @@ button:disabled {
     flex-wrap: nowrap;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+
+  /* Android's WebView still draws its own scrollbar when `scrollbar-width` says none. */
+  .st-more::-webkit-scrollbar {
+    display: none;
   }
 
   .st-more .tag {

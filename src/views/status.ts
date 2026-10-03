@@ -117,12 +117,14 @@ export class StatusCard {
    * follows the finger while dragged, and settles open or closed when let go — on where it was
    * left, or the way it was flicked. Closed, only its first line shows: the state and Connect.
    *
-   * It is moved, not rearranged: every part is laid out, and the sheet is pushed down by
-   * `--sheet-y` until only the first line is above the tab bar. Hiding parts instead could not
-   * follow a finger, since a part is either there or not. The offset lives on the card's own
-   * element, which `render` never replaces, so a sheet left open stays open while the card repaints
-   * every second. On the list, and on a desktop, nothing here applies: the stylesheet moves the
-   * card only on the map tab, and the handle shows only there.
+   * It is moved, not rearranged: every part is laid out, and the sheet is pushed down until only
+   * its first line (`--peek`) is above the tab bar. Hiding parts instead could not follow a finger,
+   * since a part is either there or not. Closed is the stylesheet's own position — its height less
+   * the peek — so it is right in any layout without measuring; this sets `--sheet-y` only while a
+   * finger holds the sheet, and to 0 when it settles open. That lives on the card's own element,
+   * which `render` never replaces, so a sheet left open stays open while the card repaints every
+   * second. On the list, and on a desktop, nothing here applies: the stylesheet moves the card
+   * only on the map tab, and the handle shows only there.
    */
   private open = false;
   /** Set by a drag, so the click the browser fires when one ends on the handle does not undo it. */
@@ -132,11 +134,9 @@ export class StatusCard {
     return this.root.closest(".window.show-map") !== null;
   }
 
-  /** How far down the closed sheet sits: everything below the first line, which stays in view. */
+  /** How far down the closed sheet sits, as the stylesheet places it: its height less the peek. */
   private closedOffset(): number {
-    const first = this.root.querySelector<HTMLElement>(".st-top > .btn");
-    if (!first) return 0;
-    const peek = first.offsetTop + first.offsetHeight + 12;
+    const peek = parseFloat(getComputedStyle(this.root).getPropertyValue("--peek")) || 0;
     return Math.max(0, this.root.offsetHeight - peek);
   }
 
@@ -146,7 +146,8 @@ export class StatusCard {
 
   private setOpen(open: boolean) {
     this.open = open;
-    this.place(open ? 0 : this.closedOffset());
+    if (open) this.place(0);
+    else this.root.style.removeProperty("--sheet-y");
     this.root.querySelector(".st-grab")?.setAttribute("aria-expanded", String(open));
   }
 
@@ -185,7 +186,8 @@ export class StatusCard {
       const at = Math.min(closed, Math.max(0, drag.from + dy));
       drag = null;
       this.root.classList.remove("dragging");
-      if (!this.dragged) return;
+      // A touch that never became a drag puts the sheet back exactly where it rests.
+      if (!this.dragged) return this.setOpen(this.open);
       // A flick decides by its direction; a slow drag by which end it was left nearer.
       if (speed < -0.4) this.setOpen(true);
       else if (speed > 0.4) this.setOpen(false);
@@ -193,14 +195,6 @@ export class StatusCard {
     };
     this.root.addEventListener("pointerup", settle);
     this.root.addEventListener("pointercancel", settle);
-
-    // The closed offset depends on the card's height, which changes with its content and when the
-    // tab changes; a closed sheet is kept exactly at it.
-    if (typeof ResizeObserver !== "undefined") {
-      new ResizeObserver(() => {
-        if (!this.open) this.place(this.closedOffset());
-      }).observe(this.root);
-    }
   }
 
   render(model: StatusModel) {
