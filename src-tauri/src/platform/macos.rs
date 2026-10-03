@@ -166,8 +166,8 @@ pub(super) fn install_tray(
 pub const TUN_NAME: Option<&str> = None;
 
 /// `networksetup` is the system proxy on macOS (`sysproxy.rs`'s `mac`).
-pub fn proxy_desktop() -> Result<Desktop, String> {
-    Ok(Desktop::Mac)
+pub fn proxy_desktops() -> Result<Vec<Desktop>, String> {
+    Ok(vec![Desktop::Mac])
 }
 
 /// The popover's own commands (`tray.rs`) hide it before doing what they say.

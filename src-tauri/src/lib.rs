@@ -481,7 +481,12 @@ async fn set_system_proxy(
             sysproxy::write_saved(&dir, &saved)?;
             *held = Some(saved);
         }
-        if let Err(e) = sysproxy::apply(port) {
+        // What was captured decides what is set, so nothing is changed that cannot be put back.
+        let applied = match held.as_ref() {
+            Some(saved) => sysproxy::apply(saved, port),
+            None => Err("the system proxy was not captured".into()),
+        };
+        if let Err(e) = applied {
             let _ = restore_held(&dir, &mut held);
             return Err(e);
         }
