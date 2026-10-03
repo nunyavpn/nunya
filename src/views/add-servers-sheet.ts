@@ -13,6 +13,7 @@
 import { h, render } from "../dom";
 import { addSubscription, classify, manualGroupName } from "../features/add-servers";
 import { guessCity, guessCountry, place } from "../geo";
+import { OS } from "../platform";
 import { extractWgQuick, type Profile } from "../share";
 import { MANUAL_GROUP_ID, store, type Server } from "../store";
 import { ProfileEditor } from "./editor";
@@ -41,7 +42,7 @@ export function openAddServers() {
 }
 
 /** The paste shortcut's modifier as this platform spells it. */
-const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl ";
+const MOD_KEY = OS === "macos" ? "⌘" : "Ctrl ";
 
 /** The three ways in. A link is the common case, so it is where the sheet opens. */
 type AddTab = "link" | "qr" | "manual";

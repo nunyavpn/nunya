@@ -167,19 +167,19 @@ and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle
 [lib.rs](src-tauri/src/lib.rs)**, as a library so integration tests use the same modules the binary
 does.
 
-- [platform/](src-tauri/src/platform/mod.rs) — what differs between macOS, Linux and Windows, one
-  file per OS behind one interface, only the target's compiled. **New platform-specific code goes
-  here, not in `#[cfg]` branches inside shared code**; the rest of the tree moves in over time
-  (issue #100). Today it holds VPN-mode privilege: `GRANT` (the grant sheet's words, `None` where
-  there is no grant) and `grant` — setuid core on macOS, a UAC relaunch of the app on Windows; plus
-  owner-only files (`restrict_dir`, `restrict_file`, `tighten`), the system browser
-  (`browser_command`), the core's console window (`no_console_window`), and the core link's
-  endpoint (`ipc_bind`, `IpcAcceptor`) and peer credentials (`peer_user_ok`, `peer_pid`), whose
-  rule stays in `rpc/peer.rs`, and the tray (`Tray`, `tray_mirror`; what it says stays in
-  `tray.rs`). What macOS and Linux share is in `unix.rs`, and what macOS and Windows share of the
-  tray in `tray_icon.rs`, which their files re-export. macOS's own modules — the popover and the
-  NetworkExtension transport — live here too, and `NETWORK_EXTENSION` says whether
-  `transport::select` may offer the latter.
+- [platform/](src-tauri/src/platform/mod.rs) — everything that differs between macOS, Linux and
+  Windows, one file per OS behind one interface, only the target's compiled; `mod.rs` is the only
+  place a target is chosen. **No `#[cfg]` on the target outside `platform/` and tests** — the rule
+  and its corollaries are in `docs/ENGINEERING_STANDARDS.md`. It holds: VPN-mode privilege (`GRANT`,
+  `grant`); owner-only files (`restrict_dir`, `restrict_file`, `tighten`); the system browser
+  (`browser_command`); console windows (`no_console_window`); the core link's endpoint (`ipc_bind`,
+  `IpcAcceptor`) and peer credentials (`peer_user_ok`, `peer_pid` — the rule stays in
+  `rpc/peer.rs`); the tray (`Tray`, `tray_mirror` — what it says stays in `tray.rs`); the TUN's
+  name (`TUN_NAME`); the system proxy's tool (`proxy_desktop`, a runtime choice on Linux); macOS's
+  own modules (the popover, the Dock's reopen, the NetworkExtension transport behind
+  `NETWORK_EXTENSION`); and `OS`, put into every webview as `window.__NUNYA_OS__` for
+  `src/platform.ts`. What macOS and Linux share is `unix.rs`, what macOS and Windows share of the
+  tray is `tray_icon.rs`, and Linux's StatusNotifierItem is `sni.rs`.
 - [applog.rs](src-tauri/src/applog.rs) — the app's own log goes to Diagnostics as well as stderr,
   with a backlog for what was logged before the window listened. A Windows release build has no
   console, so without it a core that failed to start left no trace.

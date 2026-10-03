@@ -966,6 +966,8 @@ pub fn run() {
     tauri::Builder::default()
         // Verifies and installs updates; which release to take is `update.rs`'s decision.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Tells the frontend which system this is (`src/platform.ts`).
+        .plugin(platform::webview_plugin())
         .setup(|app| {
             applog::attach(app.handle().clone());
             // Per-user private directory. On macOS `temp_dir` is already inside the user's

@@ -196,3 +196,5 @@ pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transpo
         "Nunya",
     )))
 }
+
+pub const OS: &str = "macos";

@@ -10,7 +10,8 @@
 //! Moved here so far: VPN-mode privilege, owner-only files, the system browser, the core's
 //! console window, the core's link (its endpoint and who is on the other end of it), the tray, the
 //! TUN's name, which tool sets the system proxy, and what only macOS has: the menu-bar popover,
-//! the Dock's reopen, and the NetworkExtension transport. The rest moves in one concern at a time (issue #100).
+//! the Dock's reopen, and the NetworkExtension transport; and which system this is, for the
+//! frontend (`OS`, `webview_plugin`). The rest moves in one concern at a time (issue #100).
 
 use std::fs;
 use std::io;
@@ -119,6 +120,19 @@ pub use imp::NETWORK_EXTENSION;
 /// That transport, where `NETWORK_EXTENSION` is true.
 pub use imp::network_extension_transport;
 
+/// `macos`, `linux` or `windows`: the one platform fact the frontend is told (`src/platform.ts`),
+/// so it keys its own per-platform values on this rather than on the webview's guess.
+pub use imp::OS;
+
+/// Puts `OS` into every webview as `window.__NUNYA_OS__` before the page's own script runs, so the
+/// frontend reads it synchronously, at import, where its constants are. A command would be
+/// asynchronous, and needs a capability; this needs neither.
+pub fn webview_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("nunya-platform")
+        .js_init_script(format!("window.__NUNYA_OS__ = {OS:?};"))
+        .build()
+}
+
 /// What the caller has to do once `grant` has succeeded. Each platform builds only the variant
 /// its grant produces, hence the allowance.
 #[allow(dead_code)]
@@ -179,6 +193,7 @@ fn _tray_signature_check(
 ) -> Result<(), String> {
     hide_popover(app);
     let _: bool = NETWORK_EXTENSION;
+    let _: &'static str = OS;
     let _: Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> = network_extension_transport();
     tray_mirror(app, lines, icon, "")
 }

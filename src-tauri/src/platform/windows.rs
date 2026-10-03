@@ -262,3 +262,5 @@ pub const NETWORK_EXTENSION: bool = false;
 pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> {
     None
 }
+
+pub const OS: &str = "windows";
