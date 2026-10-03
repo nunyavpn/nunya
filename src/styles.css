@@ -3218,9 +3218,9 @@ button:disabled {
      the map has a tab of its own (`#nav-map`, `.window.show-map`), since it is looked at now and
        then and would otherwise cost a third of the screen all the time;
      the status card sits above the tab bar as one line — the state and Connect. On the map's tab
-       it is a sheet: swiped up, or its handle tapped (`.status.open`, `StatusCard.swipe`), it
-       shows the speeds, Share and the chips over the map. On the list it stays one line, so the
-       list keeps the screen;
+       it is a bottom sheet over the map, as in any phone app: it follows the finger and settles
+       open or closed (`StatusCard.swipe`, which moves it by `--sheet-y`), showing the speeds, Share
+       and the chips when open. On the list it stays one line, so the list keeps the screen;
      the rail is the tab bar, where a thumb reaches.
 
    Collapsed, the card still makes no claim it cannot keep: its headline is keyed by mode ("Proxy
@@ -3311,10 +3311,29 @@ button:disabled {
     padding: 12px 14px;
   }
 
+  /* The sheet: over the map's bottom edge, everything laid out, pushed down until only its first
+     line shows. It eases into place when let go, and tracks the finger exactly while dragged. */
   .window.show-map .status {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
     padding-top: 0;
-    /* The swipe is ours; the page must not scroll or pull to refresh under it. */
+    transform: translateY(var(--sheet-y, 0px));
+    transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+    /* The drag is ours; the page must not scroll or pull to refresh under it. */
     touch-action: none;
+  }
+
+  .window.show-map .status.dragging {
+    transition: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .window.show-map .status {
+      transition: none;
+    }
   }
 
   .window.show-map .st-grab {
@@ -3367,16 +3386,16 @@ button:disabled {
     margin-left: auto;
   }
 
-  /* Collapsed keeps what must not be a swipe away: why Connect cannot be used, the grant's note,
-     and in proxy mode "Only apps set to use it" — the warnings and notes, and nothing else. */
-  :is(.window:not(.show-map) .status, .status:not(.open)) :is(.st-flow, .st-share),
-  :is(.window:not(.show-map) .status, .status:not(.open)) .st-top::after,
-  :is(.window:not(.show-map) .status, .status:not(.open)) .st-more:not(:has(.tag.warn, .tag.note)),
-  :is(.window:not(.show-map) .status, .status:not(.open)) .st-more .tag:not(.warn):not(.note) {
+  /* On the list the card is one line, and keeps only what must not be a tab away: why Connect
+     cannot be used, the grant's note, and in proxy mode "Only apps set to use it". */
+  .window:not(.show-map) .status :is(.st-flow, .st-share),
+  .window:not(.show-map) .status .st-top::after,
+  .window:not(.show-map) .status .st-more:not(:has(.tag.warn, .tag.note)),
+  .window:not(.show-map) .status .st-more .tag:not(.warn):not(.note) {
     display: none;
   }
 
-  :is(.window:not(.show-map) .status, .status:not(.open)) .st-more {
+  .window:not(.show-map) .status .st-more {
     border-top: 0;
     padding-top: 0;
   }

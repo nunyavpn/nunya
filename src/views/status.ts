@@ -113,32 +113,94 @@ export class StatusCard {
   }
 
   /**
-   * On a phone the card is a bottom sheet: one line — the state and Connect — until it is swiped
-   * up, or its handle tapped, for the speeds, Share and the chips. The open state is a class on the
-   * card's own element, which `render` never replaces, so it survives the card repainting every
-   * second. On a desktop the handle is not shown and the class changes nothing.
+   * On a phone's map tab the card is a bottom sheet, as in any phone app: it floats over the map,
+   * follows the finger while dragged, and settles open or closed when let go — on where it was
+   * left, or the way it was flicked. Closed, only its first line shows: the state and Connect.
+   *
+   * It is moved, not rearranged: every part is laid out, and the sheet is pushed down by
+   * `--sheet-y` until only the first line is above the tab bar. Hiding parts instead could not
+   * follow a finger, since a part is either there or not. The offset lives on the card's own
+   * element, which `render` never replaces, so a sheet left open stays open while the card repaints
+   * every second. On the list, and on a desktop, nothing here applies: the stylesheet moves the
+   * card only on the map tab, and the handle shows only there.
    */
-  /** Set by a swipe, so the click the browser fires when it ends on the handle does not undo it. */
-  private swiped = false;
+  private open = false;
+  /** Set by a drag, so the click the browser fires when one ends on the handle does not undo it. */
+  private dragged = false;
 
-  private swipe() {
-    let from: number | null = null;
-    this.root.addEventListener("pointerdown", (e) => {
-      from = (e.target as Element).closest?.("button:not(.st-grab)") ? null : e.clientY;
-    });
-    this.root.addEventListener("pointerup", (e) => {
-      if (from === null) return;
-      const dy = e.clientY - from;
-      from = null;
-      this.swiped = Math.abs(dy) > 24;
-      if (dy < -24) this.setOpen(true);
-      else if (dy > 24) this.setOpen(false);
-    });
+  private onMap(): boolean {
+    return this.root.closest(".window.show-map") !== null;
+  }
+
+  /** How far down the closed sheet sits: everything below the first line, which stays in view. */
+  private closedOffset(): number {
+    const first = this.root.querySelector<HTMLElement>(".st-top > .btn");
+    if (!first) return 0;
+    const peek = first.offsetTop + first.offsetHeight + 12;
+    return Math.max(0, this.root.offsetHeight - peek);
+  }
+
+  private place(offset: number) {
+    this.root.style.setProperty("--sheet-y", `${offset}px`);
   }
 
   private setOpen(open: boolean) {
-    this.root.classList.toggle("open", open);
+    this.open = open;
+    this.place(open ? 0 : this.closedOffset());
     this.root.querySelector(".st-grab")?.setAttribute("aria-expanded", String(open));
+  }
+
+  private swipe() {
+    // Where the drag began, the sheet's offset then, and the last move, for the release speed.
+    let drag: { y: number; from: number; lastY: number; lastT: number; v: number } | null = null;
+
+    this.root.addEventListener("pointerdown", (e) => {
+      if (!this.onMap() || (e.target as Element).closest?.("button:not(.st-grab)")) return;
+      const from = this.open ? 0 : this.closedOffset();
+      drag = { y: e.clientY, from, lastY: e.clientY, lastT: e.timeStamp, v: 0 };
+      this.dragged = false;
+      this.root.setPointerCapture(e.pointerId);
+      this.root.classList.add("dragging");
+    });
+
+    this.root.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const dy = e.clientY - drag.y;
+      if (Math.abs(dy) > 6) this.dragged = true;
+      // Pixels per millisecond over the latest move, for telling a flick from a slow drag that
+      // stopped halfway.
+      const dt = e.timeStamp - drag.lastT;
+      if (dt > 0) drag.v = (e.clientY - drag.lastY) / dt;
+      drag.lastY = e.clientY;
+      drag.lastT = e.timeStamp;
+      this.place(Math.min(this.closedOffset(), Math.max(0, drag.from + dy)));
+    });
+
+    const settle = (e: PointerEvent) => {
+      if (!drag) return;
+      const dy = e.clientY - drag.y;
+      // A finger that stopped before lifting is not a flick, however fast it moved earlier.
+      const speed = e.timeStamp - drag.lastT > 80 ? 0 : drag.v;
+      const closed = this.closedOffset();
+      const at = Math.min(closed, Math.max(0, drag.from + dy));
+      drag = null;
+      this.root.classList.remove("dragging");
+      if (!this.dragged) return;
+      // A flick decides by its direction; a slow drag by which end it was left nearer.
+      if (speed < -0.4) this.setOpen(true);
+      else if (speed > 0.4) this.setOpen(false);
+      else this.setOpen(at < closed / 2);
+    };
+    this.root.addEventListener("pointerup", settle);
+    this.root.addEventListener("pointercancel", settle);
+
+    // The closed offset depends on the card's height, which changes with its content and when the
+    // tab changes; a closed sheet is kept exactly at it.
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => {
+        if (!this.open) this.place(this.closedOffset());
+      }).observe(this.root);
+    }
   }
 
   render(model: StatusModel) {
@@ -149,10 +211,10 @@ export class StatusCard {
         {
           class: "st-grab",
           "aria-label": "More about this connection",
-          "aria-expanded": String(this.root.classList.contains("open")),
+          "aria-expanded": String(this.open),
           onclick: () => {
-            if (this.swiped) this.swiped = false;
-            else this.setOpen(!this.root.classList.contains("open"));
+            if (this.dragged) this.dragged = false;
+            else this.setOpen(!this.open);
           },
         },
         h("i"),
