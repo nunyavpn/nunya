@@ -18,8 +18,9 @@ name: release
 # core as root instead, after the administrator prompt (`core_proc::grant_root`).
 # scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
 #
-# Linux is packages only: a .deb for Debian and Ubuntu on x86-64 and arm64, and an Arch package
-# (.pkg.tar.zst) for Arch, Manjaro and their kin, made from that same .deb by scripts/package-arch.sh.
+# Linux is packages only, for the three families: a .deb (Debian, Ubuntu, Mint…) and an .rpm (Fedora,
+# RHEL, openSUSE…) on x86-64 and arm64, and an Arch package (.pkg.tar.zst; Arch, Manjaro…) on x86-64,
+# made from that same .deb by scripts/package-arch.sh. Tauri builds the .rpm itself, no rpmbuild.
 # A package belongs to its package manager, so the app never updates itself there. There is no
 # AppImage: linuxdeploy rewrites the bundled core with patchelf, its read-only mount takes none of
 # the capabilities VPN mode needs (platform/linux.rs), and its library path broke the desktop tools
@@ -110,10 +111,10 @@ jobs:
             bundles: nsis
           - runner: ubuntu-22.04
             label: linux-x86_64
-            bundles: deb
+            bundles: deb,rpm
           - runner: ubuntu-22.04-arm
             label: linux-arm64
-            bundles: deb
+            bundles: deb,rpm
     runs-on: ${{ matrix.runner }}
     # Git Bash on Windows, so the scripts run the same everywhere.
     defaults:
@@ -196,8 +197,8 @@ jobs:
               cp "$bundle"/nsis/*-setup.exe.sig out/
             fi
           else
-            # The package only, never a signature: a package manager updates Linux, not the app.
-            cp "$bundle"/deb/*.deb out/
+            # The packages only, never a signature: a package manager updates Linux, not the app.
+            cp "$bundle"/deb/*.deb "$bundle"/rpm/*.rpm out/
           fi
           ls -la out
 
@@ -211,6 +212,20 @@ jobs:
             chown -R builder out
             su builder -c "./scripts/package-arch.sh out/Nunya_*_amd64.deb out"'
           ls -la out
+
+      # Nothing here can install an .rpm, so a clean Fedora does: its dependencies must resolve, Nunya
+      # and the core must land root-owned in /usr/bin (VPN mode's grant requires it), and no library
+      # may be missing. A package that fails this is not released.
+      - name: Install the .rpm on Fedora
+        if: matrix.label == 'linux-x86_64'
+        run: |
+          docker run --rm -v "$PWD/out:/out:ro" fedora:latest bash -euc '
+            dnf install -y -q /out/Nunya-*.x86_64.rpm
+            for f in /usr/bin/Nunya /usr/bin/nunya-core; do
+              [ "$(stat -c %U "$f")" = root ] || { echo "$f is not owned by root"; exit 1; }
+            done
+            if ldd /usr/bin/Nunya | grep "not found"; then exit 1; fi
+            echo "the .rpm installs, root-owned, with every library found"'
 
       - uses: actions/upload-artifact@v4
         with:
@@ -282,7 +297,8 @@ jobs:
           SmartScreen may warn before it runs: choose **More info → Run anyway**.
 
           **Linux**: install a package. Debian and Ubuntu: \`sudo apt install ./Nunya_${VERSION}_amd64.deb\`
-          (\`arm64.deb\` on ARM). Arch and Manjaro: \`sudo pacman -U nunya-${VERSION}-1-x86_64.pkg.tar.zst\`.
+          (\`arm64.deb\` on ARM). Fedora: \`sudo dnf install ./Nunya-${VERSION}-1.x86_64.rpm\` (\`aarch64.rpm\` on
+          ARM). Arch and Manjaro: \`sudo pacman -U nunya-${VERSION}-1-x86_64.pkg.tar.zst\`.
           Your package manager updates it. VPN mode asks for your password once through polkit.
 
           ${UPDATING}
