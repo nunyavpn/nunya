@@ -3520,14 +3520,9 @@ button:disabled {
     padding: 8px 10px;
   }
 
+  /* Fingers zoom a phone's map (pinch, in `WorldMap.bindInput`); buttons would only cover it. */
   .mapzoom {
-    top: 12px;
-    right: 12px;
-  }
-
-  .mapzoom button {
-    width: 40px;
-    height: 38px;
+    display: none;
   }
 
   .mpick {

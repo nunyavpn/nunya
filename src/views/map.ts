@@ -455,27 +455,51 @@ export class WorldMap {
       this.zoomAt(e.shiftKey ? 0.5 : 2, x, y);
     });
 
-    let dragging: { x: number; y: number } | null = null;
+    // Every finger, or the mouse, on the map, by pointer: one drags it, two pinch it. A phone has
+    // no buttons for zooming (the stylesheet hides them there); fingers are how a map is zoomed.
+    const touching = new Map<number, { x: number; y: number }>();
+    let pinch: { distance: number; x: number; y: number } | null = null;
+    const spread = () => {
+      const [a, b] = [...touching.values()];
+      return { distance: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    };
+
     pane.addEventListener("pointerdown", (e) => {
-      // A pin is a button: pressing it picks it rather than starting a drag.
-      if (e.button !== 0 || !onMap(e) || (e.target as Element).closest?.(".pin")) return;
-      dragging = { x: e.clientX, y: e.clientY };
+      if (e.button !== 0 || !onMap(e)) return;
+      // A pin is a button: pressing it picks it rather than starting a drag. A second finger
+      // landing on one still joins a pinch.
+      if ((e.target as Element).closest?.(".pin") && touching.size === 0) return;
+      touching.set(e.pointerId, { x: e.clientX, y: e.clientY });
       canvas.setPointerCapture(e.pointerId);
       canvas.classList.add("dragging");
+      if (touching.size === 2) pinch = spread();
     });
     canvas.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      this.panBy(e.clientX - dragging.x, e.clientY - dragging.y);
-      dragging = { x: e.clientX, y: e.clientY };
+      const last = touching.get(e.pointerId);
+      if (!last) return;
+      touching.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touching.size === 2 && pinch) {
+        // What is under the fingers stays under them: the map follows their midpoint, and zooms
+        // about it by how far they spread.
+        const now = spread();
+        const box = canvas.getBoundingClientRect();
+        this.panBy(now.x - pinch.x, now.y - pinch.y);
+        if (pinch.distance > 0) {
+          this.zoomAt(now.distance / pinch.distance, now.x - box.left, now.y - box.top);
+        }
+        pinch = now;
+      } else if (touching.size === 1) {
+        this.panBy(e.clientX - last.x, e.clientY - last.y);
+      }
     });
-    const stop = (e: PointerEvent) => {
-      if (!dragging) return;
-      dragging = null;
-      canvas.releasePointerCapture(e.pointerId);
-      canvas.classList.remove("dragging");
+    const lift = (e: PointerEvent) => {
+      if (!touching.delete(e.pointerId)) return;
+      if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+      if (touching.size < 2) pinch = null;
+      if (touching.size === 0) canvas.classList.remove("dragging");
     };
-    canvas.addEventListener("pointerup", stop);
-    canvas.addEventListener("pointercancel", stop);
+    canvas.addEventListener("pointerup", lift);
+    canvas.addEventListener("pointercancel", lift);
   }
 
   /** + / − / reset, over the map's top-right corner, for anyone without a wheel. */
