@@ -13,8 +13,6 @@
 
 use std::collections::HashMap;
 use std::io;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -23,21 +21,12 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{oneshot, Mutex};
 
-/// Bound before the async runtime exists, so it stays a std listener until `accept_loop` adopts it.
-#[cfg(unix)]
-pub type PendingListener = std::os::unix::net::UnixListener;
-
-/// The pipe's name. tokio creates a pipe only on a runtime, and `bind` runs outside one, so the
-/// first instance is made by `accept_loop`. The core does not notice the gap: it retries its dial
-/// for five seconds (`RunCore` in the core's `main.go`).
-#[cfg(windows)]
-pub type PendingListener = std::ffi::OsString;
-
 /// The write half of whichever stream the platform accepted.
 type Writer = Box<dyn AsyncWrite + Send + Unpin>;
 
 use super::codec::{self, Response};
 use super::peer;
+use crate::platform::{self, IpcAcceptor, PendingListener};
 
 /// A call that outlives this is a hung core, not a slow one. `Test` sweeps are the long pole and
 /// they carry their own timeout well under this.
@@ -83,30 +72,9 @@ impl CoreLink {
         let socket_path = socket_path.into();
         if let Some(dir) = socket_path.parent() {
             std::fs::create_dir_all(dir)?;
-            #[cfg(unix)]
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            platform::restrict_dir(dir)?;
         }
-
-        #[cfg(unix)]
-        let listener = {
-            // A crashed run leaves the socket file behind and bind() would fail with EADDRINUSE.
-            if socket_path.exists() {
-                std::fs::remove_file(&socket_path)?;
-            }
-            let listener = PendingListener::bind(&socket_path)?;
-            // Required before tokio can adopt it; a blocking accept would stall the runtime thread.
-            listener.set_nonblocking(true)?;
-            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
-            listener
-        };
-
-        #[cfg(windows)]
-        let (socket_path, listener) = {
-            let name = pipe_name();
-            (PathBuf::from(&name), name)
-        };
-
-
+        let (socket_path, listener) = platform::ipc_bind(socket_path)?;
 
         let link = Arc::new(Self {
             socket_path,
@@ -132,28 +100,25 @@ impl CoreLink {
         self.writer.lock().await.is_some()
     }
 
-    /// Accepts core connections forever. Each accepted socket is verified, served until EOF, then
-    /// dropped so the next core process can take its place.
-    #[cfg(unix)]
+    /// Accepts core connections forever. Each accepted connection is verified, served until EOF,
+    /// then dropped so the next core process can take its place.
     pub async fn accept_loop(
         self: Arc<Self>,
         listener: PendingListener,
         on_change: impl Fn(bool) + Send + Sync + 'static,
     ) {
-        use std::os::unix::io::AsRawFd;
-
-        let listener = match tokio::net::UnixListener::from_std(listener) {
-            Ok(l) => l,
+        let mut acceptor = match IpcAcceptor::adopt(listener) {
+            Ok(a) => a,
             Err(e) => {
-                log::error!("could not adopt the core listener onto the runtime: {e}");
+                log::error!("could not open the core endpoint on the runtime: {e}");
                 return;
             }
         };
         let on_change = Arc::new(on_change);
 
         loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(pair) => pair,
+            let stream = match acceptor.accept().await {
+                Ok(s) => s,
                 Err(e) => {
                     log::error!("accept failed, the core link is dead: {e}");
                     return;
@@ -161,57 +126,8 @@ impl CoreLink {
             };
 
             let expected = self.expected_pid.load(Ordering::SeqCst);
-            if let Err(why) = peer::verify(stream.as_raw_fd(), expected) {
-                log::warn!("rejected a connection to the core socket: {why}");
-                drop(stream);
-                continue;
-            }
-
-            log::info!("core connected (pid {expected})");
-            self.clone().serve_connection(stream, on_change.clone()).await;
-            log::info!("core disconnected");
-        }
-    }
-
-    /// The pipe version of the same loop. A pipe instance carries one connection, so the next one
-    /// is created before the connected one is served, and a core restarted meanwhile finds it.
-    ///
-    /// `first_pipe_instance` makes creating the pipe fail if something else already made one of
-    /// this name, rather than joining it, so the pipe that is served is always ours.
-    #[cfg(windows)]
-    pub async fn accept_loop(
-        self: Arc<Self>,
-        listener: PendingListener,
-        on_change: impl Fn(bool) + Send + Sync + 'static,
-    ) {
-        use tokio::net::windows::named_pipe::ServerOptions;
-
-        let mut server = match ServerOptions::new().first_pipe_instance(true).create(&listener) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("could not create the core pipe: {e}");
-                return;
-            }
-        };
-        let on_change = Arc::new(on_change);
-
-        loop {
-            if let Err(e) = server.connect().await {
-                log::error!("accept failed, the core link is dead: {e}");
-                return;
-            }
-            let next = match ServerOptions::new().create(&listener) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("could not create the next core pipe: {e}");
-                    return;
-                }
-            };
-            let stream = std::mem::replace(&mut server, next);
-
-            let expected = self.expected_pid.load(Ordering::SeqCst);
-            if let Err(why) = peer::verify_pipe(&stream, expected) {
-                log::warn!("rejected a connection to the core pipe: {why}");
+            if let Err(why) = peer::verify(&stream, expected) {
+                log::warn!("rejected a connection to the core endpoint: {why}");
                 drop(stream);
                 continue;
             }
@@ -324,26 +240,6 @@ impl CoreLink {
 
 impl Drop for CoreLink {
     fn drop(&mut self) {
-        // Leaving the socket file behind would make the next run's bind() fail. A pipe has no file;
-        // it goes when its last handle closes.
-        #[cfg(unix)]
-        let _ = std::fs::remove_file(&self.socket_path);
+        platform::ipc_unbind(&self.socket_path);
     }
-}
-
-/// A pipe name no other link will use: the main core's and every probe core's are bound from one
-/// process, and a name reused from a crashed run would fail `first_pipe_instance`.
-#[cfg(windows)]
-fn pipe_name() -> std::ffi::OsString {
-    static NEXT: AtomicU32 = AtomicU32::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    format!(
-        r"\\.\pipe\nunya-{}-{nanos}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    )
-    .into()
 }

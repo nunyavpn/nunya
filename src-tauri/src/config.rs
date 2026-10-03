@@ -628,10 +628,9 @@ pub fn build(req: &BuildRequest) -> Value {
             tun.insert("auto_route".into(), json!(true));
             tun.insert("strict_route".into(), json!(req.tun.strict_route));
             tun.insert("stack".into(), json!(req.tun.stack));
-            // interface_name is left unset on macOS so the system assigns the next utun number,
-            // which is what generate.cpp does too.
-            #[cfg(not(target_os = "macos"))]
-            tun.insert("interface_name".into(), json!("nunya-tun"));
+            if let Some(name) = crate::platform::TUN_NAME {
+                tun.insert("interface_name".into(), json!(name));
+            }
             Value::Object(tun)
         }
         // One listener speaking both SOCKS and HTTP, which is what `mixed` is. Two inbounds on

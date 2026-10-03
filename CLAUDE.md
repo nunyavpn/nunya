@@ -167,14 +167,19 @@ and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle
 [lib.rs](src-tauri/src/lib.rs)**, as a library so integration tests use the same modules the binary
 does.
 
-- [platform/](src-tauri/src/platform/mod.rs) — what differs between macOS, Linux and Windows, one
-  file per OS behind one interface, only the target's compiled. **New platform-specific code goes
-  here, not in `#[cfg]` branches inside shared code**; the rest of the tree moves in over time
-  (issue #100). Today it holds VPN-mode privilege: `GRANT` (the grant sheet's words, `None` where
-  there is no grant) and `grant` — setuid core on macOS, a UAC relaunch of the app on Windows; plus
-  owner-only files (`restrict_dir`, `restrict_file`, `tighten`), the system browser
-  (`browser_command`) and the core's console window (`no_console_window`). What macOS and Linux
-  share is in `unix.rs`, which their files re-export.
+- [platform/](src-tauri/src/platform/mod.rs) — everything that differs between macOS, Linux and
+  Windows, one file per OS behind one interface, only the target's compiled; `mod.rs` is the only
+  place a target is chosen. **No `#[cfg]` on the target outside `platform/` and tests** — the rule
+  and its corollaries are in `docs/ENGINEERING_STANDARDS.md`. It holds: VPN-mode privilege (`GRANT`,
+  `grant`); owner-only files (`restrict_dir`, `restrict_file`, `tighten`); the system browser
+  (`browser_command`); console windows (`no_console_window`); the core link's endpoint (`ipc_bind`,
+  `IpcAcceptor`) and peer credentials (`peer_user_ok`, `peer_pid` — the rule stays in
+  `rpc/peer.rs`); the tray (`Tray`, `tray_mirror` — what it says stays in `tray.rs`); the TUN's
+  name (`TUN_NAME`); the system proxy's tool (`proxy_desktop`, a runtime choice on Linux); macOS's
+  own modules (the popover, the Dock's reopen, the NetworkExtension transport behind
+  `NETWORK_EXTENSION`); and `OS`, put into every webview as `window.__NUNYA_OS__` for
+  `src/platform.ts`. What macOS and Linux share is `unix.rs`, what macOS and Windows share of the
+  tray is `tray_icon.rs`, and Linux's StatusNotifierItem is `sni.rs`.
 - [applog.rs](src-tauri/src/applog.rs) — the app's own log goes to Diagnostics as well as stderr,
   with a backlog for what was logged before the window listened. A Windows release build has no
   console, so without it a core that failed to start left no trace.
@@ -370,7 +375,7 @@ mode it names what the listener covers, never the device.
 The tray icon is the app's mark in the rail shield's colours, in the macOS menu bar and the Linux
 top bar — the way OpenVPN's changes colour — with, on Linux, a menu of the server, the status,
 Connect/Disconnect, Show and Quit, and on macOS the popover below
-([tray.rs](src-tauri/src/tray.rs)). The menu owns no connection logic: Connect emits `tray-toggle`
+([tray.rs](src-tauri/src/tray.rs), and the per-platform half in `platform/`). The menu owns no connection logic: Connect emits `tray-toggle`
 and the frontend runs `toggleConnection`; the frontend reports every change through
 `set_tray_status` (`syncTray` in `main.ts`).
 
@@ -395,7 +400,7 @@ the bar before the tinted mark. Closing the window hides it only once the tray i
 a hidden window with no icon leaves a tunnel nobody can reach. The Dock icon (`RunEvent::Reopen`)
 brings the window back on macOS. The style guide shows all four states in both appearances.
 
-**On Linux the item is ours, not tray-icon's** ([sni.rs](src-tauri/src/sni.rs)): a
+**On Linux the item is ours, not tray-icon's** ([platform/sni.rs](src-tauri/src/platform/sni.rs)): a
 StatusNotifierItem and its DBusMenu spoken directly over `dbus`, which tao already links. Two of
 libayatana's choices could not be undone from above it. It always declares an `Activate` method,
 and tray-icon's GTK backend never handles one — so GNOME's appindicator extension, which reads
@@ -424,7 +429,7 @@ while showing it), but Tauri 2 is held to 0.24. So the macOS `install` builds th
 one, and either button opens the popover, which carries everything the menu did. Revisit a
 right-click menu when Tauri moves to tray-icon 0.25.
 
-[popover.rs](src-tauri/src/popover.rs) makes the window: created with the tray and hidden (a
+[platform/popover.rs](src-tauri/src/platform/popover.rs) makes the window: created with the tray and hidden (a
 webview that loads on the click opens half a second late), transparent (`macOSPrivateApi`, so the
 page draws the rounded panel and its shadow inside `MARGIN`, which must match `--margin` in
 `popover.css`), hidden again on losing focus, with `REOPEN_GUARD` so the click that closed it by

@@ -8,16 +8,14 @@
 //! ObjC shim links, that the C ABI lines up on both sides, and that the completion-handler APIs
 //! resolve their channels rather than hanging.
 
-#![cfg(target_os = "macos")]
-
 use std::time::{Duration, Instant};
 
 /// Above this, the callback never fired and we are looking at a deadlock rather than a slow call.
 const CALL_CEILING: Duration = Duration::from_secs(25);
 
-use nunya_lib::config::Mode;
-use nunya_lib::transport::network_extension::NetworkExtensionTransport;
-use nunya_lib::transport::{TunnelState, TunnelTransport};
+use super::NetworkExtensionTransport;
+use crate::config::Mode;
+use crate::transport::{TunnelState, TunnelTransport};
 
 fn transport() -> NetworkExtensionTransport {
     NetworkExtensionTransport::new("com.nunyavpn.app.NunyaTunnel", "Nunya")

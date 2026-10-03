@@ -9,136 +9,22 @@
 //!
 //! These checks close that gap. They are cheap and they run before a single byte is read.
 //!
-//! On Windows the link is a named pipe, and the core checks it the same way from its side
-//! (`GetNamedPipeServerProcessId`, `internal/ipc/ipc_windows.go`); `verify_pipe` is our half.
+//! This file is the rule; reading the peer's credentials off a socket or a pipe is the platform's
+//! (`platform::peer_user_ok`, `platform::peer_pid`). On Windows the link is a named pipe, and the
+//! core checks it the same way from its side (`GetNamedPipeServerProcessId`,
+//! `internal/ipc/ipc_windows.go`).
 
-use std::io;
-#[cfg(unix)]
-use std::os::unix::io::RawFd;
-
-/// `getsockopt` level for `AF_UNIX` socket options on Darwin.
-#[cfg(target_os = "macos")]
-const SOL_LOCAL: libc::c_int = 0;
-
-/// Returns the pid of the process on the other end of a connected `AF_UNIX` socket.
-#[cfg(target_os = "macos")]
-const LOCAL_PEERPID: libc::c_int = 0x002;
-
-/// Effective uid of the peer process.
-///
-/// `getpeereid` is a BSD interface. Linux has no such call and answers all three questions — pid,
-/// uid and gid — from a single `SO_PEERCRED` option instead, which is why the two platforms split
-/// here rather than sharing one implementation.
-#[cfg(all(unix, not(target_os = "linux")))]
-pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
-    let mut uid: libc::uid_t = 0;
-    let mut gid: libc::gid_t = 0;
-    // SAFETY: fd is a live connected AF_UNIX socket; both out-params are valid stack slots.
-    let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-    if rc != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(uid)
-}
-
-/// The peer's credentials, as the kernel recorded them when the socket was connected.
-#[cfg(target_os = "linux")]
-fn peer_cred(fd: RawFd) -> io::Result<libc::ucred> {
-    let mut cred = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: fd is live; `cred` and `len` are valid out-params sized for the option.
-    let rc = unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            &mut cred as *mut _ as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    if rc != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(cred)
-}
-
-#[cfg(target_os = "linux")]
-pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
-    Ok(peer_cred(fd)?.uid)
-}
-
-/// Pid of the peer process.
-#[cfg(target_os = "macos")]
-pub fn peer_pid(fd: RawFd) -> io::Result<u32> {
-    let mut pid: libc::pid_t = 0;
-    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
-    // SAFETY: fd is live; `pid` and `len` are valid out-params sized for the option.
-    let rc = unsafe {
-        libc::getsockopt(
-            fd,
-            SOL_LOCAL,
-            LOCAL_PEERPID,
-            &mut pid as *mut _ as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    if rc != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(pid as u32)
-}
-
-/// Pid of the peer process, from the same `SO_PEERCRED` block as the uid.
-#[cfg(target_os = "linux")]
-pub fn peer_pid(fd: RawFd) -> io::Result<u32> {
-    Ok(peer_cred(fd)?.pid as u32)
-}
+use crate::platform::{self, IpcStream};
 
 /// Rejects a connection that is not the core process we spawned.
 ///
 /// `expected_pid` of 0 means no core has been spawned yet, so nothing should be connecting at all.
-#[cfg(unix)]
-pub fn verify(fd: RawFd, expected_pid: u32) -> Result<(), String> {
-    let ours = unsafe { libc::geteuid() };
-    let theirs = peer_uid(fd).map_err(|e| format!("cannot read peer uid: {e}"))?;
-
-    // The core may be running as root while we are not, so a bare equality check is wrong once the
-    // privileged helper lands. What must never happen is an *unprivileged* stranger connecting.
-    if theirs != ours && theirs != 0 {
-        return Err(format!(
-            "peer uid {theirs} is neither our own ({ours}) nor root"
-        ));
-    }
-
+pub fn verify(stream: &IpcStream, expected_pid: u32) -> Result<(), String> {
+    platform::peer_user_ok(stream)?;
     if expected_pid == 0 {
         return Err(NOT_SPAWNED.to_string());
     }
-    let pid = peer_pid(fd).map_err(|e| format!("cannot read peer pid: {e}"))?;
-    is_the_core(pid, expected_pid)
-}
-
-/// Rejects a pipe client that is not the core process we spawned.
-///
-/// There is no uid to compare: the pid is the whole identity, and it is the child we started.
-#[cfg(windows)]
-pub fn verify_pipe(
-    pipe: &impl std::os::windows::io::AsRawHandle,
-    expected_pid: u32,
-) -> Result<(), String> {
-    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
-
-    if expected_pid == 0 {
-        return Err(NOT_SPAWNED.to_string());
-    }
-    let mut pid = 0u32;
-    // SAFETY: `pipe` is borrowed, so its handle is live for this call; `pid` is a valid out-param.
-    if unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &mut pid) } == 0 {
-        return Err(format!("cannot read peer pid: {}", io::Error::last_os_error()));
-    }
+    let pid = platform::peer_pid(stream).map_err(|e| format!("cannot read peer pid: {e}"))?;
     is_the_core(pid, expected_pid)
 }
 

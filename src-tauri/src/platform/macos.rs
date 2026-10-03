@@ -1,10 +1,17 @@
 //! macOS: VPN mode without the packet tunnel extension is a setuid-root core.
 
+use std::io;
+use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::process::Command;
 
-pub use super::unix::{no_console_window, restrict_dir, restrict_file, tighten};
+pub use super::unix::{
+    ipc_bind, ipc_unbind, no_console_window, peer_pid, peer_user_ok, restrict_dir, restrict_file,
+    tighten, IpcAcceptor, IpcStream, PendingListener,
+};
+pub use super::tray_icon::{tray_mirror, Tray};
 use super::{Fact, GrantCopy, Granted};
+use crate::sysproxy::Desktop;
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
     lede: "VPN mode needs your administrator password",
@@ -38,7 +45,7 @@ pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
 ///
 /// ponytail: the app's directory is the user's, so code already running as the user can swap
 /// `Nunya` and drive the root core. That is the price of not having an extension; the extension
-/// (`transport::network_extension`) is the way out, and nothing here survives it.
+/// (`platform/network_extension.rs`) is the way out, and nothing here survives it.
 ///
 /// An app update replaces the core and with it the bit, so the prompt comes back after an update.
 pub fn grant(core: &Path) -> Result<Granted, String> {
@@ -84,3 +91,110 @@ pub fn browser_command(url: &str) -> Command {
     c.arg(url);
     c
 }
+
+/// `getsockopt` level for `AF_UNIX` socket options on Darwin.
+const SOL_LOCAL: libc::c_int = 0;
+
+/// Returns the pid of the process on the other end of a connected `AF_UNIX` socket.
+const LOCAL_PEERPID: libc::c_int = 0x002;
+
+/// Effective uid of the peer process. `getpeereid` is a BSD interface; Linux answers the same
+/// question from `SO_PEERCRED` instead.
+pub(super) fn uid_of_peer(fd: RawFd) -> io::Result<u32> {
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    // SAFETY: fd is a live connected AF_UNIX socket; both out-params are valid stack slots.
+    let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(uid)
+}
+
+pub(super) fn pid_of_peer(fd: RawFd) -> io::Result<u32> {
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: fd is live; `pid` and `len` are valid out-params sized for the option.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            SOL_LOCAL,
+            LOCAL_PEERPID,
+            &mut pid as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(pid as u32)
+}
+
+/// A status item with no menu, whose clicks open the popover.
+///
+/// No menu, rather than one moved to the right click: on macOS 27 a menu attached to the status
+/// item takes every click, the left one included, before tray-icon sees it — so the popover never
+/// opened and the menu did, whatever `show_menu_on_left_click` said. tray-icon 0.25.1 fixes it by
+/// attaching the menu only while showing it, but Tauri 2 is held to 0.24. The popover carries all
+/// the menu did (the status, Connect/Disconnect, Open Nunya, Quit), so either button opens it, as
+/// NordVPN's does.
+pub(super) fn install_tray(
+    app: &tauri::AppHandle,
+    icon: tauri::image::Image<'static>,
+    template: bool,
+) -> tauri::Result<Tray> {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+
+    super::popover::create(app)?;
+    let icon = super::tray_icon::base(icon, template)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left | MouseButton::Right,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = event
+            {
+                super::popover::toggle(tray.app_handle(), rect);
+            }
+        })
+        .build(app)?;
+    Ok(Tray { icon, menu: None })
+}
+
+/// Left unset so the system assigns the next utun number, which is what generate.cpp does too.
+pub const TUN_NAME: Option<&str> = None;
+
+/// `networksetup` is the system proxy on macOS (`sysproxy.rs`'s `mac`).
+pub fn proxy_desktop() -> Result<Desktop, String> {
+    Ok(Desktop::Mac)
+}
+
+/// The popover's own commands (`tray.rs`) hide it before doing what they say.
+pub fn hide_popover(app: &tauri::AppHandle) {
+    super::popover::hide(app);
+}
+
+/// The Dock icon brings back a window closed to the menu bar, as in any Mac app.
+pub fn on_run_event(app: &tauri::AppHandle, event: &tauri::RunEvent) {
+    if let tauri::RunEvent::Reopen {
+        has_visible_windows: false,
+        ..
+    } = event
+    {
+        crate::tray::show_window(app);
+    }
+}
+
+/// The packet tunnel extension, selectable with `NUNYA_TRANSPORT=networkextension`.
+pub const NETWORK_EXTENSION: bool = true;
+
+pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> {
+    Some(std::sync::Arc::new(super::network_extension::NetworkExtensionTransport::new(
+        // Must match CFBundleIdentifier in NunyaTunnel/Info.plist.
+        "com.nunyavpn.app.NunyaTunnel",
+        "Nunya",
+    )))
+}
+
+pub const OS: &str = "macos";

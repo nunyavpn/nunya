@@ -22,6 +22,7 @@
  * nothing requires.
  */
 
+import { OS } from "./platform";
 import type { Shield, ShieldTone } from "./shield";
 import { iconPaths } from "./views/icons";
 
@@ -48,7 +49,7 @@ const GRADIENT: Record<Exclude<ShieldTone, "off">, [string, string]> = {
  * macOS draws a status item 18pt tall, so 36px is exact on a Retina display; a Linux panel's
  * icons are 22px, so 44px is exact at 2x there. Anything else is scaled from these.
  */
-const SIZE = /Mac/.test(navigator.platform) ? 36 : 44;
+const SIZE = OS === "macos" ? 36 : 44;
 
 /**
  * A stroke in the mark's own colour, in grid units, to thicken it. Traced faithfully, the road's

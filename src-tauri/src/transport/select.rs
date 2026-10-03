@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use super::subprocess::SubprocessTransport;
 use super::TunnelTransport;
+use crate::platform;
 use crate::rpc::CoreLink;
 
 /// Overrides the default. Accepts `subprocess` or `networkextension`.
@@ -25,7 +26,7 @@ pub const ENV_VAR: &str = "NUNYA_TRANSPORT";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Subprocess,
-    #[cfg(target_os = "macos")]
+    /// Only where the platform has one (`platform::NETWORK_EXTENSION`); `parse` refuses it elsewhere.
     NetworkExtension,
 }
 
@@ -33,7 +34,6 @@ impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Subprocess => "subprocess",
-            #[cfg(target_os = "macos")]
             Kind::NetworkExtension => "networkextension",
         }
     }
@@ -49,8 +49,9 @@ impl Kind {
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "subprocess" | "core" => Some(Kind::Subprocess),
-            #[cfg(target_os = "macos")]
-            "networkextension" | "ne" | "appex" => Some(Kind::NetworkExtension),
+            "networkextension" | "ne" | "appex" if platform::NETWORK_EXTENSION => {
+                Some(Kind::NetworkExtension)
+            }
             _ => None,
         }
     }
@@ -74,14 +75,8 @@ impl Kind {
 pub fn build(kind: Kind, link: Arc<CoreLink>) -> Arc<dyn TunnelTransport> {
     match kind {
         Kind::Subprocess => Arc::new(SubprocessTransport::new(link)),
-        #[cfg(target_os = "macos")]
-        Kind::NetworkExtension => Arc::new(
-            super::network_extension::NetworkExtensionTransport::new(
-                // Must match CFBundleIdentifier in NunyaTunnel/Info.plist.
-                "com.nunyavpn.app.NunyaTunnel",
-                "Nunya",
-            ),
-        ),
+        Kind::NetworkExtension => platform::network_extension_transport()
+            .expect("parse yields NetworkExtension only where the platform has one"),
     }
 }
 
