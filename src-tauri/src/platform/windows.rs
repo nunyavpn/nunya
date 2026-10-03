@@ -270,8 +270,8 @@ pub fn grant_blocked(_core: &Path) -> Option<String> {
     None
 }
 
-/// Only Linux's AppImage changes the environment its children inherit.
-pub fn host_environment(_cmd: &mut Command) {}
-
 /// Nothing to adjust before the webview starts here.
 pub fn before_webview() {}
+
+/// The app replaces itself, through Tauri's updater (`update.rs`).
+pub const IN_APP_UPDATES: bool = true;

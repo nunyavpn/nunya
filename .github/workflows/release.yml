@@ -18,18 +18,18 @@ name: release
 # core as root instead, after the administrator prompt (`core_proc::grant_root`).
 # scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
 #
-# Linux is an x86-64 AppImage, for every distribution, a .deb for Debian and Ubuntu on x86-64 and
-# arm64, and an Arch package (.pkg.tar.zst) for Arch, Manjaro and their kin, made from that same .deb
-# by scripts/package-arch.sh. The AppImage is what updates itself; a package belongs to the package
-# manager. VPN mode needs a package: its grant gives capabilities only to a root-owned core, and the
-# AppImage's read-only mount takes none (platform/linux.rs). There is no arm64 AppImage: see the
-# matrix. A stable release also goes to the AUR as nunya-bin, when AUR_SSH_PRIVATE_KEY is set.
+# Linux is packages only: a .deb for Debian and Ubuntu on x86-64 and arm64, and an Arch package
+# (.pkg.tar.zst) for Arch, Manjaro and their kin, made from that same .deb by scripts/package-arch.sh.
+# A package belongs to its package manager, so the app never updates itself there. There is no
+# AppImage: linuxdeploy rewrites the bundled core with patchelf, its read-only mount takes none of
+# the capabilities VPN mode needs (platform/linux.rs), and its library path broke the desktop tools
+# the app runs. A stable release also goes to the AUR as nunya-bin, when AUR_SSH_PRIVATE_KEY is set.
 #
 # The Windows build is an NSIS installer, unsigned: SmartScreen warns before the first run. It puts
 # the core beside Nunya.exe, which is where the release core's parent check requires it.
 #
 # Every release is also an update. The packages the app installs (the macOS .app.tar.gz, the
-# Windows installer, the AppImages) are signed with the updater key in TAURI_SIGNING_PRIVATE_KEY, whose public
+# Windows installer) are signed with the updater key in TAURI_SIGNING_PRIVATE_KEY, whose public
 # half is compiled into the app, and `latest.json` names them with their signatures. The app
 # reads it from the newest release it may take (src-tauri/src/update.rs).
 # Without the key (the beta, for now) the release is published with no update packages.
@@ -110,10 +110,7 @@ jobs:
             bundles: nsis
           - runner: ubuntu-22.04
             label: linux-x86_64
-            bundles: deb,appimage
-          # A .deb only: linuxdeploy rewrites the bundled core with patchelf, and the arm64 build of
-          # it does not survive that (ldd fails, and the core never starts). x86-64 is what Linux
-          # desktops are, so its AppImage is the Linux download.
+            bundles: deb
           - runner: ubuntu-22.04-arm
             label: linux-arm64
             bundles: deb
@@ -175,8 +172,6 @@ jobs:
           fi
           npm run tauri build -- --bundles ${{ matrix.bundles }} "${updater[@]}"
         env:
-          # linuxdeploy is itself an AppImage, and the runners have no FUSE to mount it with.
-          APPIMAGE_EXTRACT_AND_RUN: 1
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
@@ -201,15 +196,8 @@ jobs:
               cp "$bundle"/nsis/*-setup.exe.sig out/
             fi
           else
+            # The package only, never a signature: a package manager updates Linux, not the app.
             cp "$bundle"/deb/*.deb out/
-            # Only where the matrix asks for one (not arm64). It is the update package, and its
-            # signature, when signed, is beside it.
-            if [[ "${{ matrix.bundles }}" == *appimage* ]]; then
-              cp "$bundle"/appimage/*.AppImage out/
-              if ls "$bundle"/appimage/*.AppImage.sig >/dev/null 2>&1; then
-                cp "$bundle"/appimage/*.AppImage.sig out/
-              fi
-            fi
           fi
           ls -la out
 
@@ -293,14 +281,9 @@ jobs:
           **Windows (x86-64)**: run \`Nunya_${VERSION}_x64-setup.exe\`. This build is not yet code-signed, so
           SmartScreen may warn before it runs: choose **More info → Run anyway**.
 
-          **Linux (x86-64)**: download \`Nunya_${VERSION}_amd64.AppImage\`, make it executable and run it:
-          \`chmod +x Nunya_${VERSION}_amd64.AppImage && ./Nunya_${VERSION}_amd64.AppImage\`. It runs on any
-          distribution, Arch, Manjaro and Fedora included; on Debian and Ubuntu the \`.deb\` works too
-          (\`sudo apt install ./Nunya_${VERSION}_amd64.deb\`), and on Arch and Manjaro the pacman package
-          (\`sudo pacman -U nunya-${VERSION}-1-x86_64.pkg.tar.zst\`, or \`nunya-bin\` from the AUR for stable
-          releases). ARM machines: the \`arm64.deb\`, on Debian and Ubuntu. Proxy mode works everywhere; **VPN
-          mode needs a package** (the .deb or the Arch one), and asks for your password once through polkit.
-          The AppImage cannot take the rights a VPN needs, so it is proxy-only.
+          **Linux**: install a package. Debian and Ubuntu: \`sudo apt install ./Nunya_${VERSION}_amd64.deb\`
+          (\`arm64.deb\` on ARM). Arch and Manjaro: \`sudo pacman -U nunya-${VERSION}-1-x86_64.pkg.tar.zst\`.
+          Your package manager updates it. VPN mode asks for your password once through polkit.
 
           ${UPDATING}
           Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.

@@ -12,7 +12,7 @@
 import { listLine, type BlockList, type ListState } from "../blocking";
 import { DEFAULT_SETTINGS, store, type Settings } from "../store";
 import { h, render } from "../dom";
-import type { Updates } from "../features/updates";
+import { IN_APP_UPDATES, type Updates } from "../features/updates";
 import { updateLine } from "./update-bar";
 
 export interface SettingsCallbacks {
@@ -93,6 +93,15 @@ export class SettingsPanel {
     const s = store.settings();
     const updates = this.callbacks.updates();
     const version = this.callbacks.version();
+    const name = version ? `Nunya ${version}` : "Nunya";
+    if (!IN_APP_UPDATES) {
+      render(
+        this.updatesHost,
+        h("h4", {}, "Updates"),
+        h("div", { class: "srow" }, this.label(name, "updated by your package manager (apt, pacman)")),
+      );
+      return;
+    }
     render(
       this.updatesHost,
       h("h4", {}, "Updates"),
@@ -105,7 +114,7 @@ export class SettingsPanel {
       h(
         "div",
         { class: "srow" },
-        this.label(version ? `Nunya ${version}` : "Nunya", updateLine(updates, Date.now())),
+        this.label(name, updateLine(updates, Date.now())),
         updates.ready
           ? h(
               "button",

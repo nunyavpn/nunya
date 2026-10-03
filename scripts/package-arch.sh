@@ -8,10 +8,9 @@
 #       writes the AUR's nunya-bin (PKGBUILD and .SRCINFO), which downloads that .deb from the
 #       vX.Y.Z release and checks it against this one's SHA256; then builds it once, to prove it does
 #
-# Why a package at all, when the AppImage runs there: VPN mode on Linux is file capabilities on the
-# bundled core (`platform/linux.rs`), and those are granted only to a root-owned core beside a
-# root-owned `Nunya` — a system package's /usr/bin. The AppImage's read-only mount takes none, so
-# without a package an Arch user has proxy mode only.
+# Linux ships as packages only (docs/CONTRIBUTING.md, *Linux: packages, not an AppImage*), and VPN
+# mode needs one: it is file capabilities on the bundled core (`platform/linux.rs`), granted only to
+# a root-owned core beside a root-owned `Nunya` — a system package's /usr/bin.
 #
 # Why repackage the .deb rather than build again: it is the very build Debian users get, so the
 # packages cannot drift, and Tauri has no pacman bundler. The .deb's file tree is installed as is;

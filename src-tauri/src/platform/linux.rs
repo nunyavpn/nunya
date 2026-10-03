@@ -14,8 +14,7 @@
 //! a lock if nobody but root can put another `Nunya` beside it; in a user-owned directory the
 //! user's own code could, and would then drive a core with network-administration rights. A
 //! development core has the check compiled out altogether. Where the grant cannot be made safely
-//! or at all, `grant_blocked` says why and no grant is offered: the AppImage runs from a read-only
-//! mount, which takes no capability.
+//! or at all, `grant_blocked` says why and no grant is offered.
 //!
 //! A package upgrade replaces the core and with it the capabilities, so the prompt comes back after
 //! an update, as on macOS.
@@ -67,13 +66,6 @@ const SETCAP: &str = "/usr/sbin/setcap";
 const SETCAP_ALT: &str = "/usr/bin/setcap";
 
 pub fn grant_blocked(core: &Path) -> Option<String> {
-    if std::env::var_os("APPIMAGE").is_some() {
-        return Some(
-            "VPN mode is not available in the AppImage: it runs from a read-only image, so its \
-             tunnel engine cannot be given network rights. Install the .deb, or use proxy mode."
-                .into(),
-        );
-    }
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => return Some(e.to_string()),
@@ -121,10 +113,10 @@ pub fn grant(core: &Path) -> Result<Granted, String> {
     }
     let setcap = setcap().ok_or("setcap is not installed")?;
     // Arguments, never a shell line, so no path can be read as anything but a path.
-    let mut command = Command::new(PKEXEC);
-    command.arg(setcap).arg(CAPS).arg(core);
-    host_environment(&mut command);
-    let out = command
+    let out = Command::new(PKEXEC)
+        .arg(setcap)
+        .arg(CAPS)
+        .arg(core)
         .output()
         .map_err(|e| e.to_string())?;
     match out.status.code() {
@@ -141,59 +133,7 @@ pub fn grant(core: &Path) -> Result<Granted, String> {
 pub fn browser_command(url: &str) -> Command {
     let mut c = Command::new("xdg-open");
     c.arg(url);
-    host_environment(&mut c);
     c
-}
-
-/// What the AppImage's launcher (linuxdeploy's `AppRun` and its GTK hook) sets so that *Nunya* runs
-/// on the libraries inside the image. A desktop tool started with them runs on those too: the
-/// system's `gsettings` then loads the image's older GLib, cannot load the system's dconf module
-/// against it, and falls back to a keyfile — every `set` exits 0 and lands in
-/// `~/.config/glib-2.0/settings/keyfile`, which GNOME never reads. The system proxy looked set and
-/// was not.
-const APPIMAGE_VARS: &[&str] = &[
-    "LD_LIBRARY_PATH",
-    "LD_PRELOAD",
-    "GSETTINGS_SCHEMA_DIR",
-    "GIO_EXTRA_MODULES",
-    "GI_TYPELIB_PATH",
-    "GTK_DATA_PREFIX",
-    "GTK_EXE_PREFIX",
-    "GTK_PATH",
-    "GTK_IM_MODULE_FILE",
-    "GTK_THEME",
-    "GDK_PIXBUF_MODULE_FILE",
-    "GDK_BACKEND",
-];
-
-/// Starts a desktop tool in the desktop's environment rather than the AppImage's: the image's
-/// overrides are removed, and its directory dropped from `XDG_DATA_DIRS`. Nothing to undo outside
-/// an AppImage. The launcher keeps no copy of the values it replaced, so removing them — letting
-/// each tool use its built-in defaults — is the closest thing to the originals there is.
-pub fn host_environment(cmd: &mut Command) {
-    let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) else {
-        return;
-    };
-    for var in APPIMAGE_VARS {
-        cmd.env_remove(var);
-    }
-    if let Some(dirs) = std::env::var_os("XDG_DATA_DIRS") {
-        let host = host_data_dirs(&dirs.to_string_lossy(), &appdir.to_string_lossy());
-        if host.is_empty() {
-            cmd.env_remove("XDG_DATA_DIRS");
-        } else {
-            cmd.env("XDG_DATA_DIRS", host);
-        }
-    }
-}
-
-/// `XDG_DATA_DIRS` without the image's own entries.
-pub(super) fn host_data_dirs(dirs: &str, appdir: &str) -> String {
-    let appdir = appdir.trim_end_matches('/');
-    dirs.split(':')
-        .filter(|d| !d.is_empty() && !d.starts_with(appdir))
-        .collect::<Vec<_>>()
-        .join(":")
 }
 
 /// The peer's credentials, as the kernel recorded them when the socket was connected. Linux has
@@ -353,8 +293,7 @@ pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transpo
 pub const OS: &str = "linux";
 
 /// WebKitGTK's DMA-BUF renderer on Wayland with NVIDIA's driver: the window dies at startup with
-/// "Error 71 (Protocol error) dispatching to Wayland display" (tauri-apps/tauri#8541, #9394). The
-/// AppImage's launcher avoids it by forcing X11 for everyone; a package runs natively, so it is
+/// "Error 71 (Protocol error) dispatching to Wayland display" (tauri-apps/tauri#8541, #9394). It is
 /// switched off here, and only where it breaks — Wayland and the NVIDIA driver loaded — since it
 /// costs other machines GPU buffer sharing for nothing. A value the user set is left alone.
 pub fn before_webview() {
@@ -366,3 +305,8 @@ pub fn before_webview() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 }
+
+/// Nunya on Linux is a package (the .deb, the Arch one), and a package belongs to its package
+/// manager: replacing `/usr/bin/Nunya` from inside the app would need root, and would leave the
+/// package manager's records describing files that are no longer there.
+pub const IN_APP_UPDATES: bool = false;

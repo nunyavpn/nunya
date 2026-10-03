@@ -9,12 +9,3 @@ fn a_core_outside_an_installed_package_is_not_offered_the_grant() {
     assert!(why.contains("beside Nunya"), "{why}");
     assert!(grant(&core).is_err());
 }
-
-#[test]
-fn the_appimages_own_data_dirs_are_dropped_and_the_desktops_kept() {
-    let dirs = "/tmp/.mount_NunyaX/usr/share:/usr/share:/usr/local/share::/tmp/.mount_NunyaX/usr/share";
-    assert_eq!(
-        imp::host_data_dirs(dirs, "/tmp/.mount_NunyaX/"),
-        "/usr/share:/usr/local/share"
-    );
-}
