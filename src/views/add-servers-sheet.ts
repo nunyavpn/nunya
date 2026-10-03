@@ -13,7 +13,7 @@
 import { h, render } from "../dom";
 import { addSubscription, classify, manualGroupName } from "../features/add-servers";
 import { guessCity, guessCountry, place } from "../geo";
-import { OS } from "../platform";
+import { OS, PHONE } from "../platform";
 import { extractWgQuick, type Profile } from "../share";
 import { MANUAL_GROUP_ID, store, type Server } from "../store";
 import { ProfileEditor } from "./editor";
@@ -241,7 +241,8 @@ function buildAddServers(close: () => void) {
         },
         icon("clipboard", 16),
         h("span", { class: "ct" }, "Paste from clipboard"),
-        h("span", { class: "kbd" }, `${MOD_KEY}V`),
+        // A phone has no keyboard shortcut to point at.
+        PHONE ? null : h("span", { class: "kbd" }, `${MOD_KEY}V`),
       ),
       input,
       preview,
@@ -327,7 +328,11 @@ function buildAddServers(close: () => void) {
       },
       icon("scan", 30),
       h("span", { class: "dz-t" }, "Drop an image with a QR code"),
-      h("span", { class: "dz-d" }, `or click to choose one · ${MOD_KEY}V pastes a screenshot`),
+      h(
+        "span",
+        { class: "dz-d" },
+        PHONE ? "or tap to choose one" : `or click to choose one · ${MOD_KEY}V pastes a screenshot`,
+      ),
     );
 
     render(note, "The code is read on this machine; the image is not kept or sent anywhere.");

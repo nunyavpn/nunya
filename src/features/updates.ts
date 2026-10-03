@@ -12,7 +12,7 @@
  * the very thing an install does.
  */
 import { invoke, listen } from "../bridge";
-import { OS } from "../platform";
+import { OS, PHONE } from "../platform";
 import { store } from "../store";
 import { connection, disconnect } from "./tunnel";
 
@@ -49,9 +49,10 @@ export const updates: Updates = {
 /**
  * Whether the app updates itself. Not on Linux, where Nunya is a package (.deb, Arch) and its
  * package manager updates it; replacing `/usr/bin/Nunya` from here would need root and leave the
- * package manager's records wrong. `platform::IN_APP_UPDATES` is the Rust side of the same rule.
+ * package manager's records wrong. Not on a phone either, where F-Droid or a store does it.
+ * `platform::IN_APP_UPDATES` is the Rust side of the same rule.
  */
-export const IN_APP_UPDATES = OS !== "linux";
+export const IN_APP_UPDATES = OS !== "linux" && !PHONE;
 
 /** Hourly: every merge is a release, and a user should hear of one the same day. */
 export const CHECK_EVERY_MS = 60 * 60 * 1000;

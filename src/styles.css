@@ -3208,3 +3208,194 @@ button:disabled {
   color: var(--ink);
   border-color: var(--line-2);
 }
+
+/* ---------------------------------------------------------------- phone
+
+   A phone is one column, not three (issue #129). The desktop shape — rail, list, map side by side —
+   squeezed into 360px put the map under the bottom of the screen and the status card off it. So:
+
+     the map, a band across the top, with the status card directly below it, not floating over
+       it (the map then reserves no room for the card: `covered` in map.ts);
+     the list, or whichever panel the rail opened, filling what is left;
+     the rail, as a tab bar along the bottom, where a thumb reaches.
+
+   The status card stays on every screen, as the desktop's does: Connect is never a tab away. The
+   rail's shield is left out, since the card says the same thing just above it. Sheets rise from
+   the bottom edge. Nothing here changes the desktop: the window's minimum width (880px) keeps it
+   well above this breakpoint. The system bars are kept clear by the Android activity, which pads
+   the webview by their insets, so no `env(safe-area-inset-*)` is needed here. */
+
+@media (max-width: 640px) {
+  .window {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .mappane {
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    /* The map's own height; the card below adds its own. */
+    padding-top: clamp(140px, 24vh, 220px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .mapcanvas {
+    bottom: auto;
+    height: clamp(140px, 24vh, 220px);
+  }
+
+  .locs,
+  .panel {
+    grid-row: 2;
+    border-right: 0;
+  }
+
+  .rail {
+    grid-row: 3;
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 6px 8px;
+    gap: 0;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .rail .logo,
+  .rail-spacer {
+    display: none;
+  }
+
+  .rail-btn.small {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* No traffic lights to clear on a phone. */
+  .panel .sheet-head {
+    padding-top: 16px;
+  }
+
+  .status {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: 2;
+    margin: 0;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 12px 14px;
+  }
+
+  /* Badge, words and throughput on the first line; share and a full-width Connect on the second,
+     where the thumb lands. The ::after is a zero-height flex item that forces the break. */
+  .st-top {
+    flex-wrap: wrap;
+    row-gap: 10px;
+    gap: 10px;
+  }
+
+  .st-top::after {
+    content: "";
+    order: 2;
+    flex-basis: 100%;
+    height: 0;
+  }
+
+  .st-share {
+    order: 3;
+  }
+
+  .st-top > .btn {
+    order: 4;
+    flex: 1;
+  }
+
+  .st-flow {
+    gap: 12px;
+    padding-right: 0;
+  }
+
+  .fl .v {
+    font-size: 13px;
+  }
+
+  /* One line that scrolls sideways, not five that push the list off the screen. What the modes'
+     rule makes load-bearing comes first, so it is always in view: the listen address, then the
+     warnings ("Only apps set to use it", "System proxy not set"). */
+  .st-more {
+    margin-top: 10px;
+    padding-top: 10px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .st-more .tag {
+    flex: none;
+  }
+
+  .st-more .tag.strong {
+    order: -2;
+  }
+
+  .st-more .tag.warn {
+    order: -1;
+  }
+
+  .updatebar {
+    left: 10px;
+    right: 56px;
+    top: 10px;
+    padding: 8px 10px;
+  }
+
+  .mapzoom {
+    top: 10px;
+    right: 10px;
+  }
+
+  .mpick {
+    width: min(272px, calc(100% - 20px));
+  }
+
+  .scrim {
+    padding: 0;
+    place-items: end stretch;
+  }
+
+  .sheet {
+    width: 100%;
+    max-height: 92%;
+    border-radius: 16px 16px 0 0;
+    border-width: 1px 0 0;
+  }
+
+  .sheet.editor {
+    height: 92%;
+  }
+}
+
+/* A touch screen has no hover to reveal a row's ⋯, so it sits beside the row instead of over its
+   latency, always shown. */
+@media (hover: none) {
+  .loc {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .loc-acts {
+    position: static;
+    transform: none;
+    opacity: 1;
+    align-self: center;
+    padding-right: 12px;
+  }
+
+  .loc-wrap:focus-within .loc-right {
+    opacity: 1;
+  }
+}

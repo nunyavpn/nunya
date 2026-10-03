@@ -10,7 +10,7 @@
  * stands in: a Mac developer still sees ⌘.
  */
 
-export type Os = "macos" | "linux" | "windows";
+export type Os = "macos" | "linux" | "windows" | "android" | "ios";
 
 declare global {
   interface Window {
@@ -20,9 +20,16 @@ declare global {
 
 function guess(): Os {
   const p = typeof navigator === "undefined" ? "" : navigator.platform;
-  if (/Mac|iPhone|iPad/.test(p)) return "macos";
+  const agent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  if (/Android/.test(agent)) return "android";
+  if (/iPhone|iPad/.test(p)) return "ios";
+  if (/Mac/.test(p)) return "macos";
   if (/Win/.test(p)) return "windows";
   return "linux";
 }
 
 export const OS: Os = (typeof window !== "undefined" && window.__NUNYA_OS__) || guess();
+
+/** A phone: no keyboard shortcuts to mention, no tray, and an app store or the system's installer
+ *  for updates. Its layout is the stylesheet's (`@media (max-width: 640px)`), not this. */
+export const PHONE = OS === "android" || OS === "ios";

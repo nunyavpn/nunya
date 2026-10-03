@@ -24,7 +24,9 @@ const LAT_TOP = 75;
 const LAT_BOTTOM = -55;
 const LAT_SPAN = LAT_TOP - LAT_BOTTOM;
 
-/** Vertical space the status card covers; the map band centres in what is left above it. */
+/** Vertical space the status card covers where it floats over the map; the map band centres in
+ *  what is left above it. A constant, not the card's height, so the world does not jump each time
+ *  the card grows a chip. */
 const CARD_RESERVE = 110;
 
 const MIN_ZOOM = 1;
@@ -215,6 +217,9 @@ export class WorldMap {
   /** The view on top of it: a zoom, and the pane offset that zoom is taken from. */
   private view = { k: 1, x: 0, y: 0 };
   private size = { width: 0, height: 0 };
+  /** `CARD_RESERVE` where the status card floats over the map, as on a desktop; nothing where it
+   *  sits below the map, as on a phone, which would otherwise centre the world too high. */
+  private covered = CARD_RESERVE;
 
   private coarse: Borders | null = null;
   private fine: Borders | null = null;
@@ -293,7 +298,7 @@ export class WorldMap {
   private fitBase(width: number, height: number) {
     const w = width * 1.06; // a touch of bleed past the pane edges at the widest view
     const h = w * (LAT_SPAN / 360);
-    const free = Math.max(height - CARD_RESERVE, h);
+    const free = Math.max(height - this.covered, h);
     this.base = { x: (width - w) / 2, y: (free - h) / 2, perDegree: w / 360 };
   }
 
@@ -330,7 +335,7 @@ export class WorldMap {
   private clamp() {
     const { width, height } = this.size;
     const k = this.view.k;
-    const floor = height - CARD_RESERVE;
+    const floor = height - this.covered;
     const left = k * this.base.x;
     const right = k * (this.base.x + 360 * this.base.perDegree);
     const top = k * this.base.y;
@@ -433,7 +438,7 @@ export class WorldMap {
       b.addEventListener("click", run);
       return b;
     };
-    const centre = () => [this.size.width / 2, (this.size.height - CARD_RESERVE) / 2] as const;
+    const centre = () => [this.size.width / 2, (this.size.height - this.covered) / 2] as const;
     const controls = document.createElement("div");
     controls.className = "mapzoom";
     controls.append(
@@ -458,6 +463,8 @@ export class WorldMap {
       this.canvas.height = height;
     }
     this.size = { width: box.width, height: box.height };
+    const card = this.canvas.parentElement?.querySelector(".status");
+    this.covered = card && card.getBoundingClientRect().top < box.bottom ? CARD_RESERVE : 0;
     this.fitBase(box.width, box.height);
     this.clamp();
 
