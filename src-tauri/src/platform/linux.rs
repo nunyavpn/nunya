@@ -306,7 +306,7 @@ pub fn before_webview() {
     }
 }
 
-/// Nunya on Linux is a package (the .deb, the Arch one), and a package belongs to its package
+/// Nunya on Linux is a package (.deb, .rpm, Arch), and a package belongs to its package
 /// manager: replacing `/usr/bin/Nunya` from inside the app would need root, and would leave the
 /// package manager's records describing files that are no longer there.
 pub const IN_APP_UPDATES: bool = false;
