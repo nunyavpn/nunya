@@ -252,6 +252,12 @@ are kept.
 
 `public/favicon.png` is the same artwork at 64px, for the webview's tab and window.
 
+**Android's launcher icons are made by `scripts/android-icons.py`**, not by `tauri icon`, whose
+Android set is a square picture on a white plate. They are an adaptive icon: the artwork centred on
+a canvas widened with its own navy body, so the mark sits inside the 66dp safe zone and any
+launcher's mask (circle, Samsung's squircle) shows navy around it. Run it again when the artwork
+changes.
+
 ### Modes
 
 `Settings.mode` is `proxy` or `vpn`, and it is **not** a preference between two equivalent things.
