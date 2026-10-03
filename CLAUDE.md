@@ -417,7 +417,11 @@ before opening the menu, and a second click meanwhile cancelled that and called 
 Omitting `Activate` is what makes the menu open on the first click; `ItemIsMenu` is true for the
 same reason. And libayatana takes the icon as a *file*, which tray-icon unlinks before announcing
 its replacement, so the shell's async load raced a deleted path — `Failed to recognize image
-format`, a blank icon, at nearly every launch. The pixels now travel as `IconPixmap`. Windows keeps
+format`, a blank icon, at nearly every launch. The pixels now travel as `IconPixmap`. **Every new state
+sends `ItemsPropertiesUpdated`** with the lines' labels and `enabled`: GNOME's extension answers
+`LayoutUpdated` by re-reading only the menu's shape, so without it the status line kept its first
+words and a Connect disabled while the core started stayed disabled, refusing every click.
+`EventGroup` delivers clicks like `Event` (KDE batches them). Windows keeps
 tray-icon's menu, which has neither problem.
 
 ### The menu-bar popover (macOS)

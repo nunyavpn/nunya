@@ -149,6 +149,22 @@ impl Item {
         put("visible", Variant(Box::new(true)));
         map
     }
+
+    /// What `ItemsPropertiesUpdated` carries after a new state: every line whose words or
+    /// enabled state can change, in full.
+    ///
+    /// This is the signal that changes what a host *shows*. GNOME's AppIndicator extension answers
+    /// `LayoutUpdated` by re-reading only each node's `type` and `children-display` — the menu's
+    /// shape — and takes labels and `enabled` from this signal alone. Without it the menu kept the
+    /// words of its first read: "Status: Disconnected" forever, and a Connect that was disabled
+    /// while the core started stayed disabled, so the shell refused the click before sending it.
+    fn label_updates(&self) -> Vec<(i32, dbus::arg::PropMap)> {
+        let wanted = ["label".to_string(), "enabled".to_string()];
+        [ID_SERVER, ID_STATUS, ID_TOGGLE]
+            .into_iter()
+            .map(|id| (id, self.props(id, &wanted)))
+            .collect()
+    }
 }
 
 /// Converts the frontend's straight RGBA into `IconPixmap`'s ARGB32.
@@ -274,7 +290,7 @@ fn serve(
 /// The two signals are separate because hosts act on them separately: `NewIcon` re-reads the
 /// pixmap, `LayoutUpdated` re-reads the menu. Emitting only one leaves the other stale.
 fn apply(conn: &Connection, item: &Arc<Mutex<Item>>, update: Update) {
-    let revision = {
+    let (revision, labels) = {
         let mut item = match item.lock() {
             Ok(item) => item,
             // A handler panicked; the item's words would be a guess from here on.
@@ -289,19 +305,27 @@ fn apply(conn: &Connection, item: &Arc<Mutex<Item>>, update: Update) {
         item.toggle = update.toggle;
         item.toggle_enabled = update.toggle_enabled;
         item.revision = item.revision.wrapping_add(1);
-        item.revision
+        (item.revision, item.label_updates())
     };
 
     let icon = dbus::Message::signal(&ITEM_PATH.into(), &ITEM_IFACE.into(), &"NewIcon".into());
     let tooltip = dbus::Message::signal(&ITEM_PATH.into(), &ITEM_IFACE.into(), &"NewToolTip".into());
-    // -1 is DBusMenu's "the whole menu", which is what a relabelled line amounts to here.
+    // The shape never changes, but a host that re-reads every property on a new layout (KDE's)
+    // refreshes from this; 0 is the root, as the spec names it.
     let layout = dbus::Message::signal(
         &MENU_PATH.into(),
         &MENU_IFACE.into(),
         &"LayoutUpdated".into(),
     )
-    .append2(revision, -1i32);
-    for signal in [icon, tooltip, layout] {
+    .append2(revision, 0i32);
+    // What GNOME redraws the lines from; see `Item::label_updates`.
+    let properties = dbus::Message::signal(
+        &MENU_PATH.into(),
+        &MENU_IFACE.into(),
+        &"ItemsPropertiesUpdated".into(),
+    )
+    .append2(labels, Vec::<(i32, Vec<String>)>::new());
+    for signal in [icon, tooltip, properties, layout] {
         let _ = conn.send(signal);
     }
 }
@@ -420,6 +444,29 @@ fn register_item(cr: &mut Crossroads) -> dbus_crossroads::IfaceToken<Arc<Mutex<I
 }
 
 /// The DBusMenu interface: the seven fixed lines, and the click that comes back.
+/// What a menu event means, if anything: a click on Connect, Show or Quit.
+fn click(item: &Arc<Mutex<Item>>, actions: &Sender<Action>, id: i32, event: &str) {
+    if event != "clicked" {
+        // "hovered", "opened" and "closed" all arrive here and mean nothing to us.
+        return;
+    }
+    // A disabled line is not a command. Hosts are expected to refuse the click themselves, but the
+    // toggle's enabled state is the one thing here that says whether the window would accept a
+    // connect, so it is checked rather than trusted.
+    if id == ID_TOGGLE && !item.lock().map(|item| item.toggle_enabled).unwrap_or(false) {
+        return;
+    }
+    let action = match id {
+        ID_TOGGLE => Some(Action::Toggle),
+        ID_SHOW => Some(Action::Show),
+        ID_QUIT => Some(Action::Quit),
+        _ => None,
+    };
+    if let Some(action) = action {
+        let _ = actions.send(action);
+    }
+}
+
 fn register_menu(
     cr: &mut Crossroads,
     actions: Sender<Action>,
@@ -522,31 +569,7 @@ fn register_menu(
                 Variant<Box<dyn RefArg>>,
                 u32,
             )| {
-                if event != "clicked" {
-                    // "hovered", "opened" and "closed" all arrive here and mean nothing to us.
-                    return Ok(());
-                }
-                // A disabled line is not a command. Hosts are expected to refuse the click
-                // themselves, but the toggle's enabled state is the one thing here that says
-                // whether the window would accept a connect, so it is checked rather than trusted.
-                if id == ID_TOGGLE {
-                    let enabled = item
-                        .lock()
-                        .map(|item| item.toggle_enabled)
-                        .unwrap_or(false);
-                    if !enabled {
-                        return Ok(());
-                    }
-                }
-                let action = match id {
-                    ID_TOGGLE => Some(Action::Toggle),
-                    ID_SHOW => Some(Action::Show),
-                    ID_QUIT => Some(Action::Quit),
-                    _ => None,
-                };
-                if let Some(action) = action {
-                    let _ = clicked.send(action);
-                }
+                click(item, &clicked, id, &event);
                 Ok(())
             },
         );
@@ -566,11 +589,19 @@ fn register_menu(
             ("updatesNeeded", "idErrors"),
             |_, _, _: (Vec<i32>,)| Ok((Vec::<i32>::new(), Vec::<i32>::new())),
         );
+        // The batched form, which some hosts (KDE's) send instead of `Event`. It used to be
+        // accepted and dropped, which made every click there a no-op.
+        let grouped = actions.clone();
         b.method(
             "EventGroup",
             ("events",),
             ("idErrors",),
-            |_, _, _: (Vec<Event>,)| Ok((Vec::<i32>::new(),)),
+            move |_, item: &mut Arc<Mutex<Item>>, (events,): (Vec<Event>,)| {
+                for (id, event, _data, _ts) in events {
+                    click(item, &grouped, id, &event);
+                }
+                Ok((Vec::<i32>::new(),))
+            },
         );
 
         b.signal::<(u32, i32), _>("LayoutUpdated", ("revision", "parent"));
@@ -597,6 +628,38 @@ mod tests {
             toggle_enabled: true,
             revision: 1,
         }
+    }
+
+    #[test]
+    fn a_new_state_tells_the_host_the_words_and_whether_connect_can_be_clicked() {
+        let mut item = item();
+        item.status = "Status: Connected".into();
+        item.toggle = "Disconnect".into();
+        item.toggle_enabled = true;
+        let updates = item.label_updates();
+        let ids: Vec<i32> = updates.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, [ID_SERVER, ID_STATUS, ID_TOGGLE]);
+        let (_, toggle) = &updates[2];
+        assert_eq!(toggle["label"].0.as_str(), Some("Disconnect"));
+        assert_eq!(toggle["enabled"].0.as_u64(), Some(1));
+        let (_, status) = &updates[1];
+        assert_eq!(status["label"].0.as_str(), Some("Status: Connected"));
+    }
+
+    #[test]
+    fn a_click_reaches_the_app_and_a_disabled_connect_does_not() {
+        let item = Arc::new(Mutex::new(item()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        item.lock().unwrap().toggle_enabled = false;
+        click(&item, &tx, ID_TOGGLE, "clicked");
+        assert!(rx.try_recv().is_err());
+        item.lock().unwrap().toggle_enabled = true;
+        click(&item, &tx, ID_TOGGLE, "hovered");
+        assert!(rx.try_recv().is_err());
+        click(&item, &tx, ID_TOGGLE, "clicked");
+        assert!(matches!(rx.try_recv(), Ok(Action::Toggle)));
+        click(&item, &tx, ID_QUIT, "clicked");
+        assert!(matches!(rx.try_recv(), Ok(Action::Quit)));
     }
 
     #[test]
