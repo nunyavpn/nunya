@@ -58,11 +58,7 @@ impl CoreProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        // The core is a console program, and Windows gives a console program started from a GUI
-        // app a window of its own. CREATE_NO_WINDOW runs it without one; its output still comes
-        // through the pipes above.
-        #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000);
+        crate::platform::no_console_window(&mut cmd);
 
         let mut child = cmd.spawn()?;
         let pid = child.id().unwrap_or(0);

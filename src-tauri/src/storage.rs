@@ -14,9 +14,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 const FILE_NAME: &str = "data.json";
 
 /// A data file larger than this is not something this app wrote.
@@ -39,34 +36,8 @@ pub fn data_path(dir: &Path) -> PathBuf {
 /// Creates the directory if needed and narrows it to the owner.
 fn ensure_dir(dir: &Path) -> Result<(), StorageError> {
     fs::create_dir_all(dir).map_err(|e| StorageError::Write(e.to_string()))?;
-    #[cfg(unix)]
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-        .map_err(|e| StorageError::Write(e.to_string()))?;
-    Ok(())
+    crate::platform::restrict_dir(dir).map_err(|e| StorageError::Write(e.to_string()))
 }
-
-/// Narrows a data file that is readable by anyone else on the machine.
-///
-/// The app writes 0600, but a file can arrive by other routes — a restored backup, a copy made with
-/// a permissive umask, an older version that did not set this. Since the contents are credentials,
-/// finding one exposed and leaving it that way would be the wrong choice.
-#[cfg(unix)]
-fn tighten(path: &Path, meta: &fs::Metadata) {
-    let mode = meta.permissions().mode() & 0o777;
-    if mode & 0o077 == 0 {
-        return;
-    }
-    match fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
-        Ok(()) => log::warn!(
-            "{} was mode {mode:o}, readable by others; narrowed it to 600",
-            path.display()
-        ),
-        Err(e) => log::error!("{} is mode {mode:o} and could not be narrowed: {e}", path.display()),
-    }
-}
-
-#[cfg(not(unix))]
-fn tighten(_path: &Path, _meta: &fs::Metadata) {}
 
 /// Reads the saved data, or `None` on a first run.
 ///
@@ -89,7 +60,9 @@ pub fn load(dir: &Path) -> Result<Option<String>, StorageError> {
         )));
     }
 
-    tighten(&path, &meta);
+    // A data file can arrive by other routes than this app (a restored backup, a permissive
+    // umask), so one found readable by others is narrowed rather than left that way.
+    crate::platform::tighten(&path, &meta);
 
     let text = fs::read_to_string(&path).map_err(|e| StorageError::Read(e.to_string()))?;
     if text.trim().is_empty() {
@@ -117,8 +90,7 @@ pub fn save(dir: &Path, json: &str) -> Result<(), StorageError> {
 
     let write = || -> std::io::Result<()> {
         let mut file = fs::File::create(&temp)?;
-        #[cfg(unix)]
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        crate::platform::restrict_file(&file)?;
         file.write_all(json.as_bytes())?;
         // Without this the rename can land before the contents do, leaving an empty file after a
         // power loss.

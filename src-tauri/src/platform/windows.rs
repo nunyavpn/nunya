@@ -12,8 +12,11 @@
 //! is an administrator.
 
 use std::ffi::OsStr;
+use std::fs;
+use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::process::Command;
 
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -67,6 +70,31 @@ pub fn grant(_core: &Path) -> Result<Granted, String> {
         DECLINED => Err("the Windows prompt was declined, so VPN mode is still off".into()),
         c => Err(format!("could not restart Nunya as administrator (ShellExecute error {c})")),
     }
+}
+
+/// A profile's AppData is already private to its user, and Windows has no mode bits to narrow.
+pub fn restrict_dir(_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+pub fn restrict_file(_file: &fs::File) -> io::Result<()> {
+    Ok(())
+}
+
+pub fn tighten(_path: &Path, _meta: &fs::Metadata) {}
+
+pub fn browser_command(url: &str) -> Command {
+    // Not `cmd /C start`, which would read the URL's `&` as a command separator.
+    let mut c = Command::new("rundll32");
+    c.args(["url.dll,FileProtocolHandler", url]);
+    c
+}
+
+/// The core is a console program, and Windows gives a console program started from a GUI app a
+/// window of its own. CREATE_NO_WINDOW runs it without one; its output still comes through the
+/// pipes the caller set up.
+pub fn no_console_window(cmd: &mut tokio::process::Command) {
+    cmd.creation_flags(0x0800_0000);
 }
 
 fn wide(s: &OsStr) -> Vec<u16> {
