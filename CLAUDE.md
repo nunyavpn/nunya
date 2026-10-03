@@ -45,6 +45,7 @@ npm run tauri dev
 | App with the list full | `VITE_MOCK=1 npm run tauri dev` |
 | Style guide | `npm run design` |
 | Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `nsis` (Windows) · `deb,appimage` (Linux) |
+| Arch package from a release `.deb` | `./scripts/package-arch.sh <Nunya_X.Y.Z_amd64.deb> [out]` (`--aur` for the AUR's `nunya-bin`) |
 | Signed bundle with the packet tunnel | `./scripts/build-app.sh` (needs an Apple Developer team) |
 | Release | automatic on every merge to `main` (beta); stable: `git tag vX.Y.Z && git push origin vX.Y.Z` |
 | Next version / set one | `node scripts/version.mjs next` · `node scripts/version.mjs set X.Y.Z` |

@@ -170,8 +170,9 @@ you'd give access to.
   disconnect. Apps that ignore the system proxy aren't covered, and Nunya says so.
 - **VPN mode** carries all of the device's traffic through the tunnel. It needs system privileges.
   On macOS, the first Connect in VPN mode explains why and asks for your administrator password,
-  once (and again after each update); Nunya must be in Applications for this. On Linux, the engine needs
-  network-admin rights, which this beta doesn't set up for you yet.
+  once (and again after each update); Nunya must be in Applications for this. On Linux, installed
+  from a package (the `.deb` or the Arch package, not the AppImage), it asks for your password once
+  through your system's own prompt (and again after each update).
 - **Allow LAN** lets other devices on your network use the proxy. **DNS** sets the resolver used
   inside the connection.
 - **Ad blocker** refuses ad networks (the `category-ads-all` list published by sing-box's authors).
@@ -242,17 +243,22 @@ stable versions, from 1.0 on, are marked *Latest*.
 - **Windows** (x86-64, Windows 10 or later): run `Nunya_<version>_x64-setup.exe`. The beta isn't
   code-signed yet, so SmartScreen may stop it the first time: choose **More info**, then
   **Run anyway**.
-- **Linux** (x86-64): the **AppImage** runs on any distribution, Arch, Manjaro and Fedora
-  included. Make it executable and run it:
-  `chmod +x Nunya_<version>_amd64.AppImage && ./Nunya_<version>_amd64.AppImage`.
-  On Debian and Ubuntu the `.deb` works too: `sudo apt install ./Nunya_<version>_amd64.deb`. The
-  AppImage updates itself; a `.deb` is updated by installing the new one. On ARM there is an
-  `arm64.deb` for Debian and Ubuntu, and no AppImage yet.
+- **Linux** (x86-64):
+  - **Debian and Ubuntu**: `sudo apt install ./Nunya_<version>_amd64.deb`.
+  - **Arch, Manjaro and their kin**: `yay -S nunya-bin` (or any AUR helper) for stable releases, or
+    `sudo pacman -U nunya-<version>-1-x86_64.pkg.tar.zst` from any release, betas included.
+  - **Anything else**: the **AppImage** runs on any distribution.
+    `chmod +x Nunya_<version>_amd64.AppImage && ./Nunya_<version>_amd64.AppImage`.
+
+  Only a package can run **VPN mode**: it needs the tunnel engine installed by the system, and the
+  AppImage runs from a read-only image, so it is proxy-only. The AppImage updates itself; a package
+  is updated by your package manager. On ARM there is an `arm64.deb` for Debian and Ubuntu, and no
+  AppImage yet.
 
 This beta is built around **proxy mode**. VPN mode works on macOS after an administrator password
 prompt, and on Windows after Windows' own prompt, which restarts Nunya as administrator (or start
-it with **Run as administrator** to skip that). On Linux it follows once
-the app can set up network-admin rights.
+it with **Run as administrator** to skip that). On Linux it works from the `.deb` or the Arch
+package, after your system's password prompt.
 
 ### Updating
 

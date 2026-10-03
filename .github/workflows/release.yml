@@ -18,9 +18,12 @@ name: release
 # core as root instead, after the administrator prompt (`core_proc::grant_root`).
 # scripts/build-app.sh is the signed build, with the packet tunnel extension, for when there is one.
 #
-# Linux is an x86-64 AppImage, for every distribution (Arch and its kin included, which cannot
-# install a .deb), and a .deb for Debian and Ubuntu on x86-64 and arm64. The AppImage is what
-# updates itself; a .deb belongs to the package manager. There is no arm64 AppImage: see the matrix.
+# Linux is an x86-64 AppImage, for every distribution, a .deb for Debian and Ubuntu on x86-64 and
+# arm64, and an Arch package (.pkg.tar.zst) for Arch, Manjaro and their kin, made from that same .deb
+# by scripts/package-arch.sh. The AppImage is what updates itself; a package belongs to the package
+# manager. VPN mode needs a package: its grant gives capabilities only to a root-owned core, and the
+# AppImage's read-only mount takes none (platform/linux.rs). There is no arm64 AppImage: see the
+# matrix. A stable release also goes to the AUR as nunya-bin, when AUR_SSH_PRIVATE_KEY is set.
 #
 # The Windows build is an NSIS installer, unsigned: SmartScreen warns before the first run. It puts
 # the core beside Nunya.exe, which is where the release core's parent check requires it.
@@ -41,6 +44,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - scripts/updater-manifest.mjs
+      - scripts/package-arch.sh
       - src-tauri/tauri.conf.json
 
 # One release at a time, and never cancelled: two merges close together are two releases, the
@@ -209,6 +213,17 @@ jobs:
           fi
           ls -la out
 
+      # Arch, Manjaro and their kin: the same .deb as a pacman package. makepkg is Arch's and refuses
+      # to run as root, so it runs in an Arch container as a user of its own.
+      - name: Arch package
+        if: matrix.label == 'linux-x86_64'
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w -e GITHUB_REPOSITORY archlinux:base-devel bash -euc '
+            useradd -m builder
+            chown -R builder out
+            su builder -c "./scripts/package-arch.sh out/Nunya_*_amd64.deb out"'
+          ls -la out
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundles-${{ matrix.label }}
@@ -281,8 +296,11 @@ jobs:
           **Linux (x86-64)**: download \`Nunya_${VERSION}_amd64.AppImage\`, make it executable and run it:
           \`chmod +x Nunya_${VERSION}_amd64.AppImage && ./Nunya_${VERSION}_amd64.AppImage\`. It runs on any
           distribution, Arch, Manjaro and Fedora included; on Debian and Ubuntu the \`.deb\` works too
-          (\`sudo apt install ./Nunya_${VERSION}_amd64.deb\`). ARM machines: the \`arm64.deb\`, on Debian and Ubuntu. Proxy mode works everywhere; VPN mode is not in the
-          Linux build yet.
+          (\`sudo apt install ./Nunya_${VERSION}_amd64.deb\`), and on Arch and Manjaro the pacman package
+          (\`sudo pacman -U nunya-${VERSION}-1-x86_64.pkg.tar.zst\`, or \`nunya-bin\` from the AUR for stable
+          releases). ARM machines: the \`arm64.deb\`, on Debian and Ubuntu. Proxy mode works everywhere; **VPN
+          mode needs a package** (the .deb or the Arch one), and asks for your password once through polkit.
+          The AppImage cannot take the rights a VPN needs, so it is proxy-only.
 
           ${UPDATING}
           Check any download against \`SHA256SUMS\`: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
@@ -291,7 +309,8 @@ jobs:
 
           **Proxy mode**: a local SOCKS/HTTP listener, which can also be set as the system proxy while connected.
           **VPN mode** on macOS asks for your administrator password the first time you connect in it (and again
-          after an update). On Windows it restarts Nunya as administrator, through Windows' own prompt.
+          after an update). On Windows it restarts Nunya as administrator, through Windows' own prompt. On Linux,
+          from a package, it gives the tunnel engine network rights through polkit, once per update.
           NOTES
           flags=(--title "Nunya $VERSION" --notes-file notes.md --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then
@@ -306,6 +325,47 @@ jobs:
             flags+=(--target "$GITHUB_SHA")
           fi
           gh release create "v$VERSION" out/* "${flags[@]}"
+
+      # Stable releases only: the AUR is where Arch users expect to find a release they can trust to
+      # stay, and a new version after every merge would be noise there. nunya-bin downloads this
+      # release's .deb and checks it against the checksum computed here; the script builds it once
+      # in an Arch container first, so a PKGBUILD that does not build is never pushed. The host key is
+      # pinned (ed25519, SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4, as aur.archlinux.org
+      # publishes it), not learned from whoever answers.
+      - name: AUR
+        if: needs.version.outputs.prerelease == 'false'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::warning::AUR_SSH_PRIVATE_KEY is not set: nunya-bin is not published to the AUR"
+            exit 0
+          fi
+          mkdir aur-out
+          docker run --rm -v "$PWD:/w" -w /w -e GITHUB_REPOSITORY archlinux:base-devel bash -euc '
+            useradd -m builder
+            chown -R builder aur-out
+            su builder -c "./scripts/package-arch.sh --aur out/Nunya_*_amd64.deb aur-out"'
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+
+          # An empty repository the first time; the push creates the package.
+          git clone ssh://aur@aur.archlinux.org/nunya-bin.git aur
+          cp aur-out/PKGBUILD aur-out/.SRCINFO aur/
+          cd aur
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "nunya-bin already says $VERSION"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "Update to $VERSION"
+          git push origin HEAD:master
 
       # So main's files say the version it has reached. Onto main as it is now, not the commit that
       # was built: a merge that landed during the build must not be undone. A stable tag lower than
