@@ -39,7 +39,7 @@ const DETAIL_ZOOM = 2.5;
  * the user moves it, it keeps itself centred on the route, or on the device before there is one.
  */
 const NARROW = 640;
-const NARROW_ZOOM = 2;
+const NARROW_ZOOM = 4;
 
 /** From this zoom country names are written on the map. */
 const LABEL_ZOOM = 2.2;
