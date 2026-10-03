@@ -33,6 +33,14 @@ const MIN_ZOOM = 1;
 const MAX_ZOOM = 14;
 /** From this zoom the 1:50m borders are drawn; below it the 1:110m ones are indistinguishable. */
 const DETAIL_ZOOM = 2.5;
+/**
+ * Narrower than this, the whole world is too small to read a city on — a phone, whose layout the
+ * stylesheet starts at the same width — so the map does not zoom out past `NARROW_ZOOM`, and until
+ * the user moves it, it keeps itself centred on the route, or on the device before there is one.
+ */
+const NARROW = 640;
+const NARROW_ZOOM = 2;
+
 /** From this zoom country names are written on the map. */
 const LABEL_ZOOM = 2.2;
 
@@ -220,6 +228,8 @@ export class WorldMap {
   /** `CARD_RESERVE` where the status card floats over the map, as on a desktop; nothing where it
    *  sits below the map, as on a phone, which would otherwise centre the world too high. */
   private covered = CARD_RESERVE;
+  /** The user has zoomed or dragged; a narrow map stops following the route (`follow`). */
+  private steered = false;
 
   private coarse: Borders | null = null;
   private fine: Borders | null = null;
@@ -306,8 +316,34 @@ export class WorldMap {
    * Zooms by `factor` about a point in the pane, keeping whatever is under that point there —
    * the behaviour every map has taught people to expect from a scroll wheel.
    */
+  private get minZoom(): number {
+    return this.size.width > 0 && this.size.width < NARROW ? NARROW_ZOOM : MIN_ZOOM;
+  }
+
+  /**
+   * On a narrow map, centres the view at `NARROW_ZOOM` on what matters: the middle of the route
+   * while connected, else the device, else the middle of the world.
+   */
+  private follow() {
+    const ends = this.route.length > 1 ? [this.route[0], this.route[this.route.length - 1]] : [];
+    const home = this.pins.find((p) => p.home);
+    const [lon, lat] = ends.length
+      ? [(ends[0].lon + ends[1].lon) / 2, (ends[0].lat + ends[1].lat) / 2]
+      : home
+        ? [home.lon, home.lat]
+        : [0, (LAT_TOP + LAT_BOTTOM) / 2];
+    const k = NARROW_ZOOM;
+    const floor = this.size.height - this.covered;
+    this.view = {
+      k,
+      x: this.size.width / 2 - k * (this.base.x + this.base.perDegree * (lon + 180)),
+      y: floor / 2 - k * (this.base.y + this.base.perDegree * (LAT_TOP - lat)),
+    };
+  }
+
   private zoomAt(factor: number, px: number, py: number) {
-    const k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.view.k * factor));
+    this.steered = true;
+    const k = Math.min(MAX_ZOOM, Math.max(this.minZoom, this.view.k * factor));
     if (k === this.view.k) return;
     const ratio = k / this.view.k;
     this.view = { k, x: px - (px - this.view.x) * ratio, y: py - (py - this.view.y) * ratio };
@@ -315,12 +351,15 @@ export class WorldMap {
   }
 
   private panBy(dx: number, dy: number) {
+    this.steered = true;
     this.view = { ...this.view, x: this.view.x + dx, y: this.view.y + dy };
     this.moved();
   }
 
   private reset() {
+    this.steered = false;
     this.view = { k: 1, x: 0, y: 0 };
+    if (this.minZoom > MIN_ZOOM) this.follow();
     this.moved();
   }
 
@@ -466,6 +505,7 @@ export class WorldMap {
     const card = this.canvas.parentElement?.querySelector(".status");
     this.covered = card && card.getBoundingClientRect().top < box.bottom ? CARD_RESERVE : 0;
     this.fitBase(box.width, box.height);
+    if (this.minZoom > MIN_ZOOM && (!this.steered || this.view.k < this.minZoom)) this.follow();
     this.clamp();
 
     const ctx = this.ctx;

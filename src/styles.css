@@ -3217,9 +3217,10 @@ button:disabled {
      the list, or whichever panel the rail opened, takes the screen;
      the map has a tab of its own (`#nav-map`, `.window.show-map`), since it is looked at now and
        then and would otherwise cost a third of the screen all the time;
-     the status card is a bottom sheet above the tab bar: one line — the state and Connect — until
-       it is swiped up or its handle tapped (`.status.open`, `StatusCard.swipe`), when the speeds,
-       Share and the chips show;
+     the status card sits above the tab bar as one line — the state and Connect. On the map's tab
+       it is a sheet: swiped up, or its handle tapped (`.status.open`, `StatusCard.swipe`), it
+       shows the speeds, Share and the chips over the map. On the list it stays one line, so the
+       list keeps the screen;
      the rail is the tab bar, where a thumb reaches.
 
    Collapsed, the card still makes no claim it cannot keep: its headline is keyed by mode ("Proxy
@@ -3307,12 +3308,16 @@ button:disabled {
     border-width: 1px 0 0;
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -8px 20px -14px rgb(8 11 23 / 45%);
-    padding: 0 14px 12px;
+    padding: 12px 14px;
+  }
+
+  .window.show-map .status {
+    padding-top: 0;
     /* The swipe is ours; the page must not scroll or pull to refresh under it. */
     touch-action: none;
   }
 
-  .st-grab {
+  .window.show-map .st-grab {
     display: grid;
     place-items: center;
     width: 100%;
@@ -3364,15 +3369,14 @@ button:disabled {
 
   /* Collapsed keeps what must not be a swipe away: why Connect cannot be used, the grant's note,
      and in proxy mode "Only apps set to use it" — the warnings and notes, and nothing else. */
-  .status:not(.open) .st-flow,
-  .status:not(.open) .st-share,
-  .status:not(.open) .st-top::after,
-  .status:not(.open) .st-more:not(:has(.tag.warn, .tag.note)),
-  .status:not(.open) .st-more .tag:not(.warn):not(.note) {
+  :is(.window:not(.show-map) .status, .status:not(.open)) :is(.st-flow, .st-share),
+  :is(.window:not(.show-map) .status, .status:not(.open)) .st-top::after,
+  :is(.window:not(.show-map) .status, .status:not(.open)) .st-more:not(:has(.tag.warn, .tag.note)),
+  :is(.window:not(.show-map) .status, .status:not(.open)) .st-more .tag:not(.warn):not(.note) {
     display: none;
   }
 
-  .status:not(.open) .st-more {
+  :is(.window:not(.show-map) .status, .status:not(.open)) .st-more {
     border-top: 0;
     padding-top: 0;
   }
