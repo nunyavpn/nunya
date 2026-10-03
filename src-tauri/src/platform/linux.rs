@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::sni;
 use super::{GrantCopy, Granted};
+use crate::sysproxy::{run, Desktop};
 use crate::tray::{give_up, show_window, supported, Lines, Pixels};
 
 pub static GRANT: Option<GrantCopy> = None;
@@ -144,4 +145,31 @@ fn update_for(lines: &Lines, icon: &Pixels, label: &str) -> sni::Update {
         toggle: lines.toggle.to_string(),
         toggle_enabled: lines.toggle_enabled,
     }
+}
+
+pub const TUN_NAME: Option<&str> = Some("nunya-tun");
+
+/// Which desktop's settings hold the system proxy. A runtime question here, not a compile-time
+/// one: GNOME, KDE and the rest all run this one binary.
+pub fn proxy_desktop() -> Result<Desktop, String> {
+    let current = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    if current.split(':').any(|d| d.eq_ignore_ascii_case("KDE")) {
+        for tool in ["kwriteconfig6", "kwriteconfig5"] {
+            if run(tool, &["--help"]).is_ok() {
+                return Ok(Desktop::Kde(tool.to_string()));
+            }
+        }
+        return Err("KDE is running, but neither kwriteconfig6 nor kwriteconfig5 was found".into());
+    }
+
+    // GNOME, and the desktops that share its settings schema (Budgie, Cinnamon's GTK apps,
+    // Pantheon, Unity). Asked of gsettings itself rather than inferred from the desktop name.
+    if run("gsettings", &["list-keys", "org.gnome.system.proxy"]).is_ok() {
+        return Ok(Desktop::Gnome);
+    }
+
+    Err(format!(
+        "no supported way to set the system proxy on this desktop ({}); GNOME and KDE are supported",
+        if current.is_empty() { "unknown" } else { &current }
+    ))
 }

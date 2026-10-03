@@ -32,6 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 pub use super::tray_icon::{tray_mirror, Tray};
 use super::tray_icon::MenuLines;
 use super::{Fact, GrantCopy, Granted};
+use crate::sysproxy::Desktop;
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
     lede: "VPN mode needs Nunya to run as administrator",
@@ -102,9 +103,18 @@ pub fn browser_command(url: &str) -> Command {
 
 /// The core is a console program, and Windows gives a console program started from a GUI app a
 /// window of its own. CREATE_NO_WINDOW runs it without one; its output still comes through the
-/// pipes the caller set up.
-pub fn no_console_window(cmd: &mut tokio::process::Command) {
+/// pipes the caller set up. The same goes for every tool the system proxy runs.
+pub fn no_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x0800_0000);
+}
+
+/// The TUN (wintun) adapter's name, as it shows in the adapter list.
+pub const TUN_NAME: Option<&str> = Some("nunya-tun");
+
+/// The registry is the system proxy on Windows (`sysproxy.rs`'s `windows`).
+pub fn proxy_desktop() -> Result<Desktop, String> {
+    Ok(Desktop::Windows)
 }
 
 // The core's link: a named pipe, which is what the core dials here (`ConnectIPC` in its

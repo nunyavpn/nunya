@@ -58,7 +58,7 @@ impl CoreProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        crate::platform::no_console_window(&mut cmd);
+        crate::platform::no_console_window(cmd.as_std_mut());
 
         let mut child = cmd.spawn()?;
         let pid = child.id().unwrap_or(0);

@@ -8,7 +8,8 @@
 //! error on that platform's CI job rather than a gap found by a user.
 //!
 //! Moved here so far: VPN-mode privilege, owner-only files, the system browser, the core's
-//! console window, the core's link (its endpoint and who is on the other end of it), and the tray. The rest moves in one concern at a time (issue #100).
+//! console window, the core's link (its endpoint and who is on the other end of it), the tray, the
+//! TUN's name and which tool sets the system proxy. The rest moves in one concern at a time (issue #100).
 
 use std::fs;
 use std::io;
@@ -55,8 +56,16 @@ pub use imp::tighten;
 /// The desktop's own command for opening `url` in the system browser, not yet started.
 pub use imp::browser_command;
 
-/// Keeps a console program started from this GUI app from opening a window of its own.
+/// Keeps a console program started from this GUI app from opening a window of its own. Takes the
+/// std command; a tokio one hands its own over with `as_std_mut`.
 pub use imp::no_console_window;
+
+/// The TUN interface's name, or `None` to let the system number it (macOS's utunN).
+pub use imp::TUN_NAME;
+
+/// Which tool sets the system proxy here. On Linux it depends on the running desktop, so this
+/// may fail there, by name, rather than at compile time.
+pub use imp::proxy_desktop;
 
 /// The core link's listener between `ipc_bind`, which runs outside the async runtime, and
 /// `IpcAcceptor::adopt`, which runs on it: a std unix listener, or a named pipe's name.
@@ -126,13 +135,15 @@ fn _signature_check(
     core: &Path,
     file: &fs::File,
     meta: &fs::Metadata,
-    child: &mut tokio::process::Command,
+    child: &mut Command,
 ) -> Result<Granted, String> {
     let _: io::Result<()> = restrict_dir(core);
     let _: io::Result<()> = restrict_file(file);
     tighten(core, meta);
     let _: Command = browser_command("");
     no_console_window(child);
+    let _: Option<&'static str> = TUN_NAME;
+    let _: Result<crate::sysproxy::Desktop, String> = proxy_desktop();
     let _: io::Result<(PathBuf, PendingListener)> = ipc_bind(core.to_path_buf());
     ipc_unbind(core);
     grant(core)

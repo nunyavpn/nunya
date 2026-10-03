@@ -11,6 +11,7 @@ pub use super::unix::{
 };
 pub use super::tray_icon::{tray_mirror, Tray};
 use super::{Fact, GrantCopy, Granted};
+use crate::sysproxy::Desktop;
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
     lede: "VPN mode needs your administrator password",
@@ -159,4 +160,12 @@ pub(super) fn install_tray(
         })
         .build(app)?;
     Ok(Tray { icon, menu: None })
+}
+
+/// Left unset so the system assigns the next utun number, which is what generate.cpp does too.
+pub const TUN_NAME: Option<&str> = None;
+
+/// `networksetup` is the system proxy on macOS (`sysproxy.rs`'s `mac`).
+pub fn proxy_desktop() -> Result<Desktop, String> {
+    Ok(Desktop::Mac)
 }

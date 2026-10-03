@@ -35,7 +35,7 @@ pub fn tighten(path: &Path, meta: &fs::Metadata) {
 }
 
 /// Nothing to do: a unix process has no console window of its own to suppress.
-pub fn no_console_window(_cmd: &mut tokio::process::Command) {}
+pub fn no_console_window(_cmd: &mut std::process::Command) {}
 
 // The core's link: a unix socket, which the GUI binds and the core dials (`rpc/link.rs`).
 
