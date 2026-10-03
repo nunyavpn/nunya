@@ -12,6 +12,7 @@
  * the very thing an install does.
  */
 import { invoke, listen } from "../bridge";
+import { OS } from "../platform";
 import { store } from "../store";
 import { connection, disconnect } from "./tunnel";
 
@@ -45,6 +46,13 @@ export const updates: Updates = {
   error: null,
 };
 
+/**
+ * Whether the app updates itself. Not on Linux, where Nunya is a package (.deb, Arch) and its
+ * package manager updates it; replacing `/usr/bin/Nunya` from here would need root and leave the
+ * package manager's records wrong. `platform::IN_APP_UPDATES` is the Rust side of the same rule.
+ */
+export const IN_APP_UPDATES = OS !== "linux";
+
 /** Hourly: every merge is a release, and a user should hear of one the same day. */
 export const CHECK_EVERY_MS = 60 * 60 * 1000;
 /** Not at the very first moment: launch is busy starting the core and placing the user. */
@@ -62,6 +70,7 @@ let hooks: UpdateHooks;
 /** Must be called once, after the data file has loaded, so the beta setting read is the saved one. */
 export function initUpdates(next: UpdateHooks): void {
   hooks = next;
+  if (!IN_APP_UPDATES) return;
   void listen<[number, number | null]>("update-progress", ([received, total]) => {
     if (!updates.progress) return;
     updates.progress = { received, total };
@@ -84,7 +93,7 @@ export function initUpdates(next: UpdateHooks): void {
 
 /** Looks for a newer release and downloads it. One at a time; a request during one is dropped. */
 export async function checkForUpdates(): Promise<void> {
-  if (updates.checking || updates.installing) return;
+  if (!IN_APP_UPDATES || updates.checking || updates.installing) return;
   updates.checking = true;
   updates.error = null;
   hooks.refresh();

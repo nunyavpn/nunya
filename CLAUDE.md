@@ -44,7 +44,7 @@ npm run tauri dev
 | Frontend in a browser, no Rust | `VITE_MOCK=1 npm run dev` |
 | App with the list full | `VITE_MOCK=1 npm run tauri dev` |
 | Style guide | `npm run design` |
-| Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `nsis` (Windows) · `deb,appimage` (Linux) |
+| Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `nsis` (Windows) · `deb` (Linux) |
 | Arch package from a release `.deb` | `./scripts/package-arch.sh <Nunya_X.Y.Z_amd64.deb> [out]` (`--aur` for the AUR's `nunya-bin`) |
 | Signed bundle with the packet tunnel | `./scripts/build-app.sh` (needs an Apple Developer team) |
 | Release | automatic on every merge to `main` (beta); stable: `git tag vX.Y.Z && git push origin vX.Y.Z` |
@@ -100,8 +100,7 @@ installing. Repin with `./scripts/fetch-core.sh --update <tag>` and commit the l
 
 **A release core's parent must be a binary named exactly `Nunya` in the same directory**
 (`Nunya.exe` on Windows) — nunya-core's `internal/parentcheck`. That is why `mainBinaryName` is
-`Nunya`: the bundles put the core beside it (`Contents/MacOS/`, `/usr/bin/`, the AppImage's
-`usr/bin/`), and a renamed binary would leave the app unable to start its own core. It also means
+`Nunya`: the bundles put the core beside it (`Contents/MacOS/`, `/usr/bin/`), and a renamed binary would leave the app unable to start its own core. It also means
 `npm run tauri dev` cannot run a *release* core (its parent is `target/debug/nunya`); develop against
 one built with `--source`.
 
@@ -164,11 +163,11 @@ and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle
 
 **On Linux, VPN mode is file capabilities on the installed core.** The same sheet runs `pkexec
 setcap` with the five capabilities the core requires (`CAPS` in `platform/linux.rs`), only for a
-root-owned core beside a root-owned `Nunya` — a system package. The AppImage cannot take them (a
-read-only mount); there, in `tauri dev` and wherever else it cannot work, `grant_blocked` puts the
-reason on the status card instead. Desktop tools the app starts (`gsettings`, `xdg-open`, …) go
-through `platform::host_environment`, because the AppImage's `LD_LIBRARY_PATH` otherwise makes the
-system's `gsettings` write a keyfile GNOME never reads.
+root-owned core beside a root-owned `Nunya` — a system package. In `tauri dev` and wherever else it
+cannot work, `grant_blocked` puts the reason on the status card instead. **Linux ships as packages
+only** (.deb, Arch): the AppImage was dropped — linuxdeploy patched the core, its read-only mount
+took no capabilities, and its `LD_LIBRARY_PATH` made the system's `gsettings` write a keyfile GNOME
+never reads. A package manager updates Linux, so `IN_APP_UPDATES` is false there.
 
 ### Where things actually live (Rust)
 

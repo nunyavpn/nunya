@@ -66,9 +66,6 @@ pub use imp::tighten;
 /// The desktop's own command for opening `url` in the system browser, not yet started.
 pub use imp::browser_command;
 
-/// Starts a desktop tool (`gsettings`, `xdg-open`, …) in the desktop's own environment, undoing
-/// what a bundle's launcher set for the app itself — the AppImage's libraries, on Linux.
-pub use imp::host_environment;
 
 /// Keeps a console program started from this GUI app from opening a window of its own. Takes the
 /// std command; a tokio one hands its own over with `as_std_mut`.
@@ -124,6 +121,10 @@ pub use imp::NETWORK_EXTENSION;
 /// That transport, where `NETWORK_EXTENSION` is true.
 pub use imp::network_extension_transport;
 
+/// Whether the app updates itself here, or its package manager does (Linux). Mirrored by
+/// `IN_APP_UPDATES` in `src/features/updates.ts`, keyed on `OS`.
+pub use imp::IN_APP_UPDATES;
+
 /// `macos`, `linux` or `windows`: the one platform fact the frontend is told (`src/platform.ts`),
 /// so it keys its own per-platform values on this rather than on the webview's guess.
 pub use imp::OS;
@@ -137,8 +138,8 @@ pub fn webview_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
-/// Why `grant` cannot be offered on this machine, where that is known before asking (Linux's
-/// AppImage, a development build), so the status card says so rather than offering a button
+/// Why `grant` cannot be offered on this machine, where that is known before asking (on Linux, a
+/// development build or a core not installed by a package), so the status card says so rather than offering a button
 /// that always fails. `None` where the grant may be tried.
 pub use imp::grant_blocked;
 
@@ -188,8 +189,7 @@ fn _signature_check(
     let _: io::Result<()> = restrict_dir(core);
     let _: io::Result<()> = restrict_file(file);
     tighten(core, meta);
-    let mut browser: Command = browser_command("");
-    host_environment(&mut browser);
+    let _: Command = browser_command("");
     no_console_window(child);
     let _: Option<&'static str> = TUN_NAME;
     let _: Option<String> = grant_blocked(core);
@@ -210,6 +210,7 @@ fn _tray_signature_check(
     hide_popover(app);
     let _: bool = NETWORK_EXTENSION;
     let _: &'static str = OS;
+    let _: bool = IN_APP_UPDATES;
     let _: Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> = network_extension_transport();
     tray_mirror(app, lines, icon, "")
 }
@@ -231,7 +232,6 @@ async fn _ipc_signature_check(
     acceptor.accept().await
 }
 
-/// What is tested of the platforms so far is Linux's (the grant's refusals, the AppImage's
-/// environment).
+/// What is tested of the platforms so far is Linux's (the grant's refusals).
 #[cfg(all(test, target_os = "linux"))]
 mod tests;

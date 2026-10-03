@@ -171,7 +171,7 @@ you'd give access to.
 - **VPN mode** carries all of the device's traffic through the tunnel. It needs system privileges.
   On macOS, the first Connect in VPN mode explains why and asks for your administrator password,
   once (and again after each update); Nunya must be in Applications for this. On Linux, installed
-  from a package (the `.deb` or the Arch package, not the AppImage), it asks for your password once
+  from its package (the `.deb` or the Arch package), it asks for your password once
   through your system's own prompt (and again after each update).
 - **Allow LAN** lets other devices on your network use the proxy. **DNS** sets the resolver used
   inside the connection.
@@ -245,15 +245,11 @@ stable versions, from 1.0 on, are marked *Latest*.
   **Run anyway**.
 - **Linux** (x86-64):
   - **Debian and Ubuntu**: `sudo apt install ./Nunya_<version>_amd64.deb`.
-  - **Arch, Manjaro and their kin**: `yay -S nunya-bin` (or any AUR helper) for stable releases, or
-    `sudo pacman -U nunya-<version>-1-x86_64.pkg.tar.zst` from any release, betas included.
-  - **Anything else**: the **AppImage** runs on any distribution.
-    `chmod +x Nunya_<version>_amd64.AppImage && ./Nunya_<version>_amd64.AppImage`.
+  - **Arch, Manjaro and their kin**: `sudo pacman -U nunya-<version>-1-x86_64.pkg.tar.zst`. An AUR
+    package (`nunya-bin`) will follow once AUR registration reopens.
 
-  Only a package can run **VPN mode**: it needs the tunnel engine installed by the system, and the
-  AppImage runs from a read-only image, so it is proxy-only. The AppImage updates itself; a package
-  is updated by your package manager. On ARM there is an `arm64.deb` for Debian and Ubuntu, and no
-  AppImage yet.
+  Your package manager updates Nunya; the app does not update itself on Linux. On ARM there is an
+  `arm64.deb` for Debian and Ubuntu.
 
 This beta is built around **proxy mode**. VPN mode works on macOS after an administrator password
 prompt, and on Windows after Windows' own prompt, which restarts Nunya as administrator (or start
@@ -262,7 +258,7 @@ package, after your system's password prompt.
 
 ### Updating
 
-Nunya looks for a new release a little after it starts and then every hour. When it finds one it
+On macOS and Windows, Nunya looks for a new release a little after it starts and then every hour. When it finds one it
 downloads it, checks its signature against the key built into the app, and tells you it is ready:
 **Restart to update** installs it and opens the new version. It never restarts on its own, so a
 connection you are using is not dropped for an update. Betas are offered too, unless you turn off
@@ -270,6 +266,9 @@ connection you are using is not dropped for an update. Betas are offered too, un
 
 Updating works from the first version that has it; a copy older than that has to be replaced by
 hand once. On macOS, VPN mode asks for your administrator password again after an update.
+
+On Linux, your package manager updates Nunya (`apt`, `pacman`), not the app. VPN mode asks for your
+password once more after each update, since the update replaces the tunnel engine.
 
 ## Roadmap
 

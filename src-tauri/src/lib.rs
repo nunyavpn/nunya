@@ -249,6 +249,9 @@ async fn check_update(
 ) -> Result<Option<update::Available>, String> {
     use tauri_plugin_updater::UpdaterExt;
 
+    if !platform::IN_APP_UPDATES {
+        return Err("Nunya is updated by your package manager here".into());
+    }
     let releases = tokio::task::spawn_blocking(move || update::releases(proxy_port))
         .await
         .map_err(|e| e.to_string())??;

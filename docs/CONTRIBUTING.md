@@ -91,7 +91,7 @@ As the CI release builds them, without the packet tunnel extension:
 
 ```bash
 npm run tauri build -- --bundles app,dmg        # macOS
-npm run tauri build -- --bundles deb,appimage   # Linux
+npm run tauri build -- --bundles deb            # Linux
 npm run tauri build -- --bundles nsis           # Windows, from Git Bash
 ```
 
@@ -340,19 +340,18 @@ It is offered only where it is safe and possible: a core beside a binary named `
 by root** — a system package's `/usr/bin` (the .deb, the Arch package). In a user-owned directory the
 user's own code could put another `Nunya` beside the core and drive it. Elsewhere,
 `platform::grant_blocked` says why on the status card instead of offering a sheet that always fails:
-the AppImage (a read-only mount takes no capabilities), `npm run tauri dev`, a missing
-`pkexec`/`setcap`. VPN mode in development stays `./scripts/dev-linux.sh`. A package upgrade replaces
+`npm run tauri dev`, a core not installed by a package, a missing `pkexec`/`setcap`. VPN mode in development stays `./scripts/dev-linux.sh`. A package upgrade replaces
 the core, so the prompt returns after an update.
 
-### Linux: the AppImage's environment is not the desktop's
+### Linux: packages, not an AppImage
 
-The AppImage's launcher sets `LD_LIBRARY_PATH` to the image's libraries (and `GSETTINGS_SCHEMA_DIR`,
-`GIO_EXTRA_MODULES`, GTK's paths…) so that Nunya runs on them. A desktop tool Nunya starts inherits
-that: the system's `gsettings` then runs on the image's older GLib, cannot load the system's dconf
-module, falls back to a keyfile, and every `set` exits 0 while writing
-`~/.config/glib-2.0/settings/keyfile`, which GNOME never reads. That is how the system proxy looked
-set from the AppImage and was not. Every desktop tool is therefore started through
-`platform::host_environment`, which removes those overrides.
+Linux ships as a `.deb` and an Arch package only. The AppImage was dropped for three reasons, each
+of which cost a bug: linuxdeploy rewrites the bundled core with patchelf (the arm64 core never
+survived it); its read-only mount takes none of the capabilities VPN mode needs; and its launcher's
+`LD_LIBRARY_PATH` reached every tool the app starts, so the system's `gsettings` ran on the image's
+older GLib, fell back to a keyfile backend and wrote `~/.config/glib-2.0/settings/keyfile` — the
+system proxy looked set and was not. Do not bring it back without answering all three. A package
+belongs to its package manager, so the app does not update itself on Linux (`IN_APP_UPDATES`).
 
 ## Privilege: the macOS tunnel is a real system VPN
 
@@ -535,10 +534,10 @@ version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come n
 `node scripts/version.mjs next`.
 
 Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`), a **Windows x86-64** NSIS
-installer, a **Linux x86-64** AppImage, `.deb` and Arch package (`.pkg.tar.zst`), and an **arm64**
-`.deb`, against the core pinned in `core.lock`, and publishes them with a `SHA256SUMS`. The AppImage
-runs on every distribution and is the one Linux package the updater replaces; the packages are what
-VPN mode needs, since only a root-owned core can be given its capabilities. The Arch package is the
+installer, a **Linux x86-64** `.deb` and Arch package (`.pkg.tar.zst`), and an **arm64** `.deb`,
+against the core pinned in `core.lock`, and publishes them with a `SHA256SUMS`. Linux is packages
+only (see *Linux: packages, not an AppImage*), which a package manager updates, so `latest.json`
+names no Linux package. The Arch package is the
 `.deb` repackaged by `scripts/package-arch.sh` in an Arch container (makepkg is Arch's), so the two
 cannot drift; run the script locally on a `.deb` to try it.
 
@@ -546,8 +545,8 @@ cannot drift; run the script locally on a `.deb` to try it.
 same PKGBUILD with the release's `.deb` as its source and its checksum pinned, built once in CI before
 the push. It needs an AUR account whose SSH public key is on its profile, with the private key in
 the repository secret `AUR_SSH_PRIVATE_KEY`; without the secret the step warns and skips. The first
-push creates the package and makes that account its maintainer. There is no arm64 AppImage: linuxdeploy rewrites the
-bundled core with patchelf, which the arm64 core does not survive. Releases run one at a time, never cancelled, so two
+push creates the package and makes that account its maintainer (issue #117: registration is
+closed for now). Releases run one at a time, never cancelled, so two
 quick merges are two releases. A pull request that touches `release.yml`, the updater manifest or
 `tauri.conf.json` runs the builds without publishing, which is how a change to them is tried.
 A release whose build failed leaves its tag behind with no release; the next merge moves past it
