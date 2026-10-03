@@ -91,7 +91,7 @@ As the CI release builds them, without the packet tunnel extension:
 
 ```bash
 npm run tauri build -- --bundles app,dmg        # macOS
-npm run tauri build -- --bundles deb            # Linux
+npm run tauri build -- --bundles deb,rpm        # Linux
 npm run tauri build -- --bundles nsis           # Windows, from Git Bash
 ```
 
@@ -337,7 +337,7 @@ the whole set sing-box's own service unit uses (`hasTunCapabilities` in its
 Capabilities rather than the macOS setuid, because they grant what a TUN needs and not all of root.
 
 It is offered only where it is safe and possible: a core beside a binary named `Nunya`, **both owned
-by root** — a system package's `/usr/bin` (the .deb, the Arch package). In a user-owned directory the
+by root** — a system package's `/usr/bin` (the .deb, the .rpm, the Arch package). In a user-owned directory the
 user's own code could put another `Nunya` beside the core and drive it. Elsewhere,
 `platform::grant_blocked` says why on the status card instead of offering a sheet that always fails:
 `npm run tauri dev`, a core not installed by a package, a missing `pkexec`/`setcap`. VPN mode in development stays `./scripts/dev-linux.sh`. A package upgrade replaces
@@ -345,7 +345,7 @@ the core, so the prompt returns after an update.
 
 ### Linux: packages, not an AppImage
 
-Linux ships as a `.deb` and an Arch package only. The AppImage was dropped for three reasons, each
+Linux ships as packages only — `.deb` (Debian family), `.rpm` (Fedora family) and an Arch package. The AppImage was dropped for three reasons, each
 of which cost a bug: linuxdeploy rewrites the bundled core with patchelf (the arm64 core never
 survived it); its read-only mount takes none of the capabilities VPN mode needs; and its launcher's
 `LD_LIBRARY_PATH` reached every tool the app starts, so the system's `gsettings` ran on the image's
@@ -534,7 +534,8 @@ version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come n
 `node scripts/version.mjs next`.
 
 Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`), a **Windows x86-64** NSIS
-installer, a **Linux x86-64** `.deb` and Arch package (`.pkg.tar.zst`), and an **arm64** `.deb`,
+installer, a **Linux x86-64** `.deb`, `.rpm` and Arch package (`.pkg.tar.zst`), and an **arm64**
+`.deb` and `.rpm`,
 against the core pinned in `core.lock`, and publishes them with a `SHA256SUMS`. Linux is packages
 only (see *Linux: packages, not an AppImage*), which a package manager updates, so `latest.json`
 names no Linux package. The Arch package is the

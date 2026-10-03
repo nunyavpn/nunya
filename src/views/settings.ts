@@ -98,7 +98,7 @@ export class SettingsPanel {
       render(
         this.updatesHost,
         h("h4", {}, "Updates"),
-        h("div", { class: "srow" }, this.label(name, "updated by your package manager (apt, pacman)")),
+        h("div", { class: "srow" }, this.label(name, "updated by your package manager (apt, dnf, pacman)")),
       );
       return;
     }

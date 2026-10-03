@@ -44,7 +44,7 @@ npm run tauri dev
 | Frontend in a browser, no Rust | `VITE_MOCK=1 npm run dev` |
 | App with the list full | `VITE_MOCK=1 npm run tauri dev` |
 | Style guide | `npm run design` |
-| Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `nsis` (Windows) · `deb` (Linux) |
+| Local bundle, as CI releases it | `npm run tauri build -- --bundles app,dmg` (macOS) · `nsis` (Windows) · `deb,rpm` (Linux) |
 | Arch package from a release `.deb` | `./scripts/package-arch.sh <Nunya_X.Y.Z_amd64.deb> [out]` (`--aur` for the AUR's `nunya-bin`) |
 | Signed bundle with the packet tunnel | `./scripts/build-app.sh` (needs an Apple Developer team) |
 | Release | automatic on every merge to `main` (beta); stable: `git tag vX.Y.Z && git push origin vX.Y.Z` |
@@ -165,7 +165,7 @@ and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle
 setcap` with the five capabilities the core requires (`CAPS` in `platform/linux.rs`), only for a
 root-owned core beside a root-owned `Nunya` — a system package. In `tauri dev` and wherever else it
 cannot work, `grant_blocked` puts the reason on the status card instead. **Linux ships as packages
-only** (.deb, Arch): the AppImage was dropped — linuxdeploy patched the core, its read-only mount
+only** (.deb, .rpm, Arch): the AppImage was dropped — linuxdeploy patched the core, its read-only mount
 took no capabilities, and its `LD_LIBRARY_PATH` made the system's `gsettings` write a keyfile GNOME
 never reads. A package manager updates Linux, so `IN_APP_UPDATES` is false there.
 
