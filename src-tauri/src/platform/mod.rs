@@ -231,5 +231,7 @@ async fn _ipc_signature_check(
     acceptor.accept().await
 }
 
-#[cfg(test)]
+/// What is tested of the platforms so far is Linux's (the grant's refusals, the AppImage's
+/// environment).
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
