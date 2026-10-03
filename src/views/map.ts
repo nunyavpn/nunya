@@ -203,8 +203,10 @@ async function loadBorders(url: string): Promise<Borders> {
   return decode((await response.json()) as Topology);
 }
 
-function token(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+/** A colour token as the map's own element inherits it — in the app, the page's; on the mobile
+ *  design board (`design/mobile/`), the theme of the phone frame it is drawn in. */
+function token(el: Element, name: string): string {
+  return getComputedStyle(el).getPropertyValue(name).trim();
 }
 
 // ---------------------------------------------------------------- the map
@@ -560,9 +562,9 @@ export class WorldMap {
       ctx.beginPath();
       ctx.rect(0, 0, 360, LAT_SPAN);
       ctx.clip();
-      ctx.fillStyle = token("--map-land") || "#c9d1e0";
+      ctx.fillStyle = token(this.canvas, "--map-land") || "#c9d1e0";
       ctx.fill(borders.path, "evenodd");
-      ctx.strokeStyle = token("--map-border") || "#eef1f7";
+      ctx.strokeStyle = token(this.canvas, "--map-border") || "#eef1f7";
       // A constant width on screen, whatever the zoom: thicker than a hairline at world scale so
       // neighbours read as separate, never so thick up close that a small country disappears.
       ctx.lineWidth = Math.min(1.1, 0.5 + this.view.k * 0.08) / s;
@@ -581,10 +583,10 @@ export class WorldMap {
   private drawLabels(labels: CountryLabel[]) {
     const ctx = this.ctx;
     const { width, height } = this.size;
-    ctx.font = `600 ${this.view.k >= 5 ? 12 : 11}px ${token("--ui") || "sans-serif"}`;
+    ctx.font = `600 ${this.view.k >= 5 ? 12 : 11}px ${token(this.canvas, "--ui") || "sans-serif"}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = token("--map-label") || "#69738c";
+    ctx.fillStyle = token(this.canvas, "--map-label") || "#69738c";
     for (const label of labels) {
       const x = this.sx(label.x);
       const y = this.sy(label.y);
@@ -608,7 +610,7 @@ export class WorldMap {
   private drawConnection() {
     if (this.route.length < 2) return;
 
-    this.ctx.strokeStyle = token("--map-line") || "#2e90fa";
+    this.ctx.strokeStyle = token(this.canvas, "--map-line") || "#2e90fa";
     this.ctx.lineWidth = 1.6;
     this.ctx.setLineDash([5, 4]);
     this.ctx.globalAlpha = 0.9;
@@ -659,7 +661,7 @@ export class WorldMap {
     ctx.lineTo(-size * 0.35, 0);
     ctx.lineTo(-size * 0.8, size * 0.75);
     ctx.closePath();
-    ctx.fillStyle = token("--map-line") || "#2e90fa";
+    ctx.fillStyle = token(this.canvas, "--map-line") || "#2e90fa";
     ctx.fill();
     ctx.restore();
   }

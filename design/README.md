@@ -6,6 +6,16 @@ A style guide that renders itself from the app.
 npm run design      # opens http://localhost:1420/design/
 ```
 
+## On a phone: `mobile/`
+
+`/design/mobile/` is the phone version, drawn screen by screen in both themes: Home (the
+connection as a sheet over the map) in each state, Servers with the connection bar above the
+tabs, the sheets (row actions, Add servers, VPN mode before Android asks), and Settings. Unlike the
+style guide it is a **proposal**: the layout is the board's own (`mb-` classes in `mobile.css`), and
+the app's phone stylesheet is rebuilt to match it once agreed. Its parts are still the app's — the
+tokens are read from `src/styles.css` and set on each phone, light or dark, so both sit side by
+side; the icons, flags, latency grades and the map (`WorldMap`) are the real ones.
+
 ## What it is
 
 `styleguide.ts` does not contain a palette, an icon list or a component catalogue. It reads all
