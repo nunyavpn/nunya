@@ -66,6 +66,10 @@ pub use imp::tighten;
 /// The desktop's own command for opening `url` in the system browser, not yet started.
 pub use imp::browser_command;
 
+/// Starts a desktop tool (`gsettings`, `xdg-open`, …) in the desktop's own environment, undoing
+/// what a bundle's launcher set for the app itself — the AppImage's libraries, on Linux.
+pub use imp::host_environment;
+
 /// Keeps a console program started from this GUI app from opening a window of its own. Takes the
 /// std command; a tokio one hands its own over with `as_std_mut`.
 pub use imp::no_console_window;
@@ -133,6 +137,15 @@ pub fn webview_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+/// Why `grant` cannot be offered on this machine, where that is known before asking (Linux's
+/// AppImage, a development build), so the status card says so rather than offering a button
+/// that always fails. `None` where the grant may be tried.
+pub use imp::grant_blocked;
+
+/// Adjusts the process before the webview starts, where the platform's webview needs it (Linux,
+/// Wayland on NVIDIA). Called first thing in `run`, while the process has one thread.
+pub use imp::before_webview;
+
 /// What the caller has to do once `grant` has succeeded. Each platform builds only the variant
 /// its grant produces, hence the allowance.
 #[allow(dead_code)]
@@ -175,9 +188,12 @@ fn _signature_check(
     let _: io::Result<()> = restrict_dir(core);
     let _: io::Result<()> = restrict_file(file);
     tighten(core, meta);
-    let _: Command = browser_command("");
+    let mut browser: Command = browser_command("");
+    host_environment(&mut browser);
     no_console_window(child);
     let _: Option<&'static str> = TUN_NAME;
+    let _: Option<String> = grant_blocked(core);
+    before_webview();
     let _: Result<crate::sysproxy::Desktop, String> = proxy_desktop();
     let _: io::Result<(PathBuf, PendingListener)> = ipc_bind(core.to_path_buf());
     ipc_unbind(core);
@@ -214,3 +230,8 @@ async fn _ipc_signature_check(
     let mut acceptor: IpcAcceptor = IpcAcceptor::adopt(listener)?;
     acceptor.accept().await
 }
+
+/// What is tested of the platforms so far is Linux's (the grant's refusals, the AppImage's
+/// environment).
+#[cfg(all(test, target_os = "linux"))]
+mod tests;

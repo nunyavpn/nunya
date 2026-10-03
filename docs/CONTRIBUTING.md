@@ -326,6 +326,34 @@ The known ceiling: `Contents/MacOS` belongs to the user, so code already running
 replace `Nunya` and drive a root core. The extension is the fix. An app update replaces the core and
 drops the bit, so the prompt returns after each update.
 
+### Linux: capabilities on the installed core, through polkit
+
+On Linux the same sheet leads to `platform::grant` in `platform/linux.rs`, which runs
+`pkexec setcap cap_net_admin,cap_net_raw,cap_net_bind_service,cap_sys_ptrace,cap_dac_read_search+ep`
+on the bundled core and restarts it. All five, because the core counts itself privileged only with
+the whole set sing-box's own service unit uses (`hasTunCapabilities` in its
+`internal/rpc/privilege_linux.go`); `NET_ADMIN` alone opens the TUN and fails part-way. polkit runs
+`setcap`, never the core, so the core stays a child of `Nunya` and both parent checks pass.
+Capabilities rather than the macOS setuid, because they grant what a TUN needs and not all of root.
+
+It is offered only where it is safe and possible: a core beside a binary named `Nunya`, **both owned
+by root** — a system package's `/usr/bin` (the .deb, the Arch package). In a user-owned directory the
+user's own code could put another `Nunya` beside the core and drive it. Elsewhere,
+`platform::grant_blocked` says why on the status card instead of offering a sheet that always fails:
+the AppImage (a read-only mount takes no capabilities), `npm run tauri dev`, a missing
+`pkexec`/`setcap`. VPN mode in development stays `./scripts/dev-linux.sh`. A package upgrade replaces
+the core, so the prompt returns after an update.
+
+### Linux: the AppImage's environment is not the desktop's
+
+The AppImage's launcher sets `LD_LIBRARY_PATH` to the image's libraries (and `GSETTINGS_SCHEMA_DIR`,
+`GIO_EXTRA_MODULES`, GTK's paths…) so that Nunya runs on them. A desktop tool Nunya starts inherits
+that: the system's `gsettings` then runs on the image's older GLib, cannot load the system's dconf
+module, falls back to a keyfile, and every `set` exits 0 while writing
+`~/.config/glib-2.0/settings/keyfile`, which GNOME never reads. That is how the system proxy looked
+set from the AppImage and was not. Every desktop tool is therefore started through
+`platform::host_environment`, which removes those overrides.
+
 ## Privilege: the macOS tunnel is a real system VPN
 
 VPN mode on macOS uses Apple's NetworkExtension framework, the same mechanism WireGuard, Mullvad,

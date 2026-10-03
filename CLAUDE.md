@@ -161,6 +161,14 @@ and fails both the core's parent check and `rpc/peer.rs`. Only a core beside `Nu
 since the release core's parent check is the only thing keeping other programs from driving it,
 and `build.rs` refuses a release build over a `noparentcheck` core, so no bundle carries one. See docs/CONTRIBUTING.md's *Privilege today*.
 
+**On Linux, VPN mode is file capabilities on the installed core.** The same sheet runs `pkexec
+setcap` with the five capabilities the core requires (`CAPS` in `platform/linux.rs`), only for a
+root-owned core beside a root-owned `Nunya` — a system package. The AppImage cannot take them (a
+read-only mount); there, in `tauri dev` and wherever else it cannot work, `grant_blocked` puts the
+reason on the status card instead. Desktop tools the app starts (`gsettings`, `xdg-open`, …) go
+through `platform::host_environment`, because the AppImage's `LD_LIBRARY_PATH` otherwise makes the
+system's `gsettings` write a keyfile GNOME never reads.
+
 ### Where things actually live (Rust)
 
 `main.rs` is a five-line shim. **All Tauri commands and the startup sequence are in
