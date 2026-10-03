@@ -537,6 +537,7 @@ function syncDiagnostics() {
     transport: readiness?.transport ?? "unknown",
     transportState: readiness?.state ?? "unknown",
     transportDetail: readiness?.detail ?? null,
+    connection,
     coreConnected: coreReady,
   });
 }
