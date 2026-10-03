@@ -35,8 +35,10 @@ const MAX_ZOOM = 14;
 const DETAIL_ZOOM = 2.5;
 /**
  * Narrower than this, the whole world is too small to read a city on — a phone, whose layout the
- * stylesheet starts at the same width — so the map does not zoom out past `NARROW_ZOOM`, and until
- * the user moves it, it keeps itself centred on the route, or on the device before there is one.
+ * stylesheet starts at the same width. There the map does not zoom out past `NARROW_ZOOM`, nor past
+ * where the world fills the pane's height; it cannot be dragged beyond the world's top or bottom
+ * edge; it runs under the status card, which floats over it as a sheet; and until the user moves
+ * it, it keeps itself centred on the route, or on the device before there is one.
  */
 const NARROW = 640;
 const NARROW_ZOOM = 4;
@@ -316,8 +318,15 @@ export class WorldMap {
    * Zooms by `factor` about a point in the pane, keeping whatever is under that point there —
    * the behaviour every map has taught people to expect from a scroll wheel.
    */
+  private get narrow(): boolean {
+    return this.size.width > 0 && this.size.width < NARROW;
+  }
+
   private get minZoom(): number {
-    return this.size.width > 0 && this.size.width < NARROW ? NARROW_ZOOM : MIN_ZOOM;
+    if (!this.narrow) return MIN_ZOOM;
+    // The world's height at zoom 1; zoomed until it fills the pane, so nothing shows above or below.
+    const band = LAT_SPAN * this.base.perDegree;
+    return Math.max(NARROW_ZOOM, band > 0 ? (this.size.height - this.covered) / band : NARROW_ZOOM);
   }
 
   /**
@@ -332,7 +341,7 @@ export class WorldMap {
       : home
         ? [home.lon, home.lat]
         : [0, (LAT_TOP + LAT_BOTTOM) / 2];
-    const k = NARROW_ZOOM;
+    const k = this.minZoom;
     const floor = this.size.height - this.covered;
     this.view = {
       k,
@@ -383,7 +392,11 @@ export class WorldMap {
     // On screen, left edge = view.x + left: it may not pass the middle going right, and the right
     // edge may not pass it going left. The same vertically, about the middle of the map area.
     this.view.x = Math.min(Math.max(this.view.x, width / 2 - right), width / 2 - left);
-    this.view.y = Math.min(Math.max(this.view.y, floor / 2 - bottom), floor / 2 - top);
+    // A narrow map is zoomed to fill its height, and its edges stop at the pane's: dragging past the
+    // poles there shows nothing but the empty band.
+    this.view.y = this.narrow
+      ? Math.min(Math.max(this.view.y, floor - bottom), -top)
+      : Math.min(Math.max(this.view.y, floor / 2 - bottom), floor / 2 - top);
     // At zoom 1 the world sits exactly where it always did.
     if (k === 1) this.view = { k: 1, x: 0, y: 0 };
   }
@@ -503,7 +516,8 @@ export class WorldMap {
     }
     this.size = { width: box.width, height: box.height };
     const card = this.canvas.parentElement?.querySelector(".status");
-    this.covered = card && card.getBoundingClientRect().top < box.bottom ? CARD_RESERVE : 0;
+    this.covered =
+      card && !this.narrow && card.getBoundingClientRect().top < box.bottom ? CARD_RESERVE : 0;
     this.fitBase(box.width, box.height);
     if (this.minZoom > MIN_ZOOM && (!this.steered || this.view.k < this.minZoom)) this.follow();
     this.clamp();

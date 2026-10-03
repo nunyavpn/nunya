@@ -3214,21 +3214,24 @@ button:disabled {
    A phone is one column, not three (issue #129). The desktop shape — rail, list, map side by side —
    squeezed into 360px put the map under the bottom of the screen and the status card off it. So:
 
-     the list, or whichever panel the rail opened, takes the screen;
+     the list, or whichever panel the rail opened, takes the screen, and runs on under the status
+       card, which floats over its bottom; the list ends with room enough (`--under-card`) for its
+       last row to scroll clear of the card;
      the map has a tab of its own (`#nav-map`, `.window.show-map`), since it is looked at now and
        then and would otherwise cost a third of the screen all the time;
-     the status card sits above the tab bar as one line — the state and Connect. On the map's tab
-       it is a bottom sheet over the map, as in any phone app: it follows the finger and settles
-       open or closed (`StatusCard.swipe`, which moves it by `--sheet-y`), showing the speeds, Share
-       and the chips when open. On the list it stays one line, so the list keeps the screen;
-     the rail is the tab bar, where a thumb reaches.
+     the status card is one line — the state and Connect. On the map's tab it is a bottom sheet
+       over the map, as in any phone app: it follows the finger and settles open or closed
+       (`StatusCard.swipe`, which moves it by `--sheet-y`), showing the speeds, Share and every
+       chip when open, wrapped, the sheet as tall as they need. On the list it stays one line;
+     the rail is the tab bar, where a thumb reaches;
+     everything a finger presses is at least 40px, and nothing touches the screen's edge.
 
    Collapsed, the card still makes no claim it cannot keep: its headline is keyed by mode ("Proxy
-   running", never "You're protected" outside VPN mode), and the warnings stay — "Only apps set to
-   use it", and whatever is stopping Connect. The rail's shield is left out, since the card says the same
-   thing just above it. Sheets rise from the bottom edge. Nothing here changes the desktop: the
-   window's minimum width (880px) keeps it well above this breakpoint. The system bars are kept
-   clear by the Android activity, which pads the webview by their insets. */
+   running", never "You're protected" outside VPN mode), and the warnings stay on the list — "Only
+   apps set to use it", and whatever is stopping Connect. The rail's shield is left out, since the
+   card says the same thing. Sheets rise from the bottom edge. Nothing here changes the desktop:
+   the window's minimum width (880px) keeps it well above this breakpoint. The system bars are
+   kept clear by the Android activity, which pads the webview by their insets. */
 
 .phone-only,
 .st-grab {
@@ -3237,18 +3240,25 @@ button:disabled {
 
 @media (max-width: 640px) {
   .window {
+    --gutter: 18px;
+    --under-card: 140px;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   .locs,
   .panel {
     grid-row: 1;
+    grid-column: 1;
     border-right: 0;
   }
 
+  /* In the same cell as the list, at its bottom, above it: the card floats over the list. */
   .mappane {
-    grid-row: 2;
+    grid-row: 1;
+    grid-column: 1;
+    align-self: end;
+    z-index: 3;
     display: flex;
     flex-direction: column;
     background: transparent;
@@ -3262,18 +3272,26 @@ button:disabled {
     display: none;
   }
 
-  /* The map's tab: the pane takes the screen, and the card sits over its bottom as on a desktop. */
+  /* The map's tab: the pane takes the screen, and the sheet floats over its bottom. */
   .window.show-map .mappane {
-    grid-row: 1 / 3;
+    align-self: stretch;
     background: var(--sunk);
     overflow: hidden;
   }
 
+  .locs-list,
+  .set-scroll,
+  .rlist,
+  .support-body,
+  .panel .log {
+    padding-bottom: var(--under-card);
+  }
+
   .rail {
-    grid-row: 3;
+    grid-row: 2;
     flex-direction: row;
     justify-content: space-around;
-    padding: 6px 8px;
+    padding: 6px var(--gutter);
     gap: 0;
     border-right: 0;
     border-top: 1px solid var(--line);
@@ -3288,15 +3306,83 @@ button:disabled {
     display: none;
   }
 
+  .rail-btn,
   .rail-btn.small {
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
   }
 
-  /* No traffic lights to clear on a phone. */
-  .panel .sheet-head {
-    padding-top: 16px;
+  /* ---- sizes for a finger, and room at the edges */
+
+  .locs-head {
+    padding: 18px var(--gutter) 0;
   }
+
+  .locs-title h3 {
+    font-size: 22px;
+  }
+
+  .addbtn {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+  }
+
+  .search {
+    padding: 12px 14px;
+    border-radius: 12px;
+  }
+
+  /* 16px also keeps a phone's browser from zooming the page when the field takes focus. */
+  .search input {
+    font-size: 16px;
+  }
+
+  .quick {
+    margin: 14px var(--gutter) 6px;
+    padding: 14px 16px;
+    border-radius: 13px;
+  }
+
+  .ghead {
+    padding-left: calc(var(--gutter) - 4px);
+    padding-right: var(--gutter);
+  }
+
+  .gquota {
+    padding-left: var(--gutter);
+    padding-right: var(--gutter);
+  }
+
+  .gsync {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+  }
+
+  .loc {
+    padding: 12px var(--gutter);
+    /* Room for the ⋯ that sits over the row's right end, so it never covers the latency. */
+    padding-right: calc(var(--gutter) + 50px);
+  }
+
+  .loc-acts {
+    right: calc(var(--gutter) - 4px);
+  }
+
+  .locact {
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+  }
+
+  .panel .sheet-head {
+    /* No traffic lights to clear on a phone. */
+    padding: 16px var(--gutter);
+  }
+
+  /* ---- the status card */
 
   .status {
     position: relative;
@@ -3304,10 +3390,10 @@ button:disabled {
     right: auto;
     bottom: auto;
     z-index: 2;
-    margin-top: auto;
-    border-width: 1px 0 0;
-    border-radius: 16px 16px 0 0;
-    box-shadow: 0 -8px 20px -14px rgb(8 11 23 / 45%);
+    margin: 0 10px 10px;
+    border-width: 1px;
+    border-radius: 18px;
+    box-shadow: 0 10px 30px -12px rgb(8 11 23 / 50%);
     padding: 12px 14px;
   }
 
@@ -3315,11 +3401,13 @@ button:disabled {
      line shows. It eases into place when let go, and tracks the finger exactly while dragged. */
   .window.show-map .status {
     position: absolute;
-    left: 0;
-    right: 0;
+    left: 10px;
+    right: 10px;
     bottom: 0;
     margin: 0;
     padding-top: 0;
+    border-radius: 18px 18px 0 0;
+    border-bottom-width: 0;
     /* The handle, the first line and the padding under it: what a closed sheet leaves in view. */
     --peek: 74px;
     transform: translateY(var(--sheet-y, calc(100% - var(--peek))));
@@ -3362,6 +3450,7 @@ button:disabled {
 
   .st-top > .btn {
     order: 1;
+    padding: 12px 20px;
   }
 
   .st-top::after {
@@ -3402,24 +3491,17 @@ button:disabled {
     padding-top: 0;
   }
 
-  /* One line that scrolls sideways, not five that push the list off the screen. What the modes'
-     rule makes load-bearing comes first, so it is always in view: the listen address, then the
-     warnings ("Only apps set to use it", "System proxy not set"). */
+  /* The chips wrap down the sheet rather than scroll sideways; the sheet is as tall as they need,
+     and dragged up further to see them all. What the modes' rule makes load-bearing comes first:
+     the listen address, then the warnings. */
   .st-more {
     margin-top: 10px;
     padding-top: 10px;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  /* Android's WebView still draws its own scrollbar when `scrollbar-width` says none. */
-  .st-more::-webkit-scrollbar {
-    display: none;
   }
 
   .st-more .tag {
-    flex: none;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .st-more .tag.strong {
@@ -3439,8 +3521,13 @@ button:disabled {
   }
 
   .mapzoom {
-    top: 10px;
-    right: 10px;
+    top: 12px;
+    right: 12px;
+  }
+
+  .mapzoom button {
+    width: 40px;
+    height: 38px;
   }
 
   .mpick {
@@ -3455,7 +3542,7 @@ button:disabled {
   .sheet {
     width: 100%;
     max-height: 92%;
-    border-radius: 16px 16px 0 0;
+    border-radius: 18px 18px 0 0;
     border-width: 1px 0 0;
   }
 
@@ -3464,21 +3551,11 @@ button:disabled {
   }
 }
 
-/* A touch screen has no hover to reveal a row's ⋯, so it sits beside the row instead of over its
-   latency, always shown. */
+/* A touch screen has no hover to reveal a row's ⋯, so it is always shown, over the row's right
+   end as on a desktop; the phone layout above leaves the row room for it. */
 @media (hover: none) {
-  .loc {
-    width: auto;
-    flex: 1;
-    min-width: 0;
-  }
-
   .loc-acts {
-    position: static;
-    transform: none;
     opacity: 1;
-    align-self: center;
-    padding-right: 12px;
   }
 
   .loc-wrap:focus-within .loc-right {
