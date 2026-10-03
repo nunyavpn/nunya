@@ -87,7 +87,7 @@ off, red not working), then the server list, bypass rules, settings, support, an
 
 ### In the menu bar
 
-<p align="center"><img src="docs/screenshots/popover.png" width="340" alt="The menu-bar popover: Proxy running on FI-1 Helsinki with a Disconnect button, a search box, Quick Connect's three choices, and the mode, ad blocker and anti-tracker switches"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/popover-dark.png"><img src="docs/screenshots/popover.png" width="340" alt="The menu-bar popover: Proxy running on FI-1 Helsinki with a Disconnect button, a search box, Quick Connect's three choices, and the mode, ad blocker and anti-tracker switches"></picture></p>
 
 Nunya's mark sits in the macOS menu bar and the Linux top bar in the status shield's colours
 (green connected, amber connecting, red not working, dimmed off), so you can see the connection
@@ -110,7 +110,7 @@ Without them there is no icon, and closing the window quits Nunya as before.
 
 ### Adding servers
 
-<p align="center"><img src="docs/screenshots/add-servers.png" width="420" alt="The Add servers sheet, having found a subscription, a WireGuard config and a VLESS server in pasted text"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/add-servers-dark.png"><img src="docs/screenshots/add-servers.png" width="420" alt="The Add servers sheet, having found a subscription, a WireGuard config and a VLESS server in pasted text"></picture></p>
 
 Press **+** above the list and paste whatever your provider gave you. One paste can hold several
 things at once, and Nunya sorts them before anything is added:
@@ -126,7 +126,7 @@ hand. New servers are tested and located straight away.
 
 ### Quick Connect
 
-<p align="center"><img src="docs/screenshots/quick-connect.png" width="420" alt="The Quick Connect prompt offering the fastest, the most used and the most recent server"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/quick-connect-dark.png"><img src="docs/screenshots/quick-connect.png" width="420" alt="The Quick Connect prompt offering the fastest, the most used and the most recent server"></picture></p>
 
 **Quick Connect**, at the top of the list, lets you choose by what matters this time:
 
@@ -145,7 +145,7 @@ see why.
 
 ### Usage
 
-<p align="center"><img src="docs/screenshots/usage.png" width="420" alt="The usage of a subscription: totals for 30 days and all time, a daily chart, and a breakdown by server"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/usage-dark.png"><img src="docs/screenshots/usage.png" width="420" alt="The usage of a subscription: totals for 30 days and all time, a daily chart, and a breakdown by server"></picture></p>
 
 Press the chart button on a subscription, or choose **⋯ → Usage** on a server, to see what it has
 carried: the last 30 days and all time, a daily chart, and, for a subscription, each server's
@@ -154,7 +154,7 @@ device only, and is kept for as long as the server is in your list.
 
 ### Sharing a server
 
-<p align="center"><img src="docs/screenshots/share.png" width="420" alt="The Share sheet with a QR code and the server's share link"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/share-dark.png"><img src="docs/screenshots/share.png" width="420" alt="The Share sheet with a QR code and the server's share link"></picture></p>
 
 **⋯ → Share** shows a server as a QR code and a link, ready to scan on a phone or import in Nunya on
 another device. A WireGuard server can also be shared as a WireGuard config, which the official
@@ -163,7 +163,7 @@ you'd give access to.
 
 ### Settings: VPN or proxy
 
-<p align="center"><img src="docs/screenshots/settings.png" width="720" alt="The Advanced settings in proxy mode: port, Allow LAN, Set system proxy, and the ad blocker and anti-tracker switches"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png"><img src="docs/screenshots/settings.png" width="720" alt="The Advanced settings in proxy mode: port, Allow LAN, Set system proxy, and the ad blocker and anti-tracker switches"></picture></p>
 
 - **Proxy mode** (the default) opens a SOCKS and HTTP port on your machine (2080 unless you change
   it). Apps you point at it go through the connection. Turn on **Set system proxy** to point your
@@ -186,7 +186,7 @@ Settings apply when you connect, so they're locked while a connection is running
 
 ### Bypass rules
 
-<p align="center"><img src="docs/screenshots/rules.png" width="720" alt="Bypass rules for domains, an address and a range, beside the local network ranges that are always bypassed"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/rules-dark.png"><img src="docs/screenshots/rules.png" width="720" alt="Bypass rules for domains, an address and a range, beside the local network ranges that are always bypassed"></picture></p>
 
 Anything matching a bypass rule leaves on your normal connection: a domain (with or without
 `*.`), an address, or a range such as `10.0.0.0/8`. Your local network is always bypassed.
@@ -216,7 +216,7 @@ Reality. Import an XHTTP link (the legacy `splithttp` name is accepted), then ed
 preserved; the main fields take precedence, as in Xray. Other extras, including separate
 `downloadSettings`, are rejected with a reason. VLESS flow must be empty for XHTTP.
 
-[View the XHTTP editor](docs/screenshots/xhttp-editor.jpg).
+[View the XHTTP editor](docs/screenshots/xhttp-editor.png).
 
 ## Privacy and security
 
