@@ -11,6 +11,8 @@ pub mod geo;
 mod netwatch;
 mod platform;
 pub mod rpc;
+/// The running core, however this platform hosts it; public for the integration tests.
+pub use platform::Engine;
 pub mod storage;
 pub mod subscription;
 pub mod sysproxy;
@@ -26,17 +28,13 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 use config::BuildRequest;
-use core_proc::CoreProcess;
 use rpc::gen;
-use rpc::{method, CoreLink};
+use rpc::method;
 use transport::{Throughput, TunnelState, TunnelTransport};
 
 struct AppState {
-    link: Arc<CoreLink>,
-    core: Mutex<Option<CoreProcess>>,
-    runtime_dir: PathBuf,
-    /// Where the core binary is, so a probe can start one of its own.
-    core_path: PathBuf,
+    /// The running core, however this platform hosts it (`platform::Engine`).
+    core: Arc<Engine>,
     /// How the tunnel is actually carried. Chosen at startup; see `transport::select`.
     tunnel: Arc<dyn TunnelTransport>,
     /// The update the last check found, if any; see `update.rs`.
@@ -119,7 +117,7 @@ fn app_log_backlog() -> Vec<String> {
 
 #[tauri::command]
 async fn core_connected(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.link.is_connected().await)
+    Ok(state.core.is_connected().await)
 }
 
 /// Whether the tunnel can actually be brought up, and if not, why.
@@ -144,7 +142,7 @@ async fn tunnel_readiness(
         && state.tunnel_kind == transport::select::Kind::Subprocess
         && matches!(state_or_err, Some(TunnelState::NeedsPermission));
     // Known up front not to work here: said on the status card, and no grant sheet offered.
-    let blocked = needs_grant.then(|| platform::grant_blocked(&state.core_path)).flatten();
+    let blocked = needs_grant.then(|| platform::grant_blocked(state.core.binary())).flatten();
     let can_grant = needs_grant && blocked.is_none();
     let detail = detail.or(blocked);
 
@@ -172,7 +170,7 @@ async fn check_config(
     with_block_lists(&app, &mut req)?;
     let cfg = config::runtime::build(&req)?;
     let pretty = cfg.pretty()?;
-    cfg.check(&state.link).await?;
+    cfg.check(&state.core).await?;
     Ok(pretty)
 }
 
@@ -193,18 +191,14 @@ async fn request_permission(
         if matches!(state.tunnel.state().await, Ok(TunnelState::Connected)) {
             return Err("disconnect first: Nunya restarts its engine to take administrator access".into());
         }
-        let core_path = state.core_path.clone();
+        let core_path = state.core.binary().to_path_buf();
         let granted = tokio::task::spawn_blocking(move || platform::grant(&core_path))
             .await
             .map_err(|e| e.to_string())??;
 
         match granted {
             platform::Granted::RestartCore => {
-                let mut slot = state.core.lock().await;
-                if let Some(old) = slot.take() {
-                    old.stop().await;
-                }
-                let pid = respawn_core(&app, &state, &mut slot)?;
+                let pid = state.core.restart().await?;
                 log::info!("core restarted with administrator access (pid {pid})");
             }
             // Through the usual exit, so the system proxy is put back and the core stopped.
@@ -220,20 +214,6 @@ async fn request_permission(
         .request_permission()
         .await
         .map_err(|e| e.to_string())
-}
-
-/// Starts a core into `slot`, which the caller has emptied, and tells the link to expect it.
-fn respawn_core(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    slot: &mut Option<CoreProcess>,
-) -> Result<u32, String> {
-    let core = spawn_core(app, &state.core_path, state.link.socket_path(), &state.runtime_dir)
-        .map_err(|e| e.to_string())?;
-    let pid = core.pid;
-    state.link.expect_core_pid(pid);
-    *slot = Some(core);
-    Ok(pid)
 }
 
 /// Looks for a newer release; see `update.rs` for how one is chosen.
@@ -363,22 +343,18 @@ async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
         return Err("the update has not finished downloading".into());
     }
 
-    let mut slot = state.core.lock().await;
-    if let Some(core) = slot.take() {
-        core.stop().await;
-    }
+    state.core.stop().await;
     // On Windows a successful `install` has already ended the process; the installer starts the
     // new copy.
     if let Err(e) = staged.update.install(staged.bytes.as_deref().unwrap_or_default()) {
         // Still the old copy: give it its core back so it keeps working.
-        respawn_core(&app, &state, &mut slot)?;
+        state.core.restart().await?;
         return Err(format!("could not install the update: {e}"));
     }
-    // Before restarting, never across it. From a command, `restart` asks the event loop to exit
-    // and then sleeps on this thread for good, while the exit (`RunEvent::ExitRequested` in `run`)
-    // takes this same lock on the main thread to stop the core. Held here, that was a deadlock: the
-    // new copy already in place and the old one frozen until force-quit (macOS).
-    drop(slot);
+    // No lock on the core is held across this. From a command, `restart` asks the event loop to
+    // exit and then sleeps on this thread for good, while the exit (`RunEvent::ExitRequested` in
+    // `run`) stops the core on the main thread. A lock held here was once a deadlock: the new copy
+    // already in place and the old one frozen until force-quit (macOS).
     app.restart()
 }
 
@@ -418,7 +394,7 @@ async fn update_blocklist(
 
     let staged = blocklists::stage(&dir, list, &bytes)?;
     let checked = state
-        .link
+        .core
         .call::<_, gen::ErrorResp>(
             method::CHECK_CONFIG,
             &gen::LoadConfigReq {
@@ -596,7 +572,7 @@ async fn test_servers(
             .collect();
 
         let resp: gen::TestResp = state
-            .link
+            .core
             .call(
                 method::TEST,
                 &gen::TestReq {
@@ -647,14 +623,14 @@ async fn test_servers(
 }
 
 /// One server's latency, trying `TEST_URLS` in order, as `test_servers` does for a whole list.
-async fn latency_of(link: &CoreLink, profile: &config::Profile, timeout_ms: i32) -> (i32, Option<String>) {
+async fn latency_of(core: &Engine, profile: &config::Profile, timeout_ms: i32) -> (i32, Option<String>) {
     let mut last = String::from("the core reported nothing for this server");
     for url in TEST_URLS {
         let (cfg, tags) = match config::runtime::build_test(std::slice::from_ref(profile)) {
             Ok(built) => built,
             Err(error) => return (-1, Some(error)),
         };
-        let resp: Result<gen::TestResp, _> = link
+        let resp: Result<gen::TestResp, _> = core
             .call(
                 method::TEST,
                 &gen::TestReq {
@@ -720,22 +696,22 @@ async fn check_servers(
         return Ok(());
     }
     let timeout_ms = timeout_ms.unwrap_or(5000);
-    let session = Arc::new(geo::ProbeSession::start(&state.core_path, &profiles).await?);
+    let session = Arc::new(geo::ProbeSession::start(&state.core, &profiles).await?);
     let cache = Arc::new(geo::PlaceCache::default());
     let slots = Arc::new(tokio::sync::Semaphore::new(6));
 
     let mut tasks = Vec::with_capacity(profiles.len());
     for (index, profile) in profiles.into_iter().enumerate() {
-        let (app, link, session, cache, slots) = (
+        let (app, core, session, cache, slots) = (
             app.clone(),
-            state.link.clone(),
+            state.core.clone(),
             session.clone(),
             cache.clone(),
             slots.clone(),
         );
         tasks.push(tokio::spawn(async move {
             let Ok(_slot) = slots.acquire_owned().await else { return };
-            let (mut latency_ms, mut error) = latency_of(&link, &profile, timeout_ms).await;
+            let (mut latency_ms, mut error) = latency_of(&core, &profile, timeout_ms).await;
             let (mut exit_ip, mut exit) = (None, None);
 
             if latency_ms >= 0 {
@@ -794,7 +770,7 @@ async fn locate_servers(
     exits: Option<bool>,
 ) -> Result<Vec<geo::Located>, String> {
     geo::locate(
-        &state.core_path,
+        &state.core,
         &profiles,
         entries.unwrap_or(true),
         exits.unwrap_or(true),
@@ -957,21 +933,6 @@ fn hide_on_close(app: &tauri::AppHandle) {
     });
 }
 
-/// Starts the core with its log forwarded to the frontend. At launch, and again when it is
-/// restarted to take administrator access.
-fn spawn_core(
-    app: &tauri::AppHandle,
-    core_path: &std::path::Path,
-    socket: &std::path::Path,
-    runtime_dir: &std::path::Path,
-) -> Result<CoreProcess, core_proc::SpawnError> {
-    let log_sink = app.clone();
-    CoreProcess::spawn(core_path, socket, runtime_dir, move |line| {
-        log::debug!("core: {line}");
-        let _ = log_sink.emit("core-log", line);
-    })
-}
-
 pub fn run() {
     platform::before_webview();
     applog::init();
@@ -983,46 +944,10 @@ pub fn run() {
         .plugin(platform::webview_plugin())
         .setup(|app| {
             applog::attach(app.handle().clone());
-            // Per-user private directory. On macOS `temp_dir` is already inside the user's
-            // sandboxed `/var/folders/...` tree, which keeps the socket path well under the
-            // 104-byte `sun_path` limit.
-            let runtime_dir = std::env::temp_dir().join(format!("nunya-{}", std::process::id()));
-            let socket = runtime_dir.join("core.sock");
-
-            let (link, listener) = CoreLink::bind(&socket)?;
-            log::info!("core socket at {}", link.socket_path().display());
-
-            let exe_dir = std::env::current_exe()?
-                .parent()
-                .ok_or("executable has no parent directory")?
-                .to_path_buf();
-            let core_path = core_proc::find_core(&exe_dir);
-
-            // `setup` runs outside the async runtime, but tokio's process machinery registers a
-            // SIGCHLD handler with the reactor and `pump` calls `tokio::spawn`, so this has to be
-            // entered on the runtime even though the call itself is not async.
-            // The link's own address, not `socket`: on Windows it is a pipe name, not that path.
-            let core = tauri::async_runtime::block_on(async {
-                spawn_core(app.handle(), &core_path, link.socket_path(), &runtime_dir)
-            })?;
-
-            // Must happen before the first accept, so the peer check has something to compare
-            // against. The kernel queues the core's connection in the listen backlog meanwhile.
-            link.expect_core_pid(core.pid);
-            log::info!("core started (pid {})", core.pid);
-
-            let notify = app.handle().clone();
-            let accept_link = link.clone();
-            tauri::async_runtime::spawn(async move {
-                accept_link
-                    .accept_loop(listener, move |connected| {
-                        let _ = notify.emit("core-connection", connected);
-                    })
-                    .await;
-            });
+            let core = Engine::launch(app.handle())?;
 
             let tunnel_kind = transport::select::Kind::from_env();
-            let tunnel = transport::select::build(tunnel_kind, link.clone());
+            let tunnel = transport::select::build(tunnel_kind, core.clone());
             log::info!("tunnel transport: {}", tunnel_kind.as_str());
 
             // A saved system proxy on disk means the last run died holding it. Put it back now,
@@ -1039,10 +964,7 @@ pub fn run() {
             }
 
             app.manage(AppState {
-                link,
-                core_path: core_path.clone(),
-                core: Mutex::new(Some(core)),
-                runtime_dir,
+                core,
                 tunnel,
                 tunnel_kind,
                 system_proxy,
@@ -1100,17 +1022,14 @@ pub fn run() {
                 }
                 tauri::async_runtime::block_on(async {
                     if let Ok(resp) = state
-                        .link
+                        .core
                         .call::<_, gen::ErrorResp>(method::STOP, &gen::EmptyReq {})
                         .await
                     {
                         let _ = or_err(resp);
                     }
-                    if let Some(core) = state.core.lock().await.as_ref() {
-                        core.stop().await;
-                    }
+                    state.core.shut_down().await;
                 });
-                let _ = std::fs::remove_dir_all(&state.runtime_dir);
             }
         });
 }

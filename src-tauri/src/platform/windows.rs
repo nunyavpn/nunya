@@ -31,6 +31,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 pub use super::tray_icon::{tray_mirror, Tray};
 use super::tray_icon::MenuLines;
+pub use super::desktop::{native_setup, show_window, Engine};
 use super::{Fact, GrantCopy, Granted};
 use crate::sysproxy::Desktop;
 
@@ -94,11 +95,15 @@ pub fn restrict_file(_file: &fs::File) -> io::Result<()> {
 
 pub fn tighten(_path: &Path, _meta: &fs::Metadata) {}
 
-pub fn browser_command(url: &str) -> Command {
+fn browser_command(url: &str) -> Command {
     // Not `cmd /C start`, which would read the URL's `&` as a command separator.
     let mut c = Command::new("rundll32");
     c.args(["url.dll,FileProtocolHandler", url]);
     c
+}
+
+pub fn open_browser(url: &str) -> Result<(), String> {
+    super::desktop::open_with(browser_command(url))
 }
 
 /// The core is a console program, and Windows gives a console program started from a GUI app a
@@ -232,7 +237,7 @@ pub(super) fn install_tray(app: &AppHandle, icon: Image<'static>, template: bool
             TOGGLE => {
                 let _ = app.emit("tray-toggle", ());
             }
-            SHOW => crate::tray::show_window(app),
+            SHOW => show_window(app),
             // Goes through `ExitRequested`, so the core is stopped and the routes given back
             // exactly as when the last window closes.
             QUIT => app.exit(0),

@@ -175,9 +175,18 @@ never reads. A package manager updates Linux, so `IN_APP_UPDATES` is false there
 [lib.rs](src-tauri/src/lib.rs)**, as a library so integration tests use the same modules the binary
 does.
 
-- [platform/](src-tauri/src/platform/mod.rs) — everything that differs between macOS, Linux and
-  Windows, one file per OS behind one interface, only the target's compiled; `mod.rs` is the only
-  place a target is chosen. **No `#[cfg]` on the target outside `platform/` and tests** — the rule
+- [platform/](src-tauri/src/platform/mod.rs) — everything that differs between macOS, Linux,
+  Windows, Android and iOS, one file per OS behind one interface, only the target's compiled;
+  `mod.rs` is the only place a target is chosen. **How the core is hosted is a platform item,
+  `Engine`**: on the desktops (`desktop.rs`, shared by all three) a child process on a socket, with
+  the parent and peer checks; on the phones (`mobile.rs`, shared by both) nunya-core's `mobile`
+  library inside the app, reached through the plugin's native half with the same method names and
+  protobuf payloads. Shared code only calls `engine.call(…)` — the transport, config checks,
+  latency tests, block-list checks — and a probe gets its own instance from `engine.scratch()`. The
+  phones answer "not here" by name for the tray, popover, system proxy and in-app updates (issue
+  #129; Android is #130, iOS #131 and built but not released). CI's `phones` job runs clippy for
+  `aarch64-linux-android` and `aarch64-apple-ios-sim`, and `tauri.android.conf.json` /
+  `tauri.ios.conf.json` drop the desktop sidecar. **No `#[cfg]` on the target outside `platform/` and tests** — the rule
   and its corollaries are in `docs/ENGINEERING_STANDARDS.md`. It holds: VPN-mode privilege (`GRANT`,
   `grant`); owner-only files (`restrict_dir`, `restrict_file`, `tighten`); the system browser
   (`browser_command`); console windows (`no_console_window`); the core link's endpoint (`ipc_bind`,

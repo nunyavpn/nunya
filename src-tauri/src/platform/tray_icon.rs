@@ -9,7 +9,8 @@ use tauri::menu::MenuItem;
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Manager, Wry};
 
-use crate::tray::{give_up, supported, Lines, Pixels};
+use super::desktop::{give_up, supported};
+use crate::tray::{Lines, Pixels};
 
 /// The icon, and the menu's lines where there is a menu; in managed state once the first status
 /// built them.

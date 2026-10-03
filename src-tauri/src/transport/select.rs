@@ -18,7 +18,7 @@ use std::sync::Arc;
 use super::subprocess::SubprocessTransport;
 use super::TunnelTransport;
 use crate::platform;
-use crate::rpc::CoreLink;
+use crate::platform::Engine;
 
 /// Overrides the default. Accepts `subprocess` or `networkextension`.
 pub const ENV_VAR: &str = "NUNYA_TRANSPORT";
@@ -70,11 +70,11 @@ impl Kind {
 
 /// Builds the selected transport.
 ///
-/// `link` is only used by the subprocess transport; the NetworkExtension one talks to the system
-/// instead, and the core it drives lives inside the extension rather than in a child process.
-pub fn build(kind: Kind, link: Arc<CoreLink>) -> Arc<dyn TunnelTransport> {
+/// `core` is only used by the subprocess transport; the NetworkExtension one talks to the system
+/// instead, and the core it drives lives inside the extension rather than in the app.
+pub fn build(kind: Kind, core: Arc<Engine>) -> Arc<dyn TunnelTransport> {
     match kind {
-        Kind::Subprocess => Arc::new(SubprocessTransport::new(link)),
+        Kind::Subprocess => Arc::new(SubprocessTransport::new(core)),
         Kind::NetworkExtension => platform::network_extension_transport()
             .expect("parse yields NetworkExtension only where the platform has one"),
     }

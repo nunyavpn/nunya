@@ -2270,6 +2270,7 @@ name = "nunya"
 version = "0.8.6"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "cc",
  "dbus",
  "dbus-crossroads",

@@ -21,6 +21,7 @@ use nunya_lib::config::{
     TunOptions, WireguardOptions, Mode, ProxyOptions};
 use nunya_lib::core_proc::CoreProcess;
 use nunya_lib::rpc::{gen, method, CoreLink};
+use nunya_lib::Engine;
 
 fn core_path() -> Option<PathBuf> {
     let p = PathBuf::from(std::env::var("NUNYA_CORE_PATH").ok()?);
@@ -688,7 +689,8 @@ async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
     use serde_json::json;
 
     let (server_link, server_proc, _server_dir) = connect_core().await;
-    let (client_link, client_proc, _client_dir) = connect_core().await;
+    // The client side runs as the app runs it: through `Engine`, the transport and a probe.
+    let client = Arc::new(Engine::start(core_path().unwrap()).await.expect("start the client core"));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let server_port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -727,15 +729,15 @@ async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
             mode: "auto".into(), extra: serde_json::from_value(json!({"mode":"auto", "xPaddingBytes":"100-1000"})).unwrap(),
             ..Default::default() }, ..Default::default()
     };
-    config::runtime::build_test(&[sample]).unwrap().0.check(&client_link).await.unwrap();
+    config::runtime::build_test(&[sample]).unwrap().0.check(&client).await.unwrap();
     let mut p = Profile { server: "127.0.0.1".into(), port: server_port, uuid: uuid.into(),
         transport: Transport { kind: TransportKind::Xhttp, path: "/nunya-test".into(), ..Default::default() },
         ..Default::default() };
     for mode in ["auto", "packet-up", "stream-up", "stream-one"] {
         p.transport.mode = mode.into();
         let (cfg, tags) = config::runtime::build_test(&[p.clone()]).unwrap();
-        cfg.check(&client_link).await.expect("both configs validate");
-        let result: gen::TestResp = client_link.call(method::TEST, &gen::TestReq {
+        cfg.check(&client).await.expect("both configs validate");
+        let result: gen::TestResp = client.call(method::TEST, &gen::TestReq {
             outbound_tags: tags, url: Some(url.clone()), test_timeout_ms: Some(5000),
             max_concurrency: Some(1), ..cfg.test_request()
         }).await.unwrap();
@@ -743,7 +745,7 @@ async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
         assert_eq!(result.results[0].error.as_deref().unwrap_or_default(), "", "{mode}");
     }
     p.transport.mode = "packet-up".into();
-    let probe = nunya_lib::geo::ProbeSession::start(&core_path().unwrap(), &[p.clone()]).await.unwrap();
+    let probe = nunya_lib::geo::ProbeSession::start(&client, &[p.clone()]).await.unwrap();
     async fn fetch(port: u16, url: String) {
         let body = tokio::task::spawn_blocking(move || {
             let proxy = ureq::Proxy::new(&format!("http://127.0.0.1:{port}")).unwrap();
@@ -763,7 +765,7 @@ async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
     req.profile = p;
     req.mode = Mode::Proxy;
     req.proxy.port = proxy_port;
-    let transport = SubprocessTransport::new(client_link.clone());
+    let transport = SubprocessTransport::new(client.clone());
     transport.start(&req).await.unwrap();
     fetch(proxy_port, url.clone()).await;
     assert!(matches!(transport.state().await.unwrap(), nunya_lib::transport::TunnelState::Connected));
@@ -772,7 +774,7 @@ async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
     // that rule for this fixture so the normal runtime's counters also see actual XHTTP traffic.
     let mut cfg = config::runtime::build(&req).unwrap();
     cfg.core["route"]["rules"] = json!([]);
-    let resp: gen::ErrorResp = client_link.call(method::START, &gen::LoadConfigReq {
+    let resp: gen::ErrorResp = client.call(method::START, &gen::LoadConfigReq {
         disable_stats: Some(false), ..cfg.load_request()
     }).await.unwrap();
     assert_eq!(resp.error.unwrap_or_default(), "");
@@ -780,6 +782,6 @@ async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
     assert!(transport.throughput().await.unwrap().downlink > 0);
     transport.stop().await.unwrap();
     server_proc.stop().await;
-    client_proc.stop().await;
+    client.shut_down().await;
     http_task.abort();
 }

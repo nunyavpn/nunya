@@ -39,8 +39,6 @@
 //! `platform::tray_mirror`): `linux.rs` for the StatusNotifierItem, `tray_icon.rs` for what macOS
 //! and Windows share, and each of those two files for its own `install_tray`.
 
-use std::sync::OnceLock;
-
 use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 
@@ -49,9 +47,13 @@ use crate::platform;
 /// The icon as `trayicon.ts` painted it.
 #[derive(Deserialize)]
 pub struct Pixels {
+    // Read by the desktop trays; a phone has no tray to paint, so its build reads none of these.
+    #[allow(dead_code)]
     pub width: u32,
+    #[allow(dead_code)]
     pub height: u32,
     /// Straight RGBA, row by row.
+    #[allow(dead_code)]
     pub rgba: Vec<u8>,
     /// Draw it in the menu bar's own colour. macOS only; the frontend sets it for off. The Linux
     /// item has no equivalent — a shell there tints nothing — so it goes unread in that build.
@@ -62,33 +64,6 @@ pub struct Pixels {
 /// Whether the tray is up, and closing the window can therefore hide it rather than quit.
 pub fn is_up(app: &AppHandle) -> bool {
     app.try_state::<platform::Tray>().is_some()
-}
-
-/// Set once the tray has been found not to work here, so it is not attempted again.
-static NO_TRAY: OnceLock<()> = OnceLock::new();
-
-/// Whether a tray is worth attempting at all.
-///
-/// On Linux this used to dlopen libayatana, which tray-icon loads lazily and which panics when it is
-/// missing. Nothing loads it any more — `platform/sni.rs` speaks the protocol directly — so the
-/// only real question is whether a watcher answers, which installing finds out by asking. A failure
-/// is remembered rather than retried: the frontend reports a status every few seconds, and each
-/// attempt would wait on the bus before failing the same way.
-pub(crate) fn supported() -> bool {
-    NO_TRAY.get().is_none()
-}
-
-/// Remembers that there is no tray here, so `set_tray_status` stops trying.
-pub(crate) fn give_up() {
-    let _ = NO_TRAY.set(());
-}
-
-pub fn show_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
 }
 
 /// What the menu says, worked out from what the frontend reported.
@@ -176,7 +151,7 @@ pub fn hide_popover(app: AppHandle) {
 #[tauri::command]
 pub fn show_main_window(app: AppHandle) {
     platform::hide_popover(&app);
-    show_window(&app);
+    platform::show_window(&app);
 }
 
 /// The popover's "Quit". Through `ExitRequested`, like the tray menu's, so the core is stopped and

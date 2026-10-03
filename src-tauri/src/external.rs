@@ -43,16 +43,7 @@ pub fn allowed(url: &str) -> Result<&str, String> {
 
 /// Opens an allowed page in the system browser, and waits only for the opener to hand it off.
 pub fn open(url: &str) -> Result<(), String> {
-    let url = allowed(url)?;
-
-    let status = crate::platform::browser_command(url)
-        .status()
-        .map_err(|e| format!("could not start the system browser: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("the system browser could not be opened ({status})"))
-    }
+    crate::platform::open_browser(allowed(url)?)
 }
 
 #[cfg(test)]

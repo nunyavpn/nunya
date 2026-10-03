@@ -5,7 +5,8 @@
 //! to the physical interface. Every start, check and probe goes through the same preparation.
 
 use super::{Profile, Protocol, TransportKind};
-use crate::rpc::{gen, method, CoreLink};
+use crate::platform::Engine;
+use crate::rpc::{gen, method};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::net::TcpListener;
@@ -40,13 +41,13 @@ impl Runtime {
         }
     }
 
-    pub async fn check(&self, link: &CoreLink) -> Result<(), String> {
+    pub async fn check(&self, core: &Engine) -> Result<(), String> {
         // CheckConfig returns after checking Xray when need_xray is true, so validate both halves.
         for xray in [false, true] {
             if xray && self.xray.is_none() {
                 continue;
             }
-            let resp: gen::ErrorResp = link
+            let resp: gen::ErrorResp = core
                 .call(
                     method::CHECK_CONFIG,
                     &gen::LoadConfigReq {

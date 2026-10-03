@@ -13,10 +13,10 @@ path = "src/lib.rs"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 prost-build = "0.13"
-
 # Compiles macos/tunnel_manager.m into the binary, so the NETunnelProviderManager control plane
-# needs no separate Xcode project on the app side.
-[target.'cfg(target_os = "macos")'.build-dependencies]
+# needs no separate Xcode project on the app side. Not keyed on the target: `build.rs` decides by
+# the target's system, and a build dependency's own table follows rules that differ between Cargo
+# versions. It is a build tool already in the tree through `ring`, so nothing ships for it.
 cc = "1"
 
 # The tray on Linux is our own StatusNotifierItem rather than tray-icon's libayatana one; `sni.rs`
@@ -76,3 +76,8 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# A phone's core is a library behind the app's native half, and the bridge to it carries JSON, so
+# the protobuf bytes travel base64 (`platform/mobile.rs`). 0.22 is the version already in the tree.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+base64 = "0.22"

@@ -105,7 +105,8 @@ async fn live_probe_of_one_server() {
     let core = std::path::PathBuf::from(std::env::var("NUNYA_CORE_PATH").expect("NUNYA_CORE_PATH"));
     let text = std::fs::read_to_string(std::env::var("NUNYA_PROFILE").expect("NUNYA_PROFILE")).unwrap();
     let profile: crate::config::Profile = serde_json::from_str(&text).unwrap();
-    let session = std::sync::Arc::new(super::ProbeSession::start(&core, &[profile]).await.unwrap());
+    let main = crate::platform::Engine::start(core).await.unwrap();
+    let session = std::sync::Arc::new(super::ProbeSession::start(&main, &[profile]).await.unwrap());
     let port = session.ports[0];
     let s2 = session.clone();
     let (seen, placed, card) = tokio::task::spawn_blocking(move || {

@@ -73,3 +73,53 @@ jobs:
       # The integration tests that need a live core or a real TUN are #[ignore]d; this runs the rest.
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  phones:
+    # Android and iOS compile from the same tree (issue #129), so code left behind on a phone fails
+    # here rather than when someone next builds for one. Clippy on the library only: nothing runs
+    # on a phone in CI, and the tests are the desktop's. iOS is the simulator target because it
+    # needs no signing; it is built but not released (see CLAUDE.md, *Releasing*).
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-linux-android, aarch64-apple-ios-sim]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # `generate_context!` embeds the built frontend, so it has to exist before the Rust does.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      # The proto the RPC bindings are generated from; the desktop sidecar it also installs is
+      # left out of a phone build by `tauri.<platform>.conf.json`.
+      - name: Fetch the pinned core
+        run: ./scripts/fetch-core.sh
+
+      # The runner image carries an NDK; `ring` and the other C parts are compiled with its clang.
+      - name: Point C builds at the NDK
+        if: startsWith(matrix.target, 'aarch64-linux-android')
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib --target ${{ matrix.target }} -- -D warnings

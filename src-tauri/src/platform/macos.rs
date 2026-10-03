@@ -10,6 +10,7 @@ pub use super::unix::{
     tighten, IpcAcceptor, IpcStream, PendingListener,
 };
 pub use super::tray_icon::{tray_mirror, Tray};
+pub use super::desktop::{native_setup, show_window, Engine};
 use super::{Fact, GrantCopy, Granted};
 use crate::sysproxy::Desktop;
 
@@ -86,10 +87,14 @@ pub fn grant(core: &Path) -> Result<Granted, String> {
     }
 }
 
-pub fn browser_command(url: &str) -> Command {
+fn browser_command(url: &str) -> Command {
     let mut c = Command::new("open");
     c.arg(url);
     c
+}
+
+pub fn open_browser(url: &str) -> Result<(), String> {
+    super::desktop::open_with(browser_command(url))
 }
 
 /// `getsockopt` level for `AF_UNIX` socket options on Darwin.
@@ -182,7 +187,7 @@ pub fn on_run_event(app: &tauri::AppHandle, event: &tauri::RunEvent) {
         ..
     } = event
     {
-        crate::tray::show_window(app);
+        show_window(app);
     }
 }
 

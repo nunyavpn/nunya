@@ -34,7 +34,11 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", proto.display());
 
-    build_macos_tunnel_manager();
+    // The target's system, not the host's: `#[cfg(target_os)]` in a build script is the machine
+    // running it, so cross-compiling from a Mac for iOS would compile the macOS control plane.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        build_macos_tunnel_manager();
+    }
 
     tauri_build::build();
 }
@@ -44,7 +48,6 @@ fn main() {
 /// This is the app's *control plane* for the VPN profile — saving it, starting it, talking to the
 /// provider. It is not the tunnel itself: that lives in the packet tunnel extension, which the
 /// system launches.
-#[cfg(target_os = "macos")]
 fn build_macos_tunnel_manager() {
     const SOURCE: &str = "macos/tunnel_manager.m";
 
@@ -61,6 +64,3 @@ fn build_macos_tunnel_manager() {
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=NetworkExtension");
 }
-
-#[cfg(not(target_os = "macos"))]
-fn build_macos_tunnel_manager() {}

@@ -1,14 +1,16 @@
-//! The subprocess transport: the core runs as a child process and we drive it over a unix socket.
+//! The subprocess transport: the app drives the core it hosts, with the core's own calls.
 //!
-//! This is the Linux and Windows path, and it is what the client used on macOS before the
-//! NetworkExtension work. It needs the core itself to hold the privilege required to create a TUN,
-//! which is exactly the property macOS gets to avoid.
+//! This is the Linux and Windows path, and what macOS uses until its packet tunnel can be signed:
+//! the core is a child process on a socket, and needs the privilege required to create a TUN
+//! itself, which is exactly the property NetworkExtension gets to avoid. On a phone the same calls
+//! reach a core hosted in the app (`platform::Engine`), so the transport is unchanged there.
 
 use async_trait::async_trait;
 
 use super::{Throughput, TransportError, TunnelState, TunnelTransport};
 use crate::config::{self, BuildRequest, Mode};
-use crate::rpc::{gen, method, CoreLink, LinkError};
+use crate::platform::Engine;
+use crate::rpc::{gen, method, LinkError};
 
 impl From<LinkError> for TransportError {
     fn from(e: LinkError) -> Self {
@@ -22,12 +24,12 @@ impl From<LinkError> for TransportError {
 }
 
 pub struct SubprocessTransport {
-    link: std::sync::Arc<CoreLink>,
+    core: std::sync::Arc<Engine>,
 }
 
 impl SubprocessTransport {
-    pub fn new(link: std::sync::Arc<CoreLink>) -> Self {
-        Self { link }
+    pub fn new(core: std::sync::Arc<Engine>) -> Self {
+        Self { core }
     }
 
     /// Collapses the core's two failure channels. A transport error means the call never landed;
@@ -43,7 +45,7 @@ impl SubprocessTransport {
 #[async_trait]
 impl TunnelTransport for SubprocessTransport {
     async fn availability(&self, mode: Mode) -> Result<TunnelState, TransportError> {
-        if !self.link.is_connected().await {
+        if !self.core.is_connected().await {
             return Err(TransportError::Unavailable("the core is not running".into()));
         }
 
@@ -55,7 +57,7 @@ impl TunnelTransport for SubprocessTransport {
         }
 
         let resp: gen::IsPrivilegedResponse = self
-            .link
+            .core
             .call(method::IS_PRIVILEGED, &gen::EmptyReq {})
             .await?;
 
@@ -79,8 +81,8 @@ impl TunnelTransport for SubprocessTransport {
 
     async fn start(&self, request: &BuildRequest) -> Result<(), TransportError> {
         let cfg = config::runtime::build(request).map_err(TransportError::Core)?;
-        cfg.check(&self.link).await.map_err(TransportError::Core)?;
-        let resp: gen::ErrorResp = self.link.call(method::START, &gen::LoadConfigReq {
+        cfg.check(&self.core).await.map_err(TransportError::Core)?;
+        let resp: gen::ErrorResp = self.core.call(method::START, &gen::LoadConfigReq {
             disable_stats: Some(false),
             tun_ipv4_cidr: Some(if request.mode == Mode::Vpn { request.tun.ipv4_cidr.clone() } else { String::new() }),
             ..cfg.load_request()
@@ -89,18 +91,18 @@ impl TunnelTransport for SubprocessTransport {
     }
 
     async fn stop(&self) -> Result<(), TransportError> {
-        let resp: gen::ErrorResp = self.link.call(method::STOP, &gen::EmptyReq {}).await?;
+        let resp: gen::ErrorResp = self.core.call(method::STOP, &gen::EmptyReq {}).await?;
         Self::or_err(resp)
     }
 
     async fn state(&self) -> Result<TunnelState, TransportError> {
-        if !self.link.is_connected().await {
+        if !self.core.is_connected().await {
             return Ok(TunnelState::Disconnected);
         }
         // The core exposes no "is the tunnel up" RPC; a running box answers QueryStats with the
         // outbound tags it built, so the proxy tag's presence stands in for it.
         let resp: gen::QueryStatsResp = self
-            .link
+            .core
             .call(method::QUERY_STATS, &gen::EmptyReq {})
             .await?;
         Ok(if resp.ups.contains_key(config::tags::PROXY) {
@@ -112,7 +114,7 @@ impl TunnelTransport for SubprocessTransport {
 
     async fn throughput(&self) -> Result<Throughput, TransportError> {
         let resp: gen::QueryStatsResp = self
-            .link
+            .core
             .call(method::QUERY_STATS, &gen::EmptyReq {})
             .await?;
         Ok(Throughput {

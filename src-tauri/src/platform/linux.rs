@@ -31,9 +31,11 @@ pub use super::unix::{
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::sni;
+pub use super::desktop::{native_setup, show_window, Engine};
 use super::{Fact, GrantCopy, Granted};
 use crate::sysproxy::{run, Desktop};
-use crate::tray::{give_up, show_window, supported, Lines, Pixels};
+use super::desktop::{give_up, supported};
+use crate::tray::{Lines, Pixels};
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
     lede: "VPN mode needs your password once",
@@ -130,10 +132,14 @@ pub fn grant(core: &Path) -> Result<Granted, String> {
     }
 }
 
-pub fn browser_command(url: &str) -> Command {
+fn browser_command(url: &str) -> Command {
     let mut c = Command::new("xdg-open");
     c.arg(url);
     c
+}
+
+pub fn open_browser(url: &str) -> Result<(), String> {
+    super::desktop::open_with(browser_command(url))
 }
 
 /// The peer's credentials, as the kernel recorded them when the socket was connected. Linux has

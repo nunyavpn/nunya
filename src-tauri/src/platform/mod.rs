@@ -1,4 +1,4 @@
-//! What differs between macOS, Linux and Windows, behind one interface.
+//! What differs between macOS, Linux, Windows, Android and iOS, behind one interface.
 //!
 //! Each operating system has its own file here, and only the target's is compiled: shared code
 //! calls `platform::…` and never asks which system it is on. The alternative, `#[cfg]` lines inside
@@ -12,6 +12,10 @@
 //! TUN's name, which tool sets the system proxy, and what only macOS has: the menu-bar popover,
 //! the Dock's reopen, and the NetworkExtension transport; and which system this is, for the
 //! frontend (`OS`, `webview_plugin`). The rest moves in one concern at a time (issue #100).
+//!
+//! The phones are here on the same terms (issue #129): what they share is `mobile.rs`, as what the
+//! desktops share is `desktop.rs`, and the largest difference between the two families is how the
+//! core is hosted (`Engine`) — a child process on a socket, or a library in the app.
 
 use std::fs;
 use std::io;
@@ -23,14 +27,24 @@ use serde::Serialize;
 #[cfg_attr(target_os = "macos", path = "macos.rs")]
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(windows, path = "windows.rs")]
+#[cfg_attr(target_os = "android", path = "android.rs")]
+#[cfg_attr(target_os = "ios", path = "ios.rs")]
 mod imp;
 
-/// What macOS and Linux share; only their files use it.
+/// What the unix systems share — macOS, Linux and both phones; only their files use it.
 #[cfg(unix)]
 mod unix;
 
+/// What the three desktops share: the core as a child process, the window, the browser.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+mod desktop;
+
+/// What the two phones share: the core in-process, and everything a phone does not have.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod mobile;
+
 /// The tray on macOS and Windows, which both use tray-icon's item.
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "macos", windows))]
 mod tray_icon;
 
 /// Linux's own StatusNotifierItem, in place of tray-icon's.
@@ -63,8 +77,15 @@ pub use imp::restrict_file;
 /// Narrows an existing file that anyone else on the machine can read, saying so in the log.
 pub use imp::tighten;
 
-/// The desktop's own command for opening `url` in the system browser, not yet started.
-pub use imp::browser_command;
+/// Opens `url` in the system browser. `external::open` decides which pages may be.
+pub use imp::open_browser;
+
+/// The running core and the way to call it: a child process on a socket on a desktop, a library
+/// in the app on a phone. One `launch` at startup; `scratch` for a probe's own instance.
+pub use imp::Engine;
+
+/// Brings the main window back, where a window can be hidden or minimised.
+pub use imp::show_window;
 
 
 /// Keeps a console program started from this GUI app from opening a window of its own. Takes the
@@ -125,18 +146,25 @@ pub use imp::network_extension_transport;
 /// `IN_APP_UPDATES` in `src/features/updates.ts`, keyed on `OS`.
 pub use imp::IN_APP_UPDATES;
 
-/// `macos`, `linux` or `windows`: the one platform fact the frontend is told (`src/platform.ts`),
+/// `macos`, `linux`, `windows`, `android` or `ios`: the one platform fact the frontend is told (`src/platform.ts`),
 /// so it keys its own per-platform values on this rather than on the webview's guess.
 pub use imp::OS;
 
 /// Puts `OS` into every webview as `window.__NUNYA_OS__` before the page's own script runs, so the
 /// frontend reads it synchronously, at import, where its constants are. A command would be
 /// asynchronous, and needs a capability; this needs neither.
+///
+/// On a phone it is also where the app's native half (Kotlin, Swift) is registered, which Tauri
+/// allows only from a plugin's `setup` (`native_setup`; nothing on a desktop).
 pub fn webview_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("nunya-platform")
         .js_init_script(format!("window.__NUNYA_OS__ = {OS:?};"))
+        .setup(|app, api| native_setup(app, api))
         .build()
 }
+
+/// Registers the platform's native half of `nunya-platform`, where there is one.
+use imp::native_setup;
 
 /// Why `grant` cannot be offered on this machine, where that is known before asking (on Linux, a
 /// development build or a core not installed by a package), so the status card says so rather than offering a button
@@ -189,7 +217,7 @@ fn _signature_check(
     let _: io::Result<()> = restrict_dir(core);
     let _: io::Result<()> = restrict_file(file);
     tighten(core, meta);
-    let _: Command = browser_command("");
+    let _: Result<(), String> = open_browser("");
     no_console_window(child);
     let _: Option<&'static str> = TUN_NAME;
     let _: Option<String> = grant_blocked(core);
@@ -208,6 +236,8 @@ fn _tray_signature_check(
     icon: crate::tray::Pixels,
 ) -> Result<(), String> {
     hide_popover(app);
+    show_window(app);
+    let _: Result<std::sync::Arc<Engine>, String> = Engine::launch(app);
     let _: bool = NETWORK_EXTENSION;
     let _: &'static str = OS;
     let _: bool = IN_APP_UPDATES;
@@ -230,6 +260,20 @@ async fn _ipc_signature_check(
     let _: io::Result<u32> = peer_pid(stream);
     let mut acceptor: IpcAcceptor = IpcAcceptor::adopt(listener)?;
     acceptor.accept().await
+}
+
+/// The same, for the core's host, which must answer the same calls whichever way it reaches it.
+#[allow(dead_code)]
+async fn _engine_signature_check(engine: &Engine) -> Result<(), String> {
+    use crate::rpc::{gen, method, LinkError};
+    let _: Engine = engine.scratch().await?;
+    let _: Result<gen::ErrorResp, LinkError> = engine.call(method::STOP, &gen::EmptyReq {}).await;
+    let _: bool = engine.is_connected().await;
+    let _: Result<u32, String> = engine.restart().await;
+    engine.stop().await;
+    engine.shut_down().await;
+    let _: &Path = engine.binary();
+    Ok(())
 }
 
 /// What is tested of the platforms so far is Linux's (the grant's refusals).

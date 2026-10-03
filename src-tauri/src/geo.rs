@@ -19,15 +19,13 @@
 //! refresh is allowed to make.
 
 use std::net::{SocketAddr, TcpListener};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::config::{self, Profile};
-use crate::core_proc::CoreProcess;
-use crate::rpc::{gen, method, CoreLink};
+use crate::platform::Engine;
+use crate::rpc::{gen, method};
 
 /// Endpoints that report the caller's address, asked **through** each server.
 ///
@@ -68,8 +66,6 @@ const COUNTRY_URLS: [fn(&str) -> String; 3] = [
 /// in well under a second, while an unreachable one costs this much twice over — once per
 /// endpoint in the chain — on each attempt.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long to wait for the scratch core to dial back before giving up on it.
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many lookups are in flight at once.
 ///
 /// Not tuned down for politeness: measured against a real subscription, dropping it to 3 made the
@@ -382,27 +378,12 @@ fn country_of(ip: &str) -> Result<String, String> {
     Err(last)
 }
 
-/// A scratch core, torn down however this function leaves.
-struct Scratch {
-    process: CoreProcess,
-    dir: PathBuf,
-}
-
-impl Scratch {
-    async fn shut_down(self) {
-        // Stop first so the core closes its listeners, then kill it. Leaving it running would
-        // leave open proxy ports on loopback for as long as the app lives.
-        self.process.stop().await;
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-/// Measures where each profile exits, in its own core process.
+/// Measures where each profile exits, in a scratch core of its own.
 ///
 /// Profiles that cannot be reached are simply absent from the result: the caller keeps whatever
 /// country it had for them, which is the guess from the server's name.
 pub async fn locate(
-    core_path: &Path,
+    core: &Engine,
     profiles: &[Profile],
     want_entries: bool,
     probe_exits: bool,
@@ -429,7 +410,7 @@ pub async fn locate(
 
     // Exits need the server to be up. A probe that cannot even start still leaves the entries.
     let exits = if probe_exits {
-        match exit_ips(core_path, profiles).await {
+        match exit_ips(core, profiles).await {
             Ok(exits) => exits,
             Err(e) => {
                 log::info!("no exits measured: {e}");
@@ -551,16 +532,16 @@ pub const MAX_PROBE: usize = 256;
 /// A scratch core with one local proxy port per server, alive for as long as a check needs it.
 ///
 /// One per run, not one per server: starting a core costs far more than asking through one, and
-/// a run asks through every server. The link is held so the core's control connection stays
-/// open — the core treats losing it as being orphaned.
+/// a run asks through every server. The core is the platform's own scratch instance
+/// (`Engine::scratch`) — a second process on a desktop, a second instance in the app on a phone —
+/// so it cannot disturb the running tunnel.
 pub struct ProbeSession {
-    scratch: Scratch,
+    core: Engine,
     pub ports: Vec<u16>,
-    _link: Arc<CoreLink>,
 }
 
 impl ProbeSession {
-    pub async fn start(core_path: &Path, profiles: &[Profile]) -> Result<ProbeSession, String> {
+    pub async fn start(main: &Engine, profiles: &[Profile]) -> Result<ProbeSession, String> {
         // A port and a listener per server. Asked for thousands at once — a public list of twenty
         // thousand, all in one call — this would exhaust the process's file descriptors and hand
         // the core a config it cannot start. Callers batch; this makes a caller that forgot fail
@@ -574,48 +555,11 @@ impl ProbeSession {
         let ports = free_ports(profiles.len()).map_err(|e| format!("no free local ports: {e}"))?;
         let cfg = config::runtime::build_probe(profiles, &ports)?;
 
-        // A directory of its own, so this cannot collide with the running core's socket.
-        let dir = std::env::temp_dir().join(format!(
-            "nunya-probe-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default()
-        ));
-        std::fs::create_dir_all(&dir).map_err(|e| format!("could not create a scratch dir: {e}"))?;
-        let socket = dir.join("core.sock");
-
-        let (link, listener) =
-            CoreLink::bind(&socket).map_err(|e| format!("could not bind the probe socket: {e}"))?;
-        let process = CoreProcess::spawn(core_path, link.socket_path(), &dir, |line| {
-            log::debug!("probe core: {line}");
-        })
-        .map_err(|e| format!("could not start a core for the probe: {e}"))?;
-
-        // Before the first accept, exactly as the main core's link does it: the peer check has to
-        // have something to compare against.
-        link.expect_core_pid(process.pid);
-        let scratch = Scratch {
-            process,
-            dir: dir.clone(),
-        };
-
-        let accept_link = Arc::clone(&link);
-        tokio::spawn(async move {
-            accept_link.accept_loop(listener, |_| {}).await;
-        });
-
-        let deadline = tokio::time::Instant::now() + STARTUP_TIMEOUT;
-        while !link.is_connected().await {
-            if tokio::time::Instant::now() >= deadline {
-                scratch.shut_down().await;
-                return Err("the probe core never connected".into());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-
-        let started: Result<gen::ErrorResp, _> = link
+        let core = main
+            .scratch()
+            .await
+            .map_err(|e| format!("could not start a core for the probe: {e}"))?;
+        let started: Result<gen::ErrorResp, _> = core
             .call(
                 method::START,
                 &gen::LoadConfigReq {
@@ -626,29 +570,24 @@ impl ProbeSession {
             )
             .await;
 
-        match started {
-            Err(e) => {
-                scratch.shut_down().await;
-                return Err(format!("the probe core refused to start: {e}"));
-            }
-            Ok(resp) => {
-                if let Some(error) = resp.error.filter(|e| !e.is_empty()) {
-                    scratch.shut_down().await;
-                    return Err(format!("the probe config was rejected: {error}"));
-                }
-            }
+        let refused = match started {
+            Err(e) => Some(format!("the probe core refused to start: {e}")),
+            Ok(resp) => resp
+                .error
+                .filter(|e| !e.is_empty())
+                .map(|error| format!("the probe config was rejected: {error}")),
+        };
+        if let Some(reason) = refused {
+            core.shut_down().await;
+            return Err(reason);
         }
 
         if !wait_for_listeners(&ports).await {
-            scratch.shut_down().await;
+            core.shut_down().await;
             return Err("the probe core did not open its ports".into());
         }
 
-        Ok(ProbeSession {
-            scratch,
-            ports,
-            _link: link,
-        })
+        Ok(ProbeSession { core, ports })
     }
 
     /// What server `index`'s traffic was seen to leave from. Blocking; run it off the runtime.
@@ -657,13 +596,15 @@ impl ProbeSession {
         exits_through(port)
     }
 
+    /// Stops the core first so it closes its listeners: leaving it running would leave open proxy
+    /// ports on loopback for as long as the app lives.
     pub async fn shut_down(self) {
-        self.scratch.shut_down().await;
+        self.core.shut_down().await;
     }
 }
 
-async fn exit_ips(core_path: &Path, profiles: &[Profile]) -> Result<Vec<Option<SeenExit>>, String> {
-    let session = ProbeSession::start(core_path, profiles).await?;
+async fn exit_ips(core: &Engine, profiles: &[Profile]) -> Result<Vec<Option<SeenExit>>, String> {
+    let session = ProbeSession::start(core, profiles).await?;
     let ports = session.ports.clone();
 
     // ---------------------------------------------------------------- exits

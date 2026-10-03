@@ -10,9 +10,8 @@
 //! the interface, the addresses and the routes all appear with an outbound that would fail if
 //! anything tried to use it. That keeps these tests about routing, and keeps them offline.
 //!
-//! The harness below is a copy of the one in `core_link.rs`. Rust integration tests are separate
-//! crates and cannot see each other's helpers without a shared `common` module; duplicating thirty
-//! lines is cheaper here than reworking a test file that already passes.
+//! The core is started the way a probe starts one (`Engine::start`): a child process on a socket
+//! of its own, with the same peer check the app's core goes through.
 
 #![cfg(target_os = "linux")]
 
@@ -22,10 +21,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nunya_lib::config::{self, BuildRequest, Profile, TlsOptions, TunOptions, Mode, ProxyOptions};
-use nunya_lib::core_proc::CoreProcess;
-use nunya_lib::rpc::CoreLink;
 use nunya_lib::transport::subprocess::SubprocessTransport;
 use nunya_lib::transport::TunnelTransport;
+use nunya_lib::Engine;
 
 /// The name `config.rs` gives the interface on everything that is not macOS.
 const IFACE: &str = "nunya-tun";
@@ -40,58 +38,10 @@ fn can_open_a_tun() -> bool {
     PathBuf::from("/dev/net/tun").exists()
 }
 
-mod tempdir {
-    use std::path::{Path, PathBuf};
-
-    pub struct Guard(PathBuf);
-
-    impl Guard {
-        pub fn new() -> Self {
-            let p = std::env::temp_dir().join(format!(
-                "nunya-tun-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            std::fs::create_dir_all(&p).expect("scratch dir");
-            Self(p)
-        }
-        pub fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-}
-
-async fn connect_core() -> (Arc<CoreLink>, CoreProcess, tempdir::Guard) {
+/// The same `Engine` a probe uses: the core as a child process on its own socket, connected.
+async fn connect_core() -> Arc<Engine> {
     let core = core_path().expect("NUNYA_CORE_PATH must point at a built core");
-    let dir = tempdir::Guard::new();
-    let socket = dir.path().join("core.sock");
-
-    let (link, listener) = CoreLink::bind(&socket).expect("bind core socket");
-    let proc = CoreProcess::spawn(&core, &socket, dir.path(), |line| eprintln!("[core] {line}"))
-        .expect("spawn core");
-    link.expect_core_pid(proc.pid);
-
-    let accept_link = link.clone();
-    tokio::spawn(async move {
-        accept_link.accept_loop(listener, |_| {}).await;
-    });
-
-    for _ in 0..100 {
-        if link.is_connected().await {
-            return (link, proc, dir);
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("core never connected to the socket");
+    Arc::new(Engine::start(core).await.expect("start the core"))
 }
 
 // ---------------------------------------------------------------- reading the network
@@ -190,8 +140,8 @@ fn tunnel_request() -> BuildRequest {
 /// unset optional fields, and a test with its own copy of that request sailed straight past the
 /// fix and kept reproducing the bug. A test of the tunnel should exercise the code that opens the
 /// tunnel, not a replica of it.
-fn transport(link: Arc<CoreLink>) -> SubprocessTransport {
-    SubprocessTransport::new(link)
+fn transport(core: Arc<Engine>) -> SubprocessTransport {
+    SubprocessTransport::new(core)
 }
 
 async fn start(t: &SubprocessTransport, req: &BuildRequest) {
@@ -225,8 +175,8 @@ async fn the_tunnel_takes_the_default_route_and_gives_it_back() {
         "a tunnel is already up before the test started"
     );
 
-    let (link, proc, _dir) = connect_core().await;
-    let tunnel = transport(link);
+    let core = connect_core().await;
+    let tunnel = transport(core.clone());
     let req = tunnel_request();
 
     start(&tunnel, &req).await;
@@ -253,7 +203,7 @@ async fn the_tunnel_takes_the_default_route_and_gives_it_back() {
         "traffic did not go back to its original device after Stop"
     );
 
-    proc.stop().await;
+    core.shut_down().await;
 }
 
 /// Everything goes into the tunnel, including the ranges the bypass list names.
@@ -276,8 +226,8 @@ async fn the_tunnel_takes_the_default_route_and_gives_it_back() {
 async fn a_bypassed_range_still_enters_the_tunnel_and_is_sorted_out_inside_it() {
     assert!(can_open_a_tun(), "/dev/net/tun is missing");
 
-    let (link, proc, _dir) = connect_core().await;
-    let tunnel = transport(link);
+    let core = connect_core().await;
+    let tunnel = transport(core.clone());
 
     let mut req = tunnel_request();
     req.bypass = vec![config::BypassRule::Range("10.0.0.0/8".into())];
@@ -295,16 +245,16 @@ async fn a_bypassed_range_still_enters_the_tunnel_and_is_sorted_out_inside_it() 
     );
 
     stop(&tunnel).await;
-    proc.stop().await;
+    core.shut_down().await;
 }
 
 /// Stopping a tunnel that was never started must not leave an interface behind.
 #[tokio::test]
 #[ignore = "needs CAP_NET_ADMIN and /dev/net/tun; run via scripts/dev-linux.sh"]
 async fn stopping_without_starting_is_harmless() {
-    let (link, proc, _dir) = connect_core().await;
-    let tunnel = transport(link);
+    let core = connect_core().await;
+    let tunnel = transport(core.clone());
     stop(&tunnel).await;
     assert!(!interface_exists(IFACE));
-    proc.stop().await;
+    core.shut_down().await;
 }
