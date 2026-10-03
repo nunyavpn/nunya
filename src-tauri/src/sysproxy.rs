@@ -176,6 +176,9 @@ pub(crate) fn run(program: &str, args: &[&str]) -> Result<String, String> {
     command.args(args);
     // A GUI app starting a console tool on Windows gets a console window flashed up for each call.
     crate::platform::no_console_window(&mut command);
+    // In the AppImage, the desktop's own tools must not run on the image's libraries; see
+    // `host_environment`. Without it GNOME's proxy was written to a file GNOME never reads.
+    crate::platform::host_environment(&mut command);
     let out = command.output().map_err(|e| format!("{program}: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if !out.status.success() || reports_error(&stdout) {

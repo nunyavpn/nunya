@@ -1,9 +1,24 @@
-//! Linux: no way yet for the app to obtain privilege for VPN mode.
+//! Linux: VPN mode by file capabilities on the installed core, granted through polkit.
 //!
-//! The core needs `CAP_NET_ADMIN` for a TUN. An AppImage runs from a read-only, nosuid mount, so
-//! neither a capability nor setuid can be put on the core inside it, and the release core's parent
-//! check forbids running a copy of it from anywhere else. Until that is designed, VPN mode is not
-//! offered a grant here, and proxy mode is the Linux build's mode.
+//! A TUN needs network-administration rights, and the core counts itself privileged only with the
+//! whole set sing-box's own service unit carries (`CAPS`; `hasTunCapabilities` in the core's
+//! `internal/rpc/privilege_linux.go`) — a subset opens the TUN and then fails part-way. So the grant
+//! is `pkexec setcap` on the bundled core: the system asks for the password, and `setcap`, not the
+//! core, runs as root. The core stays a plain child of `Nunya`, which both its parent check and
+//! ours (`rpc/peer.rs`) require — the reason `sudo` or `pkexec` *on the core* would not do, as on
+//! macOS. Capabilities rather than setuid root (the macOS shape) because they grant only what a
+//! TUN needs, not every power root has.
+//!
+//! **Only a root-owned core beside a root-owned `Nunya` is granted** (the .deb's `/usr/bin`). The
+//! release core's parent check is what keeps other programs from driving it, and that check is only
+//! a lock if nobody but root can put another `Nunya` beside it; in a user-owned directory the
+//! user's own code could, and would then drive a core with network-administration rights. A
+//! development core has the check compiled out altogether. Where the grant cannot be made safely
+//! or at all, `grant_blocked` says why and no grant is offered: the AppImage runs from a read-only
+//! mount, which takes no capability.
+//!
+//! A package upgrade replaces the core and with it the capabilities, so the prompt comes back after
+//! an update, as on macOS.
 
 use std::io;
 use std::os::unix::io::RawFd;
@@ -17,20 +32,168 @@ pub use super::unix::{
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::sni;
-use super::{GrantCopy, Granted};
+use super::{Fact, GrantCopy, Granted};
 use crate::sysproxy::{run, Desktop};
 use crate::tray::{give_up, show_window, supported, Lines, Pixels};
 
-pub static GRANT: Option<GrantCopy> = None;
+pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
+    lede: "VPN mode needs your password once",
+    why: "To send all of this computer's traffic through the tunnel, Nunya creates a network \
+          interface, and Linux allows that only with an administrator's approval.",
+    facts: &[
+        Fact {
+            title: "Your system asks, not Nunya.",
+            text: "The password goes to your system's own prompt; Nunya never sees it.",
+        },
+        Fact { title: "Once.", text: "You're asked again only after Nunya updates." },
+        Fact {
+            title: "What changes.",
+            text: "Nunya's tunnel engine gets network-administration rights, not full root, and runs \
+                   only when Nunya starts it.",
+        },
+    ],
+    waiting: "Waiting for authentication…",
+    alt: "no password, but it covers only apps set to use it.",
+});
 
-pub fn grant(_core: &Path) -> Result<Granted, String> {
-    Err("this build cannot obtain privilege for VPN mode on Linux yet; use proxy mode".into())
+/// sing-box's service unit set, in `setcap`'s spelling. Keep in step with the core's
+/// `tunCapabilities`: it counts itself privileged only with all of them.
+const CAPS: &str = "cap_net_admin,cap_net_raw,cap_net_bind_service,cap_sys_ptrace,cap_dac_read_search+ep";
+
+/// Called by full path: an app started from a desktop launcher can have a minimal `PATH`, and a
+/// `pkexec` or `setcap` found elsewhere on it is not one to hand a password to.
+const PKEXEC: &str = "/usr/bin/pkexec";
+const SETCAP: &str = "/usr/sbin/setcap";
+const SETCAP_ALT: &str = "/usr/bin/setcap";
+
+pub fn grant_blocked(core: &Path) -> Option<String> {
+    if std::env::var_os("APPIMAGE").is_some() {
+        return Some(
+            "VPN mode is not available in the AppImage: it runs from a read-only image, so its \
+             tunnel engine cannot be given network rights. Install the .deb, or use proxy mode."
+                .into(),
+        );
+    }
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => return Some(e.to_string()),
+    };
+    if exe.file_name() != Some(std::ffi::OsStr::new("Nunya")) || core.parent() != exe.parent() {
+        return Some(
+            "only the tunnel engine installed beside Nunya can be given network rights; \
+             for development, use scripts/dev-linux.sh"
+                .into(),
+        );
+    }
+    for path in [exe.as_path(), core, core.parent().unwrap_or(core)] {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Some(format!("{} is a symbolic link, which is not granted", path.display()))
+            }
+            Ok(m) if std::os::unix::fs::MetadataExt::uid(&m) != 0 => {
+                return Some(format!(
+                    "{} is not owned by root, so another program could stand in for Nunya; \
+                     VPN mode needs Nunya installed from its package",
+                    path.display()
+                ))
+            }
+            Ok(_) => {}
+            Err(e) => return Some(format!("{}: {e}", path.display())),
+        }
+    }
+    if !Path::new(PKEXEC).exists() {
+        return Some("VPN mode needs pkexec (polkit) to ask for the password, and it is not installed".into());
+    }
+    if setcap().is_none() {
+        return Some("VPN mode needs setcap (libcap) to grant network rights, and it is not installed".into());
+    }
+    None
+}
+
+fn setcap() -> Option<&'static str> {
+    [SETCAP, SETCAP_ALT].into_iter().find(|p| Path::new(p).exists())
+}
+
+/// Gives the bundled core its capabilities, behind the system's password prompt.
+pub fn grant(core: &Path) -> Result<Granted, String> {
+    if let Some(why) = grant_blocked(core) {
+        return Err(why);
+    }
+    let setcap = setcap().ok_or("setcap is not installed")?;
+    // Arguments, never a shell line, so no path can be read as anything but a path.
+    let mut command = Command::new(PKEXEC);
+    command.arg(setcap).arg(CAPS).arg(core);
+    host_environment(&mut command);
+    let out = command
+        .output()
+        .map_err(|e| e.to_string())?;
+    match out.status.code() {
+        Some(0) => Ok(Granted::RestartCore),
+        // pkexec's own codes: the prompt dismissed, or no authorization.
+        Some(126) | Some(127) => Err("the password prompt was cancelled, so VPN mode is still off".into()),
+        _ => Err(format!(
+            "could not give the tunnel engine network rights: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+    }
 }
 
 pub fn browser_command(url: &str) -> Command {
     let mut c = Command::new("xdg-open");
     c.arg(url);
+    host_environment(&mut c);
     c
+}
+
+/// What the AppImage's launcher (linuxdeploy's `AppRun` and its GTK hook) sets so that *Nunya* runs
+/// on the libraries inside the image. A desktop tool started with them runs on those too: the
+/// system's `gsettings` then loads the image's older GLib, cannot load the system's dconf module
+/// against it, and falls back to a keyfile — every `set` exits 0 and lands in
+/// `~/.config/glib-2.0/settings/keyfile`, which GNOME never reads. The system proxy looked set and
+/// was not.
+const APPIMAGE_VARS: &[&str] = &[
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "GSETTINGS_SCHEMA_DIR",
+    "GIO_EXTRA_MODULES",
+    "GI_TYPELIB_PATH",
+    "GTK_DATA_PREFIX",
+    "GTK_EXE_PREFIX",
+    "GTK_PATH",
+    "GTK_IM_MODULE_FILE",
+    "GTK_THEME",
+    "GDK_PIXBUF_MODULE_FILE",
+    "GDK_BACKEND",
+];
+
+/// Starts a desktop tool in the desktop's environment rather than the AppImage's: the image's
+/// overrides are removed, and its directory dropped from `XDG_DATA_DIRS`. Nothing to undo outside
+/// an AppImage. The launcher keeps no copy of the values it replaced, so removing them — letting
+/// each tool use its built-in defaults — is the closest thing to the originals there is.
+pub fn host_environment(cmd: &mut Command) {
+    let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) else {
+        return;
+    };
+    for var in APPIMAGE_VARS {
+        cmd.env_remove(var);
+    }
+    if let Some(dirs) = std::env::var_os("XDG_DATA_DIRS") {
+        let host = host_data_dirs(&dirs.to_string_lossy(), &appdir.to_string_lossy());
+        if host.is_empty() {
+            cmd.env_remove("XDG_DATA_DIRS");
+        } else {
+            cmd.env("XDG_DATA_DIRS", host);
+        }
+    }
+}
+
+/// `XDG_DATA_DIRS` without the image's own entries.
+pub(super) fn host_data_dirs(dirs: &str, appdir: &str) -> String {
+    let appdir = appdir.trim_end_matches('/');
+    dirs.split(':')
+        .filter(|d| !d.is_empty() && !d.starts_with(appdir))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// The peer's credentials, as the kernel recorded them when the socket was connected. Linux has
@@ -188,3 +351,18 @@ pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transpo
 }
 
 pub const OS: &str = "linux";
+
+/// WebKitGTK's DMA-BUF renderer on Wayland with NVIDIA's driver: the window dies at startup with
+/// "Error 71 (Protocol error) dispatching to Wayland display" (tauri-apps/tauri#8541, #9394). The
+/// AppImage's launcher avoids it by forcing X11 for everyone; a package runs natively, so it is
+/// switched off here, and only where it breaks — Wayland and the NVIDIA driver loaded — since it
+/// costs other machines GPU buffer sharing for nothing. A value the user set is left alone.
+pub fn before_webview() {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && std::env::var("GDK_BACKEND").map_or(true, |b| b.contains("wayland"));
+    let nvidia = Path::new("/proc/driver/nvidia/version").exists();
+    if wayland && nvidia && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // Before any thread exists: `run` calls this first, and the webview reads it later.
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}

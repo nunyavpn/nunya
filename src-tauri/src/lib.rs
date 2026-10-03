@@ -140,9 +140,13 @@ async fn tunnel_readiness(
         Err(e) => (None, Some(e.to_string())),
     };
 
-    let can_grant = platform::GRANT.is_some()
+    let needs_grant = platform::GRANT.is_some()
         && state.tunnel_kind == transport::select::Kind::Subprocess
         && matches!(state_or_err, Some(TunnelState::NeedsPermission));
+    // Known up front not to work here: said on the status card, and no grant sheet offered.
+    let blocked = needs_grant.then(|| platform::grant_blocked(&state.core_path)).flatten();
+    let can_grant = needs_grant && blocked.is_none();
+    let detail = detail.or(blocked);
 
     Ok(Readiness {
         mode: mode.as_str(),
@@ -961,6 +965,7 @@ fn spawn_core(
 }
 
 pub fn run() {
+    platform::before_webview();
     applog::init();
 
     tauri::Builder::default()

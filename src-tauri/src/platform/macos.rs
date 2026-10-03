@@ -198,3 +198,14 @@ pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transpo
 }
 
 pub const OS: &str = "macos";
+
+/// The grant's own checks run when it is made, and say why if it cannot be.
+pub fn grant_blocked(_core: &Path) -> Option<String> {
+    None
+}
+
+/// Only Linux's AppImage changes the environment its children inherit.
+pub fn host_environment(_cmd: &mut Command) {}
+
+/// Nothing to adjust before the webview starts here.
+pub fn before_webview() {}
