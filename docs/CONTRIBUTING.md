@@ -535,10 +535,18 @@ version by hand with `node scripts/version.mjs set X.Y.Z`; see what would come n
 `node scripts/version.mjs next`.
 
 Each release builds a **macOS arm64** `.dmg` (and a zipped `.app`), a **Windows x86-64** NSIS
-installer, a **Linux x86-64** AppImage and `.deb`, and an **arm64** `.deb`, against the core pinned in
-`core.lock`, and publishes them with a `SHA256SUMS`. The AppImage is the Linux download that matters:
-it runs on every distribution, Arch-based ones included, which cannot install a `.deb`, and it is
-the one Linux package the updater replaces. There is no arm64 AppImage: linuxdeploy rewrites the
+installer, a **Linux x86-64** AppImage, `.deb` and Arch package (`.pkg.tar.zst`), and an **arm64**
+`.deb`, against the core pinned in `core.lock`, and publishes them with a `SHA256SUMS`. The AppImage
+runs on every distribution and is the one Linux package the updater replaces; the packages are what
+VPN mode needs, since only a root-owned core can be given its capabilities. The Arch package is the
+`.deb` repackaged by `scripts/package-arch.sh` in an Arch container (makepkg is Arch's), so the two
+cannot drift; run the script locally on a `.deb` to try it.
+
+**The AUR.** A stable release (a tag, never a beta) is also pushed to the AUR as `nunya-bin`: the
+same PKGBUILD with the release's `.deb` as its source and its checksum pinned, built once in CI before
+the push. It needs an AUR account whose SSH public key is on its profile, with the private key in
+the repository secret `AUR_SSH_PRIVATE_KEY`; without the secret the step warns and skips. The first
+push creates the package and makes that account its maintainer. There is no arm64 AppImage: linuxdeploy rewrites the
 bundled core with patchelf, which the arm64 core does not survive. Releases run one at a time, never cancelled, so two
 quick merges are two releases. A pull request that touches `release.yml`, the updater manifest or
 `tauri.conf.json` runs the builds without publishing, which is how a change to them is tried.
