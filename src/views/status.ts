@@ -108,11 +108,55 @@ export class StatusCard {
   constructor(
     private root: HTMLElement,
     private callbacks: StatusCallbacks,
-  ) {}
+  ) {
+    this.swipe();
+  }
+
+  /**
+   * On a phone the card is a bottom sheet: one line — the state and Connect — until it is swiped
+   * up, or its handle tapped, for the speeds, Share and the chips. The open state is a class on the
+   * card's own element, which `render` never replaces, so it survives the card repainting every
+   * second. On a desktop the handle is not shown and the class changes nothing.
+   */
+  /** Set by a swipe, so the click the browser fires when it ends on the handle does not undo it. */
+  private swiped = false;
+
+  private swipe() {
+    let from: number | null = null;
+    this.root.addEventListener("pointerdown", (e) => {
+      from = (e.target as Element).closest?.("button:not(.st-grab)") ? null : e.clientY;
+    });
+    this.root.addEventListener("pointerup", (e) => {
+      if (from === null) return;
+      const dy = e.clientY - from;
+      from = null;
+      this.swiped = Math.abs(dy) > 24;
+      if (dy < -24) this.setOpen(true);
+      else if (dy > 24) this.setOpen(false);
+    });
+  }
+
+  private setOpen(open: boolean) {
+    this.root.classList.toggle("open", open);
+    this.root.querySelector(".st-grab")?.setAttribute("aria-expanded", String(open));
+  }
 
   render(model: StatusModel) {
     render(
       this.root,
+      h(
+        "button",
+        {
+          class: "st-grab",
+          "aria-label": "More about this connection",
+          "aria-expanded": String(this.root.classList.contains("open")),
+          onclick: () => {
+            if (this.swiped) this.swiped = false;
+            else this.setOpen(!this.root.classList.contains("open"));
+          },
+        },
+        h("i"),
+      ),
       h("div", { class: "st-top" }, ...this.top(model)),
       model.state === "on" ? this.chips(model) : this.idle(model),
     );

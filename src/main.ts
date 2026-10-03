@@ -168,12 +168,14 @@ const support = new SupportPanel(panelHost, SUPPORT, {
   onCopy: (text) => copyText(text),
 });
 
-/** Which panel the rail is showing. `vpn` means the locations list, which is the default. */
-type Screen = "vpn" | "rules" | "settings" | "support" | "diagnostics";
+/** Which panel the rail is showing. `vpn` means the locations list, which is the default. `map`
+ *  exists only on a phone, where the map has a tab instead of the pane beside the list. */
+type Screen = "vpn" | "map" | "rules" | "settings" | "support" | "diagnostics";
 let screen: Screen = "vpn";
 
 const RAIL: Record<Screen, string> = {
   vpn: "#nav-vpn",
+  map: "#nav-map",
   rules: "#nav-rules",
   settings: "#nav-settings",
   support: "#nav-support",
@@ -190,7 +192,9 @@ function show(next: Screen) {
 
   const locationsVisible = screen === "vpn";
   qs<HTMLElement>("#locations").hidden = !locationsVisible;
-  panelHost.hidden = locationsVisible;
+  panelHost.hidden = locationsVisible || screen === "map";
+  // The stylesheet's phone layout reads this to give the map the screen (`.window.show-map`).
+  qs(".window").classList.toggle("show-map", screen === "map");
 
   bypass.active = screen === "rules";
   settings.active = screen === "settings";
@@ -1438,6 +1442,7 @@ async function openExternal(url: string) {
 function paintRail() {
   const buttons: [Screen, string, number][] = [
     ["vpn", "shield", 20],
+    ["map", "map", 20],
     ["rules", "globe", 20],
     ["settings", "sliders", 20],
     ["support", "heart", 18],

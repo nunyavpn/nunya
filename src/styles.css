@@ -3214,41 +3214,58 @@ button:disabled {
    A phone is one column, not three (issue #129). The desktop shape — rail, list, map side by side —
    squeezed into 360px put the map under the bottom of the screen and the status card off it. So:
 
-     the map, a band across the top, with the status card directly below it, not floating over
-       it (the map then reserves no room for the card: `covered` in map.ts);
-     the list, or whichever panel the rail opened, filling what is left;
-     the rail, as a tab bar along the bottom, where a thumb reaches.
+     the list, or whichever panel the rail opened, takes the screen;
+     the map has a tab of its own (`#nav-map`, `.window.show-map`), since it is looked at now and
+       then and would otherwise cost a third of the screen all the time;
+     the status card is a bottom sheet above the tab bar: one line — the state and Connect — until
+       it is swiped up or its handle tapped (`.status.open`, `StatusCard.swipe`), when the speeds,
+       Share and the chips show;
+     the rail is the tab bar, where a thumb reaches.
 
-   The status card stays on every screen, as the desktop's does: Connect is never a tab away. The
-   rail's shield is left out, since the card says the same thing just above it. Sheets rise from
-   the bottom edge. Nothing here changes the desktop: the window's minimum width (880px) keeps it
-   well above this breakpoint. The system bars are kept clear by the Android activity, which pads
-   the webview by their insets, so no `env(safe-area-inset-*)` is needed here. */
+   Collapsed, the card still makes no claim it cannot keep: its headline is keyed by mode ("Proxy
+   running", never "You're protected" outside VPN mode), and the warnings stay — "Only apps set to
+   use it", and whatever is stopping Connect. The rail's shield is left out, since the card says the same
+   thing just above it. Sheets rise from the bottom edge. Nothing here changes the desktop: the
+   window's minimum width (880px) keeps it well above this breakpoint. The system bars are kept
+   clear by the Android activity, which pads the webview by their insets. */
+
+.phone-only,
+.st-grab {
+  display: none;
+}
 
 @media (max-width: 640px) {
   .window {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr) auto;
-  }
-
-  .mappane {
-    grid-row: 1;
-    display: flex;
-    flex-direction: column;
-    /* The map's own height; the card below adds its own. */
-    padding-top: clamp(140px, 24vh, 220px);
-    border-bottom: 1px solid var(--line);
-  }
-
-  .mapcanvas {
-    bottom: auto;
-    height: clamp(140px, 24vh, 220px);
+    grid-template-rows: minmax(0, 1fr) auto auto;
   }
 
   .locs,
   .panel {
-    grid-row: 2;
+    grid-row: 1;
     border-right: 0;
+  }
+
+  .mappane {
+    grid-row: 2;
+    display: flex;
+    flex-direction: column;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .window:not(.show-map) .mapcanvas,
+  .window:not(.show-map) #pins,
+  .window:not(.show-map) .mapzoom,
+  .window:not(.show-map) .mpick {
+    display: none;
+  }
+
+  /* The map's tab: the pane takes the screen, and the card sits over its bottom as on a desktop. */
+  .window.show-map .mappane {
+    grid-row: 1 / 3;
+    background: var(--sunk);
+    overflow: hidden;
   }
 
   .rail {
@@ -3259,6 +3276,10 @@ button:disabled {
     gap: 0;
     border-right: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .rail .phone-only {
+    display: grid;
   }
 
   .rail .logo,
@@ -3282,19 +3303,39 @@ button:disabled {
     right: auto;
     bottom: auto;
     z-index: 2;
-    margin: 0;
+    margin-top: auto;
     border-width: 1px 0 0;
-    border-radius: 0;
-    box-shadow: none;
-    padding: 12px 14px;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 20px -14px rgb(8 11 23 / 45%);
+    padding: 0 14px 12px;
+    /* The swipe is ours; the page must not scroll or pull to refresh under it. */
+    touch-action: none;
   }
 
-  /* Badge, words and throughput on the first line; share and a full-width Connect on the second,
-     where the thumb lands. The ::after is a zero-height flex item that forces the break. */
+  .st-grab {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 20px;
+  }
+
+  .st-grab i {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line-2);
+  }
+
+  /* The state and Connect on the first line, always; the speeds and Share on the second, open.
+     The ::after is a zero-height flex item that forces the break. */
   .st-top {
     flex-wrap: wrap;
     row-gap: 10px;
     gap: 10px;
+  }
+
+  .st-top > .btn {
+    order: 1;
   }
 
   .st-top::after {
@@ -3304,22 +3345,36 @@ button:disabled {
     height: 0;
   }
 
-  .st-share {
-    order: 3;
-  }
-
-  .st-top > .btn {
-    order: 4;
-    flex: 1;
-  }
-
   .st-flow {
-    gap: 12px;
+    order: 3;
+    flex: 1;
+    justify-content: flex-start;
+    gap: 24px;
     padding-right: 0;
   }
 
-  .fl .v {
-    font-size: 13px;
+  .fl {
+    align-items: flex-start;
+  }
+
+  .st-share {
+    order: 4;
+    margin-left: auto;
+  }
+
+  /* Collapsed keeps what must not be a swipe away: why Connect cannot be used, the grant's note,
+     and in proxy mode "Only apps set to use it" — the warnings and notes, and nothing else. */
+  .status:not(.open) .st-flow,
+  .status:not(.open) .st-share,
+  .status:not(.open) .st-top::after,
+  .status:not(.open) .st-more:not(:has(.tag.warn, .tag.note)),
+  .status:not(.open) .st-more .tag:not(.warn):not(.note) {
+    display: none;
+  }
+
+  .status:not(.open) .st-more {
+    border-top: 0;
+    padding-top: 0;
   }
 
   /* One line that scrolls sideways, not five that push the list off the screen. What the modes'
@@ -3345,10 +3400,11 @@ button:disabled {
     order: -1;
   }
 
+  /* Above the card, on every tab: an update is news wherever the user is. */
   .updatebar {
-    left: 10px;
-    right: 56px;
-    top: 10px;
+    position: relative;
+    inset: auto;
+    margin: 0 10px 8px;
     padding: 8px 10px;
   }
 

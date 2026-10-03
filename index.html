@@ -18,6 +18,9 @@
       <nav class="rail" data-tauri-drag-region>
         <span class="logo off" role="img" aria-label="Not connected"></span>
         <button class="rail-btn on" id="nav-vpn" title="VPN" aria-label="VPN"></button>
+        <!-- A phone has no room for the map beside the list, so it gets a tab of its own; on a
+             desktop the map is always on screen and this button is not shown. -->
+        <button class="rail-btn phone-only" id="nav-map" title="Map" aria-label="Map"></button>
         <button class="rail-btn" id="nav-rules" title="Bypass rules" aria-label="Bypass rules"></button>
         <button class="rail-btn" id="nav-settings" title="Settings" aria-label="Settings"></button>
         <span class="rail-spacer"></span>
