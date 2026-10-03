@@ -9,8 +9,6 @@
 //! payment page belongs in the browser the user already trusts, with their own extensions, and a
 //! page loaded inside this app would be a page the app's CSP was written to keep out.
 
-use std::process::Command;
-
 /// Hosts `open_external` will open. Exact matches: `buymeacoffee.com.example.net` is not one.
 ///
 /// Keep in step with `SUPPORT` in `src/support.ts`; a channel the command refuses is a button that
@@ -47,27 +45,7 @@ pub fn allowed(url: &str) -> Result<&str, String> {
 pub fn open(url: &str) -> Result<(), String> {
     let url = allowed(url)?;
 
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut c = Command::new("open");
-        c.arg(url);
-        c
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        // Not `cmd /C start`, which would read the URL's `&` as a command separator.
-        let mut c = Command::new("rundll32");
-        c.args(["url.dll,FileProtocolHandler", url]);
-        c
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut c = Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
-
-    let status = command
+    let status = crate::platform::browser_command(url)
         .status()
         .map_err(|e| format!("could not start the system browser: {e}"))?;
     if status.success() {

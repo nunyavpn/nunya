@@ -1,7 +1,9 @@
 //! macOS: VPN mode without the packet tunnel extension is a setuid-root core.
 
 use std::path::Path;
+use std::process::Command;
 
+pub use super::unix::{no_console_window, restrict_dir, restrict_file, tighten};
 use super::{Fact, GrantCopy, Granted};
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
@@ -75,4 +77,10 @@ pub fn grant(core: &Path) -> Result<Granted, String> {
     } else {
         Err(format!("could not give the core administrator access: {}", err.trim()))
     }
+}
+
+pub fn browser_command(url: &str) -> Command {
+    let mut c = Command::new("open");
+    c.arg(url);
+    c
 }

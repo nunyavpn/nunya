@@ -171,7 +171,10 @@ does.
   file per OS behind one interface, only the target's compiled. **New platform-specific code goes
   here, not in `#[cfg]` branches inside shared code**; the rest of the tree moves in over time
   (issue #100). Today it holds VPN-mode privilege: `GRANT` (the grant sheet's words, `None` where
-  there is no grant) and `grant` — setuid core on macOS, a UAC relaunch of the app on Windows.
+  there is no grant) and `grant` — setuid core on macOS, a UAC relaunch of the app on Windows; plus
+  owner-only files (`restrict_dir`, `restrict_file`, `tighten`), the system browser
+  (`browser_command`) and the core's console window (`no_console_window`). What macOS and Linux
+  share is in `unix.rs`, which their files re-export.
 - [applog.rs](src-tauri/src/applog.rs) — the app's own log goes to Diagnostics as well as stderr,
   with a backlog for what was logged before the window listened. A Windows release build has no
   console, so without it a core that failed to start left no trace.

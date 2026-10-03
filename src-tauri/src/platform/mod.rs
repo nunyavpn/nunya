@@ -7,9 +7,13 @@
 //! Each file must provide every item `pub use`d below, so a platform left behind is a compile
 //! error on that platform's CI job rather than a gap found by a user.
 //!
-//! Only VPN-mode privilege lives here so far; the rest moves in one concern at a time (issue #100).
+//! Moved here so far: VPN-mode privilege, owner-only files, the system browser and the core's
+//! console window. The rest moves in one concern at a time (issue #100).
 
+use std::fs;
+use std::io;
 use std::path::Path;
+use std::process::Command;
 
 use serde::Serialize;
 
@@ -18,6 +22,10 @@ use serde::Serialize;
 #[cfg_attr(windows, path = "windows.rs")]
 mod imp;
 
+/// What macOS and Linux share; only their files use it.
+#[cfg(unix)]
+mod unix;
+
 /// What the "Allow VPN mode" sheet says on this platform, or `None` where the app has no way to
 /// obtain privilege for VPN mode and must not offer a button that always fails.
 pub use imp::GRANT;
@@ -25,6 +33,22 @@ pub use imp::GRANT;
 /// Obtains privilege for VPN mode (blocking: it waits on the system's own prompt). `core` is the
 /// bundled core binary. Called only where `GRANT` is `Some`.
 pub use imp::grant;
+
+/// Narrows a directory to its owner. A no-op on Windows, where a profile's AppData is already
+/// private to its user and there is no mode to set.
+pub use imp::restrict_dir;
+
+/// Narrows a file just created to its owner, before anything is written to it.
+pub use imp::restrict_file;
+
+/// Narrows an existing file that anyone else on the machine can read, saying so in the log.
+pub use imp::tighten;
+
+/// The desktop's own command for opening `url` in the system browser, not yet started.
+pub use imp::browser_command;
+
+/// Keeps a console program started from this GUI app from opening a window of its own.
+pub use imp::no_console_window;
 
 /// What the caller has to do once `grant` has succeeded. Each platform builds only the variant
 /// its grant produces, hence the allowance.
@@ -57,8 +81,18 @@ pub struct Fact {
     pub text: &'static str,
 }
 
-/// Pins `grant`'s signature, so each platform's file has to match it and not merely name it.
+/// Pins every function's signature, so each platform's file has to match it and not merely name it.
 #[allow(dead_code)]
-fn _signature_check(core: &Path) -> Result<Granted, String> {
+fn _signature_check(
+    core: &Path,
+    file: &fs::File,
+    meta: &fs::Metadata,
+    child: &mut tokio::process::Command,
+) -> Result<Granted, String> {
+    let _: io::Result<()> = restrict_dir(core);
+    let _: io::Result<()> = restrict_file(file);
+    tighten(core, meta);
+    let _: Command = browser_command("");
+    no_console_window(child);
     grant(core)
 }
