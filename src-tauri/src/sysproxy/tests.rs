@@ -121,7 +121,7 @@ fn the_mac_proxy_is_set_and_then_put_back_exactly() {
         "refusing to change this Mac's system proxy; see this test's doc comment"
     );
     let before = capture().expect("capture");
-    let applied = apply(2099);
+    let applied = apply(&before, 2099);
     let seen = run("/usr/sbin/scutil", &["--proxy"]).unwrap_or_default();
     restore(&before).expect("restore");
     applied.expect("apply");
@@ -144,8 +144,9 @@ fn the_gnome_proxy_is_set_and_then_put_back_exactly() {
         Ok("keyfile"),
         "refusing to change the real system proxy; see this test's doc comment"
     );
-    let before = capture().expect("capture");
-    apply(2080).expect("apply");
+    // GNOME's part alone: `capture` would also take the session's real environment.
+    let before = gnome::capture().expect("capture");
+    apply(&before, 2080).expect("apply");
 
     let get = |schema: &str, key: &str| run("gsettings", &["get", schema, key]).unwrap();
     assert_eq!(get("org.gnome.system.proxy", "mode"), "'manual'");
@@ -157,7 +158,7 @@ fn the_gnome_proxy_is_set_and_then_put_back_exactly() {
     }
 
     restore(&before).expect("restore");
-    assert_eq!(capture().expect("capture again"), before);
+    assert_eq!(gnome::capture().expect("capture again"), before);
 }
 
 /// The saved file is what rescues a machine after a crash, so it has to read back exactly.
@@ -173,4 +174,83 @@ fn the_saved_settings_survive_a_round_trip_through_the_file() {
     remove_saved(&dir);
     assert_eq!(read_saved(&dir), None);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_session_environment_reads_back_plain_and_quoted_values() {
+    let listing = "HOME=/home/a\nhttp_proxy=http://proxy.example.net:3128\nNO_PROXY=$'a b\\'c'\nLANG=C";
+    let env = env::parse_environment(listing);
+    assert!(env.contains(&("http_proxy".into(), "http://proxy.example.net:3128".into())));
+    assert!(env.contains(&("NO_PROXY".into(), "a b'c".into())));
+}
+
+#[test]
+fn every_proxy_variable_points_at_the_listener_in_both_cases() {
+    let vars = proxy_variables(2080);
+    let get = |n: &str| vars.iter().find(|(name, _)| name == n).map(|(_, v)| v.as_str());
+    for name in ["http_proxy", "HTTPS_PROXY", "ftp_proxy"] {
+        assert_eq!(get(name), Some("http://127.0.0.1:2080"), "{name}");
+    }
+    assert_eq!(get("ALL_PROXY"), Some("socks5://127.0.0.1:2080"));
+    assert_eq!(get("no_proxy"), Some("localhost,127.0.0.0/8,::1"));
+    assert_eq!(vars.len(), 10);
+}
+
+/// A variable that was not set before must be unset again, not left behind empty or pointing at
+/// a port nothing listens on once the app has gone.
+#[test]
+fn the_session_environment_is_put_back_exactly() {
+    let values = vec![
+        ("http_proxy".to_string(), Some("http://proxy.example.net:3128".to_string())),
+        ("all_proxy".to_string(), None),
+    ];
+    let (set, unset) = env::restore_steps(&values);
+    assert_eq!(set, ["http_proxy=http://proxy.example.net:3128"]);
+    assert_eq!(unset, ["all_proxy"]);
+}
+
+#[test]
+fn hyprland_gets_every_variable_in_one_batch() {
+    let batch = hyprland::batch(&[
+        ("http_proxy".into(), "http://127.0.0.1:2080".into()),
+        ("no_proxy".into(), "localhost,::1".into()),
+    ]);
+    assert_eq!(batch, "keyword env http_proxy,http://127.0.0.1:2080 ; keyword env no_proxy,localhost,::1");
+}
+
+/// A file saved by a version that knew one desktop still restores after the update.
+#[test]
+fn a_saved_single_desktop_still_reads_back_beside_several() {
+    let old = r#"{"desktop":"gnome","values":[["org.gnome.system.proxy","mode","'none'"]]}"#;
+    assert!(matches!(serde_json::from_str::<Saved>(old), Ok(Saved::Gnome { .. })));
+    let several = Saved::Several {
+        parts: vec![
+            Saved::Gnome { values: vec![] },
+            Saved::Env { values: vec![("http_proxy".into(), None)] },
+        ],
+    };
+    let json = serde_json::to_string(&several).unwrap();
+    assert_eq!(serde_json::from_str::<Saved>(&json).unwrap(), several);
+}
+
+/// The whole cycle against the real systemd user manager. Ignored, and refuses to run unless
+/// asked: it changes this session's environment for a moment, then puts it back.
+///
+///     NUNYA_TOUCH_SYSTEM_PROXY=1 cargo test --manifest-path src-tauri/Cargo.toml session_environment_cycle -- --ignored
+#[test]
+#[ignore]
+fn the_session_environment_cycle_is_set_and_then_put_back_exactly() {
+    assert_eq!(
+        std::env::var("NUNYA_TOUCH_SYSTEM_PROXY").as_deref(),
+        Ok("1"),
+        "refusing to change this session's environment; see this test's doc comment"
+    );
+    let before = env::capture().expect("capture");
+    let applied = apply(&before, 2099);
+    let seen = run("systemctl", &["--user", "show-environment"]).unwrap_or_default();
+    restore(&before).expect("restore");
+    applied.expect("apply");
+    assert!(seen.contains("http_proxy=http://127.0.0.1:2099"), "{seen}");
+    assert!(seen.contains("ALL_PROXY=socks5://127.0.0.1:2099"), "{seen}");
+    assert_eq!(env::capture().expect("capture again"), before, "not put back exactly");
 }

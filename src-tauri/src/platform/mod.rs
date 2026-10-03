@@ -74,9 +74,9 @@ pub use imp::no_console_window;
 /// The TUN interface's name, or `None` to let the system number it (macOS's utunN).
 pub use imp::TUN_NAME;
 
-/// Which tool sets the system proxy here. On Linux it depends on the running desktop, so this
-/// may fail there, by name, rather than at compile time.
-pub use imp::proxy_desktop;
+/// Every tool that sets the system proxy here. On Linux that is a runtime question with several
+/// answers (GSettings, KDE, the session environment, Hyprland), and may fail there, by name.
+pub use imp::proxy_desktops;
 
 /// The core link's listener between `ipc_bind`, which runs outside the async runtime, and
 /// `IpcAcceptor::adopt`, which runs on it: a std unix listener, or a named pipe's name.
@@ -194,7 +194,7 @@ fn _signature_check(
     let _: Option<&'static str> = TUN_NAME;
     let _: Option<String> = grant_blocked(core);
     before_webview();
-    let _: Result<crate::sysproxy::Desktop, String> = proxy_desktop();
+    let _: Result<Vec<crate::sysproxy::Desktop>, String> = proxy_desktops();
     let _: io::Result<(PathBuf, PendingListener)> = ipc_bind(core.to_path_buf());
     ipc_unbind(core);
     grant(core)

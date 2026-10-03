@@ -272,8 +272,19 @@ One port serves all of them because the listener is a `mixed` inbound; an empty 
 app that silently goes around the tunnel. On GNOME the legacy `http.enabled` key is set too, since
 older readers treat HTTP as off without it. [sysproxy.rs](src-tauri/src/sysproxy.rs)
 shells out to the desktop's own tool — `gsettings` (GNOME family), `kwriteconfig6/5` (KDE),
-`networksetup` (macOS), `reg.exe` on `HKCU\…\Internet Settings` (Windows) — and refuses any other
-desktop by name.
+`networksetup` (macOS), `reg.exe` on `HKCU\…\Internet Settings` (Windows).
+
+**Linux has no single system proxy**, so `platform::proxy_desktops` returns every mechanism the
+session has and all are used, each captured and restored on its own (`Saved::Several`): GSettings
+wherever its schema is installed (Firefox and GTK apps read it on any desktop), KDE's `kioslaverc`,
+the **systemd user environment** (`http_proxy`, `https_proxy`, `ftp_proxy`, `all_proxy` as
+`socks5://`, `no_proxy`, both cases — what Chromium and CLI tools read outside GNOME/KDE, and the
+only "system proxy" i3 or Sway has), and on Hyprland the same variables through `hyprctl keyword
+env`. `apply` is driven by what was captured, so nothing is set that cannot be put back, and it
+succeeds if any part took. The environment reaches only apps started afterwards (through systemd or
+D-Bus, or Hyprland's `exec`); nothing reaches one already running.
+`the_session_environment_cycle_is_set_and_then_put_back_exactly` runs the real systemd cycle with
+`NUNYA_TOUCH_SYSTEM_PROXY=1`.
 
 **macOS has no FTP slot any more**: current `networksetup` has dropped `-getftpproxy`/`-setftpproxy`
 and answers them with its usage text and `** Error: The command is not recognized.` Asking for it

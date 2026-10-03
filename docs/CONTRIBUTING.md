@@ -353,6 +353,24 @@ older GLib, fell back to a keyfile backend and wrote `~/.config/glib-2.0/setting
 system proxy looked set and was not. Do not bring it back without answering all three. A package
 belongs to its package manager, so the app does not update itself on Linux (`IN_APP_UPDATES`).
 
+### Linux: the system proxy is several settings
+
+Linux has no single system proxy, so `sysproxy.rs` sets every one the session has
+(`platform::proxy_desktops`) and puts each back on its own:
+
+| Mechanism | Reaches | Found when |
+| --- | --- | --- |
+| GSettings `org.gnome.system.proxy` | GNOME apps; Firefox and GTK/GIO apps on any desktop | the schema is installed |
+| KDE `kioslaverc` | KDE/Qt apps | a KDE session with `kwriteconfig6/5` |
+| systemd user environment (`http_proxy`, `all_proxy`, …) | Chromium, curl, git, most CLI tools, started afterwards through systemd/D-Bus | a systemd user session |
+| `hyprctl keyword env` | apps Hyprland starts afterwards | Hyprland |
+
+i3 and Sway have no setting of their own, so the environment is all they get. A process reads its
+environment when it starts, so apps already running are not reached, and on i3 neither are apps
+started from i3's own `exec` bindings, which inherit i3's environment. VPN mode is what covers
+everything. Test the real systemd cycle with
+`NUNYA_TOUCH_SYSTEM_PROXY=1 cargo test --manifest-path src-tauri/Cargo.toml session_environment_cycle -- --ignored`.
+
 ## Privilege: the macOS tunnel is a real system VPN
 
 VPN mode on macOS uses Apple's NetworkExtension framework, the same mechanism WireGuard, Mullvad,

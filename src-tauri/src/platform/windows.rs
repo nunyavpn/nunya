@@ -113,8 +113,8 @@ pub fn no_console_window(cmd: &mut Command) {
 pub const TUN_NAME: Option<&str> = Some("nunya-tun");
 
 /// The registry is the system proxy on Windows (`sysproxy.rs`'s `windows`).
-pub fn proxy_desktop() -> Result<Desktop, String> {
-    Ok(Desktop::Windows)
+pub fn proxy_desktops() -> Result<Vec<Desktop>, String> {
+    Ok(vec![Desktop::Windows])
 }
 
 // The core's link: a named pipe, which is what the core dials here (`ConnectIPC` in its

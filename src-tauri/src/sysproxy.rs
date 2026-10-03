@@ -16,11 +16,19 @@
 //! own proxy configured gets it back, not a blank setting.
 //!
 //! Each desktop keeps this in a different place, and the platform tools are the supported way to
-//! change it (they also notify running apps), so this shells out to them:
+//! change it (they also notify running apps), so this shells out to them. **Linux has no single
+//! system proxy**, so there every mechanism the session has is used, not the first one found, and
+//! each is captured and put back on its own (`Saved::Several`):
 //!
-//! - GNOME and its relatives: `gsettings`, `org.gnome.system.proxy`.
+//! - GSettings, `org.gnome.system.proxy`, wherever its schema is installed: GNOME's apps read it,
+//!   and so do Firefox and GTK/GIO apps on any desktop.
 //! - KDE Plasma: `kioslaverc` through `kwriteconfig6`/`kwriteconfig5`, then a D-Bus signal so KIO
 //!   rereads it.
+//! - The systemd user environment (`http_proxy`, `all_proxy`, … — `env`): what Chromium, curl, git
+//!   and most command-line tools read outside GNOME and KDE, and the only "system proxy" a tiling
+//!   window manager (i3, Sway) has. It reaches apps started *afterwards* through systemd or D-Bus;
+//!   a process reads its environment when it starts, so nothing reaches one already running.
+//! - Hyprland: the same variables through `hyprctl keyword env`, for the apps Hyprland starts.
 //! - macOS: `networksetup`, per network service — then `scutil --proxy`, which is what apps are
 //!   actually given, to confirm it took. `networksetup` exits 0 on many of its own errors, so its
 //!   status alone proves nothing.
@@ -56,6 +64,14 @@ pub enum Saved {
     Mac { services: Vec<MacService> },
     /// `(value name, value)`; `None` means the value did not exist and is deleted on restore.
     Windows { values: Vec<(String, Option<RegValue>)> },
+    /// `(variable, value)` in the systemd user manager's environment; `None` means it was not set
+    /// and is unset again on restore.
+    Env { values: Vec<(String, Option<String>)> },
+    /// `(variable, value)` as Hyprland had it; `None` is put back as empty, since Hyprland has no
+    /// way to unset one, and an empty proxy variable means "no proxy" to everything that reads it.
+    Hyprland { values: Vec<(String, Option<String>)> },
+    /// Every mechanism a Linux session has, each put back on its own.
+    Several { parts: Vec<Saved> },
 }
 
 /// A registry value as `reg query` printed it: its type (`REG_DWORD`, `REG_SZ`) and its data,
@@ -87,39 +103,110 @@ pub struct MacProxy {
 // ---------------------------------------------------------------- the three operations
 
 /// Reads the current system proxy settings, so they can be restored later.
+///
+/// On Linux every mechanism the session has is captured; one that cannot be read is left out
+/// (and so is never changed), since changing what cannot be put back is the one thing this must
+/// not do. Only if none can be read is it an error.
 pub fn capture() -> Result<Saved, String> {
-    match desktop()? {
+    let desktops = desktops()?;
+    if let [only] = desktops.as_slice() {
+        return capture_one(only);
+    }
+    let mut parts = Vec::new();
+    let mut errors = Vec::new();
+    for desktop in &desktops {
+        match capture_one(desktop) {
+            Ok(saved) => parts.push(saved),
+            Err(e) => errors.push(e),
+        }
+    }
+    if parts.is_empty() {
+        return Err(errors.join("; "));
+    }
+    for e in errors {
+        log::warn!("left out of the system proxy: {e}");
+    }
+    Ok(Saved::Several { parts })
+}
+
+fn capture_one(desktop: &Desktop) -> Result<Saved, String> {
+    match desktop {
         Desktop::Gnome => gnome::capture(),
-        Desktop::Kde(tool) => kde::capture(&tool),
+        Desktop::Kde(tool) => kde::capture(tool),
         Desktop::Mac => mac::capture(),
         Desktop::Windows => windows::capture(),
+        Desktop::Env => env::capture(),
+        Desktop::Hyprland => hyprland::capture(),
     }
 }
 
-/// Points the system proxy at `127.0.0.1:port` for every kind the desktop has a slot for — HTTP,
-/// HTTPS, FTP (where there still is one; not on current macOS) and SOCKS. The listener is a `mixed` inbound, so one port answers them all, and a
-/// slot left empty is a class of app that silently goes around the tunnel. (FTP URLs are carried
-/// by the HTTP proxy protocol, which is what an FTP proxy setting means to the apps that read it.)
+/// Points every mechanism `saved` captured at `127.0.0.1:port`, for every kind it has a slot for
+/// — HTTP, HTTPS, FTP (where there still is one; not on current macOS) and SOCKS. The listener is a
+/// `mixed` inbound, so one port answers them all, and a slot left empty is a class of app that
+/// silently goes around the tunnel. (FTP URLs are carried by the HTTP proxy protocol, which is
+/// what an FTP proxy setting means to the apps that read it.)
+///
+/// Driven by what was captured, so nothing is set that could not be put back. With several, it
+/// succeeds if any took, and says which did not.
 ///
 /// Always loopback, even with Allow LAN on: that setting is about who else may connect, and this
 /// machine reaches its own listener on loopback either way.
-pub fn apply(port: u16) -> Result<(), String> {
-    match desktop()? {
-        Desktop::Gnome => gnome::apply(port),
-        Desktop::Kde(tool) => kde::apply(&tool, port),
-        Desktop::Mac => mac::apply(port),
-        Desktop::Windows => windows::apply(port),
+pub fn apply(saved: &Saved, port: u16) -> Result<(), String> {
+    match saved {
+        Saved::Gnome { .. } => gnome::apply(port),
+        Saved::Kde { tool, .. } => kde::apply(tool, port),
+        Saved::Mac { .. } => mac::apply(port),
+        Saved::Windows { .. } => windows::apply(port),
+        Saved::Env { .. } => env::apply(port),
+        Saved::Hyprland { .. } => hyprland::apply(port),
+        Saved::Several { parts } => {
+            let errors: Vec<String> = parts.iter().filter_map(|p| apply(p, port).err()).collect();
+            if errors.len() == parts.len() {
+                return Err(errors.join("; "));
+            }
+            for e in errors {
+                log::warn!("part of the system proxy was not set: {e}");
+            }
+            Ok(())
+        }
     }
 }
 
-/// Puts back what `capture` read.
+/// Puts back what `capture` read. Every part is tried, even after one fails.
 pub fn restore(saved: &Saved) -> Result<(), String> {
     match saved {
         Saved::Gnome { values } => gnome::restore(values),
         Saved::Kde { tool, values } => kde::restore(tool, values),
         Saved::Mac { services } => mac::restore(services),
         Saved::Windows { values } => windows::restore(values),
+        Saved::Env { values } => env::restore(values),
+        Saved::Hyprland { values } => hyprland::restore(values),
+        Saved::Several { parts } => {
+            let errors: Vec<String> = parts.iter().filter_map(|p| restore(p).err()).collect();
+            if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+        }
     }
+}
+
+/// The proxy variables and the values pointing them at the listener: lowercase, which almost
+/// everything reads, and uppercase, which some tools read instead. `all_proxy` is SOCKS, for what
+/// is not HTTP; the listener speaks both.
+fn proxy_variables(port: u16) -> Vec<(String, String)> {
+    let http = format!("http://127.0.0.1:{port}");
+    let socks = format!("socks5://127.0.0.1:{port}");
+    let no_proxy = LOCAL_HOSTS.join(",");
+    let mut out = Vec::new();
+    for (name, value) in [
+        ("http_proxy", &http),
+        ("https_proxy", &http),
+        ("ftp_proxy", &http),
+        ("all_proxy", &socks),
+        ("no_proxy", &no_proxy),
+    ] {
+        out.push((name.to_string(), value.clone()));
+        out.push((name.to_uppercase(), value.clone()));
+    }
+    out
 }
 
 // ---------------------------------------------------------------- the saved file
@@ -161,10 +248,13 @@ pub(crate) enum Desktop {
     Kde(String),
     Mac,
     Windows,
+    /// The systemd user manager's environment.
+    Env,
+    Hyprland,
 }
 
-fn desktop() -> Result<Desktop, String> {
-    crate::platform::proxy_desktop()
+fn desktops() -> Result<Vec<Desktop>, String> {
+    crate::platform::proxy_desktops()
 }
 
 /// Runs a tool and returns its trimmed stdout, or its stderr as the error.
@@ -342,6 +432,160 @@ mod kde {
                 "string:",
             ],
         );
+    }
+}
+
+// ---------------------------------------------------------------- the session environment
+
+mod env {
+    use super::run;
+
+    pub fn capture() -> Result<super::Saved, String> {
+        let listing = run("systemctl", &["--user", "show-environment"])?;
+        let current = parse_environment(&listing);
+        let values = super::proxy_variables(0)
+            .into_iter()
+            .map(|(name, _)| {
+                let value = current
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, v)| v.clone());
+                (name, value)
+            })
+            .collect();
+        Ok(super::Saved::Env { values })
+    }
+
+    pub fn apply(port: u16) -> Result<(), String> {
+        let assignments: Vec<String> = super::proxy_variables(port)
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect();
+        let mut args = vec!["--user", "set-environment"];
+        args.extend(assignments.iter().map(String::as_str));
+        run("systemctl", &args).map(|_| ())
+    }
+
+    pub fn restore(values: &[(String, Option<String>)]) -> Result<(), String> {
+        let (set, unset) = restore_steps(values);
+        let mut first_error = None;
+        if !set.is_empty() {
+            let mut args = vec!["--user".to_string(), "set-environment".to_string()];
+            args.extend(set);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            if let Err(e) = run("systemctl", &args) {
+                first_error.get_or_insert(e);
+            }
+        }
+        if !unset.is_empty() {
+            let mut args = vec!["--user".to_string(), "unset-environment".to_string()];
+            args.extend(unset);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            if let Err(e) = run("systemctl", &args) {
+                first_error.get_or_insert(e);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// What was set goes back as `NAME=value`; what was not set is unset again.
+    pub fn restore_steps(values: &[(String, Option<String>)]) -> (Vec<String>, Vec<String>) {
+        let mut set = Vec::new();
+        let mut unset = Vec::new();
+        for (name, value) in values {
+            match value {
+                Some(v) => set.push(format!("{name}={v}")),
+                None => unset.push(name.clone()),
+            }
+        }
+        (set, unset)
+    }
+
+    /// `systemctl --user show-environment`: one `NAME=value` per line, a value with characters a
+    /// shell would read specially written as `$'…'` with backslash escapes.
+    pub fn parse_environment(listing: &str) -> Vec<(String, String)> {
+        listing
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(name, value)| (name.to_string(), unquote(value)))
+            .collect()
+    }
+
+    fn unquote(value: &str) -> String {
+        let Some(inner) = value.strip_prefix("$'").and_then(|v| v.strip_suffix('\'')) else {
+            return value.to_string();
+        };
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            }
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------- Hyprland
+
+mod hyprland {
+    use super::run;
+
+    /// Hyprland cannot be asked what its environment holds, but Nunya was started from it (or
+    /// from something that was), so its own environment at launch is the best record of it.
+    pub fn capture() -> Result<super::Saved, String> {
+        let values = super::proxy_variables(0)
+            .into_iter()
+            .map(|(name, _)| {
+                let value = std::env::var(&name).ok();
+                (name, value)
+            })
+            .collect();
+        Ok(super::Saved::Hyprland { values })
+    }
+
+    pub fn apply(port: u16) -> Result<(), String> {
+        send(&super::proxy_variables(port))
+    }
+
+    pub fn restore(values: &[(String, Option<String>)]) -> Result<(), String> {
+        let back: Vec<(String, String)> = values
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone().unwrap_or_default()))
+            .collect();
+        send(&back)
+    }
+
+    /// One `hyprctl --batch` for every variable: `keyword env NAME,value` sets it in Hyprland's
+    /// own environment, which the apps it starts from then on inherit. Hyprland reads the name up
+    /// to the first comma, so a `no_proxy` list survives whole.
+    pub fn batch(values: &[(String, String)]) -> String {
+        values
+            .iter()
+            .map(|(name, value)| format!("keyword env {name},{value}"))
+            .collect::<Vec<_>>()
+            .join(" ; ")
+    }
+
+    fn send(values: &[(String, String)]) -> Result<(), String> {
+        let out = run("hyprctl", &["--batch", &batch(values)])?;
+        // hyprctl answers each command with "ok", and an error in words, while exiting 0.
+        let refused: Vec<&str> = out
+            .split_whitespace()
+            .filter(|word| *word != "ok")
+            .collect();
+        if refused.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("hyprctl refused the proxy variables: {out}"))
+        }
     }
 }
 

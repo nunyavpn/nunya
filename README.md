@@ -168,7 +168,10 @@ you'd give access to.
 - **Proxy mode** (the default) opens a SOCKS and HTTP port on your machine (2080 unless you change
   it). Apps you point at it go through the connection. Turn on **Set system proxy** to point your
   desktop's proxy setting at it while you're connected; your previous setting comes back when you
-  disconnect. Apps that ignore the system proxy aren't covered, and Nunya says so.
+  disconnect. Apps that ignore the system proxy aren't covered, and Nunya says so. On Linux it
+  sets everything your session has: GNOME's and KDE's settings, and the `http_proxy`/`all_proxy`
+  variables, which are what i3, Sway, Hyprland and command-line tools go by. Those variables reach
+  only apps started *after* you connect.
 - **VPN mode** carries all of the device's traffic through the tunnel. It needs system privileges.
   On macOS, the first Connect in VPN mode explains why and asks for your administrator password,
   once (and again after each update); Nunya must be in Applications for this. On Linux, installed
