@@ -933,6 +933,10 @@ fn hide_on_close(app: &tauri::AppHandle) {
     });
 }
 
+/// The app. On a desktop `main.rs` calls this; on a phone the system starts the app, and Tauri's
+/// entry point is how its activity finds this function — the one `cfg` outside `platform/`, because
+/// it is Tauri's own switch for "this build is a phone app", not a difference in what the app does.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     platform::before_webview();
     applog::init();

@@ -2,7 +2,7 @@
 node_modules/
 dist/
 src-tauri/target/
-src-tauri/gen/
+src-tauri/gen/schemas/
 
 # Installed by scripts/fetch-core.sh from the pinned nunya-core release, and staged from there as a
 # Tauri sidecar. Both are build inputs, not sources: core.lock is what is under version control.
