@@ -409,7 +409,8 @@ export class LocationsPanel {
           // The config's own name, always. Its location is the flag and the subtitle — putting
           // a country here instead made measured rows look renamed, and gave five configs that
           // exit in one country the same title, so they could not be told apart.
-          h("span", { class: "nm" }, server.profile.name),
+          // Provider names run long and the row truncates them; the tooltip is the whole name.
+          h("span", { class: "nm", title: server.profile.name }, server.profile.name),
           ...this.cdnTag(server),
         ),
         h("span", { class: "loc-sub" }, server.retired ? `${subtitle} · retired` : subtitle),

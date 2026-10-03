@@ -426,7 +426,8 @@ button:disabled {
   background: var(--brand-soft);
 }
 
-.gsync.busy {
+/* Only the arrows turn: spinning the whole button turned its tinted square with it. */
+.gsync.busy svg {
   animation: spin 1s linear infinite;
 }
 
@@ -438,8 +439,10 @@ button:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .gsync.busy {
-    animation: none;
     opacity: 0.6;
+  }
+  .gsync.busy svg {
+    animation: none;
   }
 }
 
