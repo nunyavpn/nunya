@@ -9,6 +9,7 @@
 
 import { h, render } from "../dom";
 import { icon } from "./icons";
+import type { ConnectionState } from "./status";
 
 export interface DiagnosticsModel {
   /** Where the data is kept, so it is clear whether changes are surviving a restart. */
@@ -19,6 +20,7 @@ export interface DiagnosticsModel {
   transportState: string;
   transportDetail: string | null;
   coreConnected: boolean;
+  connection: ConnectionState;
 }
 
 export interface DiagnosticsCallbacks {
@@ -36,6 +38,7 @@ export class DiagnosticsPanel {
     transportState: "unknown",
     transportDetail: null,
     coreConnected: false,
+    connection: "off",
   };
 
   constructor(
@@ -66,11 +69,7 @@ export class DiagnosticsPanel {
           { class: `badge ${m.coreConnected ? "ok" : "bad"}` },
           `core: ${m.coreConnected ? "connected" : "not running"}`,
         ),
-        h(
-          "span",
-          { class: `badge ${m.transportState === "disconnected" ? "ok" : "bad"}` },
-          `${m.transport}: ${m.transportState}`,
-        ),
+        transportBadge(m),
         h(
           "span",
           { class: `badge ${m.storageError ? "bad" : "ok"}` },
@@ -124,3 +123,20 @@ export class DiagnosticsPanel {
 
 /** The icon the rail uses for this panel, kept here so the rail does not import the view. */
 export const diagnosticsIcon = () => icon("activity", 18);
+
+/**
+ * The transport's badge. Readiness is asked while the tunnel is down, and its "disconnected" means
+ * idle and able to start — so read as a state it said "disconnected" beside a working tunnel. While
+ * a tunnel is up or changing, the connection is what the badge reports.
+ */
+function transportBadge(m: DiagnosticsModel) {
+  const live: Record<Exclude<ConnectionState, "off">, string> = {
+    connecting: "connecting",
+    on: "connected",
+    disconnecting: "disconnecting",
+  };
+  const idle: Record<string, string> = { disconnected: "ready", needsPermission: "needs permission" };
+  const text = m.connection === "off" ? (idle[m.transportState] ?? m.transportState) : live[m.connection];
+  const ok = m.connection !== "off" || m.transportState === "disconnected";
+  return h("span", { class: `badge ${ok ? "ok" : "bad"}` }, `${m.transport}: ${text}`);
+}
