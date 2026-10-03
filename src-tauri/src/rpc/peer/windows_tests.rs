@@ -16,11 +16,11 @@ async fn connected_pipe() -> tokio::net::windows::named_pipe::NamedPipeServer {
 async fn a_pipe_client_is_identified_by_its_pid() {
     let server = connected_pipe().await;
 
-    verify_pipe(&server, std::process::id()).unwrap();
+    verify(&server, std::process::id()).unwrap();
 
-    let err = verify_pipe(&server, std::process::id() + 1).unwrap_err();
+    let err = verify(&server, std::process::id() + 1).unwrap_err();
     assert!(err.contains("is not the core we spawned"), "{err}");
 
-    let err = verify_pipe(&server, 0).unwrap_err();
+    let err = verify(&server, 0).unwrap_err();
     assert!(err.contains("before any core was spawned"), "{err}");
 }

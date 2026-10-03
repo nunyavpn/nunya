@@ -173,8 +173,10 @@ does.
   (issue #100). Today it holds VPN-mode privilege: `GRANT` (the grant sheet's words, `None` where
   there is no grant) and `grant` — setuid core on macOS, a UAC relaunch of the app on Windows; plus
   owner-only files (`restrict_dir`, `restrict_file`, `tighten`), the system browser
-  (`browser_command`) and the core's console window (`no_console_window`). What macOS and Linux
-  share is in `unix.rs`, which their files re-export.
+  (`browser_command`), the core's console window (`no_console_window`), and the core link's
+  endpoint (`ipc_bind`, `IpcAcceptor`) and peer credentials (`peer_user_ok`, `peer_pid`), whose
+  rule stays in `rpc/peer.rs`. What macOS and Linux share is in `unix.rs`, which their files
+  re-export.
 - [applog.rs](src-tauri/src/applog.rs) — the app's own log goes to Diagnostics as well as stderr,
   with a backlog for what was logged before the window listened. A Windows release build has no
   console, so without it a core that failed to start left no trace.

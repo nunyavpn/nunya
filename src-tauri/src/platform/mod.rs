@@ -7,12 +7,12 @@
 //! Each file must provide every item `pub use`d below, so a platform left behind is a compile
 //! error on that platform's CI job rather than a gap found by a user.
 //!
-//! Moved here so far: VPN-mode privilege, owner-only files, the system browser and the core's
-//! console window. The rest moves in one concern at a time (issue #100).
+//! Moved here so far: VPN-mode privilege, owner-only files, the system browser, the core's
+//! console window, and the core's link (its endpoint and who is on the other end of it). The rest moves in one concern at a time (issue #100).
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
@@ -49,6 +49,31 @@ pub use imp::browser_command;
 
 /// Keeps a console program started from this GUI app from opening a window of its own.
 pub use imp::no_console_window;
+
+/// The core link's listener between `ipc_bind`, which runs outside the async runtime, and
+/// `IpcAcceptor::adopt`, which runs on it: a std unix listener, or a named pipe's name.
+pub use imp::PendingListener;
+
+/// One accepted connection from the core: a unix socket, or a named pipe instance.
+pub use imp::IpcStream;
+
+/// Hands out connections to the core endpoint, one at a time (`adopt`, then `accept`).
+pub use imp::IpcAcceptor;
+
+/// Makes the endpoint the core dials, owner-only where it is a file. Returns the address to give
+/// the core: the socket's path, or on Windows the pipe's name (the path given only names the
+/// directory there).
+pub use imp::ipc_bind;
+
+/// Removes what `ipc_bind` left on disk, if anything.
+pub use imp::ipc_unbind;
+
+/// Rejects a peer that runs as another, unprivileged user. Where the platform has no such notion
+/// for a pipe, the pid check that follows is the whole identity.
+pub use imp::peer_user_ok;
+
+/// The pid of the process on the other end of the link.
+pub use imp::peer_pid;
 
 /// What the caller has to do once `grant` has succeeded. Each platform builds only the variant
 /// its grant produces, hence the allowance.
@@ -94,5 +119,19 @@ fn _signature_check(
     tighten(core, meta);
     let _: Command = browser_command("");
     no_console_window(child);
+    let _: io::Result<(PathBuf, PendingListener)> = ipc_bind(core.to_path_buf());
+    ipc_unbind(core);
     grant(core)
+}
+
+/// The same, for the link's types and its async half.
+#[allow(dead_code)]
+async fn _ipc_signature_check(
+    listener: PendingListener,
+    stream: &IpcStream,
+) -> io::Result<IpcStream> {
+    let _: Result<(), String> = peer_user_ok(stream);
+    let _: io::Result<u32> = peer_pid(stream);
+    let mut acceptor: IpcAcceptor = IpcAcceptor::adopt(listener)?;
+    acceptor.accept().await
 }

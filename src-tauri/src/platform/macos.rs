@@ -1,9 +1,14 @@
 //! macOS: VPN mode without the packet tunnel extension is a setuid-root core.
 
+use std::io;
+use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::process::Command;
 
-pub use super::unix::{no_console_window, restrict_dir, restrict_file, tighten};
+pub use super::unix::{
+    ipc_bind, ipc_unbind, no_console_window, peer_pid, peer_user_ok, restrict_dir, restrict_file,
+    tighten, IpcAcceptor, IpcStream, PendingListener,
+};
 use super::{Fact, GrantCopy, Granted};
 
 pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
@@ -83,4 +88,42 @@ pub fn browser_command(url: &str) -> Command {
     let mut c = Command::new("open");
     c.arg(url);
     c
+}
+
+/// `getsockopt` level for `AF_UNIX` socket options on Darwin.
+const SOL_LOCAL: libc::c_int = 0;
+
+/// Returns the pid of the process on the other end of a connected `AF_UNIX` socket.
+const LOCAL_PEERPID: libc::c_int = 0x002;
+
+/// Effective uid of the peer process. `getpeereid` is a BSD interface; Linux answers the same
+/// question from `SO_PEERCRED` instead.
+pub(super) fn uid_of_peer(fd: RawFd) -> io::Result<u32> {
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    // SAFETY: fd is a live connected AF_UNIX socket; both out-params are valid stack slots.
+    let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(uid)
+}
+
+pub(super) fn pid_of_peer(fd: RawFd) -> io::Result<u32> {
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: fd is live; `pid` and `len` are valid out-params sized for the option.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            SOL_LOCAL,
+            LOCAL_PEERPID,
+            &mut pid as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(pid as u32)
 }

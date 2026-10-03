@@ -11,12 +11,17 @@
 //! as that administrator, with that account's (empty) data; the sheet says to use an account that
 //! is an administrator.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::os::windows::io::AsRawHandle;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
 
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -95,6 +100,81 @@ pub fn browser_command(url: &str) -> Command {
 /// pipes the caller set up.
 pub fn no_console_window(cmd: &mut tokio::process::Command) {
     cmd.creation_flags(0x0800_0000);
+}
+
+// The core's link: a named pipe, which is what the core dials here (`ConnectIPC` in its
+// `internal/ipc/ipc_windows.go`). The core checks it from its side with
+// `GetNamedPipeServerProcessId`; `peer_pid` is our half.
+
+/// The pipe's name. tokio creates a pipe only on a runtime, and `ipc_bind` runs outside one, so the
+/// first instance is made by `IpcAcceptor::adopt`. The core does not notice the gap: it retries its
+/// dial for five seconds (`RunCore` in the core's `main.go`).
+pub type PendingListener = OsString;
+
+pub type IpcStream = NamedPipeServer;
+
+/// `socket_path` only names the directory the core works in; the address handed back is the
+/// pipe's name, which is what the core must be given.
+pub fn ipc_bind(_socket_path: PathBuf) -> io::Result<(PathBuf, PendingListener)> {
+    let name = pipe_name();
+    Ok((PathBuf::from(&name), name))
+}
+
+/// A pipe has no file; it goes when its last handle closes.
+pub fn ipc_unbind(_socket_path: &Path) {}
+
+/// A pipe instance carries one connection, so the next one is created before the connected one is
+/// handed over, and a core restarted meanwhile finds it.
+pub struct IpcAcceptor {
+    name: OsString,
+    server: NamedPipeServer,
+}
+
+impl IpcAcceptor {
+    /// `first_pipe_instance` makes creating the pipe fail if something else already made one of
+    /// this name, rather than joining it, so the pipe that is served is always ours.
+    pub fn adopt(name: PendingListener) -> io::Result<Self> {
+        let server = ServerOptions::new().first_pipe_instance(true).create(&name)?;
+        Ok(Self { name, server })
+    }
+
+    pub async fn accept(&mut self) -> io::Result<IpcStream> {
+        self.server.connect().await?;
+        let next = ServerOptions::new().create(&self.name).map_err(|e| {
+            io::Error::new(e.kind(), format!("could not create the next core pipe: {e}"))
+        })?;
+        Ok(std::mem::replace(&mut self.server, next))
+    }
+}
+
+/// There is no uid to compare: the pid is the whole identity, and it is the child we started.
+pub fn peer_user_ok(_stream: &IpcStream) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn peer_pid(stream: &IpcStream) -> io::Result<u32> {
+    let mut pid = 0u32;
+    // SAFETY: `stream` is borrowed, so its handle is live for this call; `pid` is a valid out-param.
+    if unsafe { GetNamedPipeClientProcessId(stream.as_raw_handle(), &mut pid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(pid)
+}
+
+/// A pipe name no other link will use: the main core's and every probe core's are bound from one
+/// process, and a name reused from a crashed run would fail `first_pipe_instance`.
+fn pipe_name() -> OsString {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!(
+        r"\\.\pipe\nunya-{}-{nanos}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+    .into()
 }
 
 fn wide(s: &OsStr) -> Vec<u16> {
