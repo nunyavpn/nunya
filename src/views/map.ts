@@ -368,8 +368,8 @@ export class WorldMap {
   /**
    * Wheel, drag and double-click, taken on the whole pane rather than the canvas: the pins sit
    * above the canvas, and a map that stops zooming whenever the cursor is over a city — which is
-   * exactly where people zoom — is broken. The status card, the picker and the zoom buttons keep
-   * their own input.
+   * exactly where people zoom — is broken. The status card, update notice, picker and zoom buttons
+   * keep their own input.
    */
   private bindInput() {
     const canvas = this.canvas;
@@ -378,7 +378,7 @@ export class WorldMap {
       const box = canvas.getBoundingClientRect();
       return [e.clientX - box.left, e.clientY - box.top] as const;
     };
-    const onMap = (e: Event) => !(e.target as Element).closest?.(".status, .mpick, .mapzoom");
+    const onMap = (e: Event) => !(e.target as Element).closest?.(".status, .updatebar, .mpick, .mapzoom");
 
     pane.addEventListener(
       "wheel",
