@@ -6,12 +6,14 @@ fn parses_the_names_the_docs_use() {
     assert_eq!(Kind::parse("  SubProcess "), Some(Kind::Subprocess));
 }
 
-#[cfg(target_os = "macos")]
+/// Accepted where the platform has the extension, and refused by name elsewhere rather than
+/// quietly built into something else.
 #[test]
-fn parses_the_network_extension_aliases() {
-    assert_eq!(Kind::parse("networkextension"), Some(Kind::NetworkExtension));
-    assert_eq!(Kind::parse("ne"), Some(Kind::NetworkExtension));
-    assert_eq!(Kind::parse("appex"), Some(Kind::NetworkExtension));
+fn the_network_extension_aliases_parse_only_where_there_is_one() {
+    let expected = platform::NETWORK_EXTENSION.then_some(Kind::NetworkExtension);
+    for name in ["networkextension", "ne", "appex"] {
+        assert_eq!(Kind::parse(name), expected, "{name}");
+    }
 }
 
 #[test]

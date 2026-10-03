@@ -177,7 +177,9 @@ does.
   endpoint (`ipc_bind`, `IpcAcceptor`) and peer credentials (`peer_user_ok`, `peer_pid`), whose
   rule stays in `rpc/peer.rs`, and the tray (`Tray`, `tray_mirror`; what it says stays in
   `tray.rs`). What macOS and Linux share is in `unix.rs`, and what macOS and Windows share of the
-  tray in `tray_icon.rs`, which their files re-export.
+  tray in `tray_icon.rs`, which their files re-export. macOS's own modules — the popover and the
+  NetworkExtension transport — live here too, and `NETWORK_EXTENSION` says whether
+  `transport::select` may offer the latter.
 - [applog.rs](src-tauri/src/applog.rs) — the app's own log goes to Diagnostics as well as stderr,
   with a backlog for what was logged before the window listened. A Windows release build has no
   console, so without it a core that failed to start left no trace.
@@ -427,7 +429,7 @@ while showing it), but Tauri 2 is held to 0.24. So the macOS `install` builds th
 one, and either button opens the popover, which carries everything the menu did. Revisit a
 right-click menu when Tauri moves to tray-icon 0.25.
 
-[popover.rs](src-tauri/src/popover.rs) makes the window: created with the tray and hidden (a
+[platform/popover.rs](src-tauri/src/platform/popover.rs) makes the window: created with the tray and hidden (a
 webview that loads on the click opens half a second late), transparent (`macOSPrivateApi`, so the
 page draws the rounded panel and its shadow inside `MARGIN`, which must match `--margin` in
 `popover.css`), hidden again on losing focus, with `REOPEN_GUARD` so the click that closed it by

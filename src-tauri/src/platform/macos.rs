@@ -45,7 +45,7 @@ pub static GRANT: Option<GrantCopy> = Some(GrantCopy {
 ///
 /// ponytail: the app's directory is the user's, so code already running as the user can swap
 /// `Nunya` and drive the root core. That is the price of not having an extension; the extension
-/// (`transport::network_extension`) is the way out, and nothing here survives it.
+/// (`platform/network_extension.rs`) is the way out, and nothing here survives it.
 ///
 /// An app update replaces the core and with it the bit, so the prompt comes back after an update.
 pub fn grant(core: &Path) -> Result<Granted, String> {
@@ -145,7 +145,7 @@ pub(super) fn install_tray(
 ) -> tauri::Result<Tray> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 
-    crate::popover::create(app)?;
+    super::popover::create(app)?;
     let icon = super::tray_icon::base(icon, template)
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -155,7 +155,7 @@ pub(super) fn install_tray(
                 ..
             } = event
             {
-                crate::popover::toggle(tray.app_handle(), rect);
+                super::popover::toggle(tray.app_handle(), rect);
             }
         })
         .build(app)?;
@@ -168,4 +168,31 @@ pub const TUN_NAME: Option<&str> = None;
 /// `networksetup` is the system proxy on macOS (`sysproxy.rs`'s `mac`).
 pub fn proxy_desktop() -> Result<Desktop, String> {
     Ok(Desktop::Mac)
+}
+
+/// The popover's own commands (`tray.rs`) hide it before doing what they say.
+pub fn hide_popover(app: &tauri::AppHandle) {
+    super::popover::hide(app);
+}
+
+/// The Dock icon brings back a window closed to the menu bar, as in any Mac app.
+pub fn on_run_event(app: &tauri::AppHandle, event: &tauri::RunEvent) {
+    if let tauri::RunEvent::Reopen {
+        has_visible_windows: false,
+        ..
+    } = event
+    {
+        crate::tray::show_window(app);
+    }
+}
+
+/// The packet tunnel extension, selectable with `NUNYA_TRANSPORT=networkextension`.
+pub const NETWORK_EXTENSION: bool = true;
+
+pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> {
+    Some(std::sync::Arc::new(super::network_extension::NetworkExtensionTransport::new(
+        // Must match CFBundleIdentifier in NunyaTunnel/Info.plist.
+        "com.nunyavpn.app.NunyaTunnel",
+        "Nunya",
+    )))
 }

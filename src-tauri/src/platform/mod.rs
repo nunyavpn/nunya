@@ -9,7 +9,8 @@
 //!
 //! Moved here so far: VPN-mode privilege, owner-only files, the system browser, the core's
 //! console window, the core's link (its endpoint and who is on the other end of it), the tray, the
-//! TUN's name and which tool sets the system proxy. The rest moves in one concern at a time (issue #100).
+//! TUN's name, which tool sets the system proxy, and what only macOS has: the menu-bar popover,
+//! the Dock's reopen, and the NetworkExtension transport. The rest moves in one concern at a time (issue #100).
 
 use std::fs;
 use std::io;
@@ -34,6 +35,14 @@ mod tray_icon;
 /// Linux's own StatusNotifierItem, in place of tray-icon's.
 #[cfg(target_os = "linux")]
 mod sni;
+
+/// The menu-bar popover, which takes the tray menu's place on macOS.
+#[cfg(target_os = "macos")]
+mod popover;
+
+/// The packet tunnel extension's control plane (the `.appex` itself is Swift).
+#[cfg(target_os = "macos")]
+mod network_extension;
 
 /// What the "Allow VPN mode" sheet says on this platform, or `None` where the app has no way to
 /// obtain privilege for VPN mode and must not offer a button that always fails.
@@ -98,6 +107,18 @@ pub use imp::Tray;
 /// Puts what the frontend reported into the platform's tray, creating the tray the first time.
 pub use imp::tray_mirror;
 
+/// Hides the menu-bar popover, where there is one.
+pub use imp::hide_popover;
+
+/// Whatever the platform does with an application event beyond what `lib.rs` does everywhere.
+pub use imp::on_run_event;
+
+/// Whether this platform has a NetworkExtension transport to select (`transport::select`).
+pub use imp::NETWORK_EXTENSION;
+
+/// That transport, where `NETWORK_EXTENSION` is true.
+pub use imp::network_extension_transport;
+
 /// What the caller has to do once `grant` has succeeded. Each platform builds only the variant
 /// its grant produces, hence the allowance.
 #[allow(dead_code)]
@@ -156,7 +177,15 @@ fn _tray_signature_check(
     lines: &crate::tray::Lines,
     icon: crate::tray::Pixels,
 ) -> Result<(), String> {
+    hide_popover(app);
+    let _: bool = NETWORK_EXTENSION;
+    let _: Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> = network_extension_transport();
     tray_mirror(app, lines, icon, "")
+}
+
+#[allow(dead_code)]
+fn _event_signature_check(app: &tauri::AppHandle, event: &tauri::RunEvent) {
+    on_run_event(app, event)
 }
 
 /// The same, for the link's types and its async half.

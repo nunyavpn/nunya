@@ -249,3 +249,16 @@ pub(super) fn install_tray(app: &AppHandle, icon: Image<'static>, template: bool
         }),
     })
 }
+
+/// There is no popover here; the tray has a menu.
+pub fn hide_popover(_app: &tauri::AppHandle) {}
+
+/// Nothing here needs an application event the shared handler does not already take.
+pub fn on_run_event(_app: &tauri::AppHandle, _event: &tauri::RunEvent) {}
+
+/// No NetworkExtension outside macOS: the subprocess transport is the only one.
+pub const NETWORK_EXTENSION: bool = false;
+
+pub fn network_extension_transport() -> Option<std::sync::Arc<dyn crate::transport::TunnelTransport>> {
+    None
+}

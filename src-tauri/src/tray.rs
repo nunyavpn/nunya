@@ -164,5 +164,27 @@ pub fn set_tray_status(
     platform::tray_mirror(&app, &lines, icon, &label)
 }
 
+/// The popover's Escape, and anything in it that hands off to somewhere else. The popover is
+/// macOS's, but its commands are registered everywhere so `lib.rs` names them without a `cfg`;
+/// elsewhere nothing calls them, and hiding a popover that does not exist does nothing.
+#[tauri::command]
+pub fn hide_popover(app: AppHandle) {
+    platform::hide_popover(&app);
+}
+
+/// The popover's "Open Nunya".
+#[tauri::command]
+pub fn show_main_window(app: AppHandle) {
+    platform::hide_popover(&app);
+    show_window(&app);
+}
+
+/// The popover's "Quit". Through `ExitRequested`, like the tray menu's, so the core is stopped and
+/// the system proxy put back.
+#[tauri::command]
+pub fn quit(app: AppHandle) {
+    app.exit(0);
+}
+
 #[cfg(test)]
 mod tests;

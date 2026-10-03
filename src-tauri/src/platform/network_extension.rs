@@ -38,7 +38,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
-use super::{Throughput, TransportError, TunnelState, TunnelTransport};
+use crate::transport::{Throughput, TransportError, TunnelState, TunnelTransport};
 use crate::config::{self, BuildRequest, Mode};
 
 /// Generous for a preferences read, short enough that a wedged call is reported rather than hung.
@@ -177,7 +177,8 @@ impl NetworkExtensionTransport {
     /// Removes the VPN configuration, so the entry disappears from System Settings.
     ///
     /// Worth offering explicitly: an app that leaves a VPN profile behind after the user is done
-    /// with it has overstayed its welcome.
+    /// with it has overstayed its welcome. Nothing offers it yet, so it is kept alive by hand.
+    #[allow(dead_code)]
     pub async fn forget(&self) -> Result<(), TransportError> {
         let outcome = call(|ctx, cb| unsafe { nunya_ne_remove_configuration(ctx, cb) }).await?;
         ok_or_err(outcome)
@@ -247,3 +248,6 @@ impl TunnelTransport for NetworkExtensionTransport {
             .map_err(|e| TransportError::Core(format!("bad reply from the provider: {e}")))
     }
 }
+
+#[cfg(test)]
+mod tests;
