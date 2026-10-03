@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>A VPN client that is safe, fast, reliable, secure and easy to use.</strong><br>
-  One app for your VPN and proxy configs, from a single link to a subscription of hundreds.
+  One app for your VPN and proxy configs, from a single link to a subscription of hundreds.<br>
+  <a href="https://nunya-vpn.com">nunya-vpn.com</a>
 </p>
 
 <p align="center">
