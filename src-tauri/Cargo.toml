@@ -9,9 +9,6 @@ default-run = "nunya"
 [lib]
 name = "nunya_lib"
 path = "src/lib.rs"
-# rlib for the desktop binary and the tests; cdylib is what an Android app loads, staticlib what
-# an iOS app links. Tauri's mobile builds look for exactly these.
-crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

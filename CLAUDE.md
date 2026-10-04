@@ -184,7 +184,12 @@ does.
   protobuf payloads. Shared code only calls `engine.call(…)` — the transport, config checks,
   latency tests, block-list checks — and a probe gets its own instance from `engine.scratch()`. The
   phones answer "not here" by name for the tray, popover, system proxy and in-app updates (issue
-  #129; Android is #130, iOS #131 and built but not released). CI's `phones` job runs clippy for
+  #129; Android is #130, iOS #131 and built but not released). **The phone apps themselves live in
+  [nunya-mobile](https://github.com/nunyavpn/nunya-mobile)**, which pins this repository as a
+  submodule and calls `nunya_lib::run_with` with its own Tauri context (identity, phone UI); the
+  Android project, the phone stylesheet, its icons and the phone design board are there. What stays
+  here is what it reuses: the phones' platform files, and views that know a phone (the map's pinch,
+  its tab, the status card's handle). CI's `phones` job runs clippy for
   `aarch64-linux-android` and `aarch64-apple-ios-sim`, and `tauri.android.conf.json` /
   `tauri.ios.conf.json` drop the desktop sidecar. **No `#[cfg]` on the target outside `platform/` and tests** — the rule
   and its corollaries are in `docs/ENGINEERING_STANDARDS.md`. It holds: VPN-mode privilege (`GRANT`,
@@ -251,12 +256,6 @@ generating; the `Square*Logo.png` and `StoreLogo.png` files are part of the orig
 are kept.
 
 `public/favicon.png` is the same artwork at 64px, for the webview's tab and window.
-
-**Android's launcher icons are made by `scripts/android-icons.py`**, not by `tauri icon`, whose
-Android set is a square picture on a white plate. They are an adaptive icon: the artwork centred on
-a canvas widened with its own navy body, so the mark sits inside the 66dp safe zone and any
-launcher's mask (circle, Samsung's squircle) shows navy around it. Run it again when the artwork
-changes.
 
 ### Modes
 

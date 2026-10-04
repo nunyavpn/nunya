@@ -933,17 +933,28 @@ fn hide_on_close(app: &tauri::AppHandle) {
     });
 }
 
-/// The app. On a desktop `main.rs` calls this; on a phone the system starts the app, and Tauri's
-/// entry point is how its activity finds this function — the one `cfg` outside `platform/`, because
-/// it is Tauri's own switch for "this build is a phone app", not a difference in what the app does.
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// The desktop app, with this repository's own Tauri context.
 pub fn run() {
+    run_with(tauri::generate_context!())
+}
+
+/// The app with a given Tauri context: its config, icons and bundled frontend.
+///
+/// The desktop's is `run`'s. nunya-mobile, the phone app, pins this repository and passes its own,
+/// so it has the same commands and the same handling of the core under its own identity, its own
+/// phone UI and its own Android project; its entry point is the one Tauri starts on a phone.
+pub fn run_with(context: tauri::Context<tauri::Wry>) {
     platform::before_webview();
     applog::init();
 
-    tauri::Builder::default()
-        // Verifies and installs updates; which release to take is `update.rs`'s decision.
-        .plugin(tauri_plugin_updater::Builder::new().build())
+    let mut builder = tauri::Builder::default();
+    // Verifies and installs updates; which release to take is `update.rs`'s decision. Only where
+    // the app updates itself: a package manager, F-Droid or a store does it everywhere else, and
+    // `check_update` refuses there before it would reach the plugin.
+    if platform::IN_APP_UPDATES {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         // Tells the frontend which system this is (`src/platform.ts`).
         .plugin(platform::webview_plugin())
         .setup(|app| {
@@ -1013,7 +1024,7 @@ pub fn run() {
             tray::show_main_window,
             tray::quit,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build the application")
         .run(|app, event| {
             platform::on_run_event(app, &event);
