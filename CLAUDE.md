@@ -875,6 +875,15 @@ what it cannot carry: a `PresharedKey`, AmneziaWG's `Jc`/`S1`/`H1`… keys, more
 paste box lifts configs out whole (`extractWgQuick`) before reading the rest a word at a time.
 Round-tripping holds here too: `parseWgQuick(toWgQuick(p))` equals `p`, guarded in `share.test.ts`.
 
+**Every server also exports as a whole Xray or sing-box JSON config** (`export_config` →
+[config/export.rs](src-tauri/src/config/export.rs)), for clients that take a config rather than a
+link. Both come from the code that writes the configs Nunya runs — sing-box from `config::build`
+(VPN mode, minus the stats API, the TUN's name, block lists and bypass), Xray from
+`runtime::xray_outbound` with SOCKS 10808 / HTTP 10809, v2rayN's ports — so an export cannot
+describe a different server. What one engine cannot carry is refused by name: XHTTP in sing-box,
+HTTP/2 and QUIC in Xray (removed in v24.9). The private ranges are written out, not
+`geoip:private`, which fails without a `geoip.dat`. `core_link.rs` checks both against a real core.
+
 The name is a separate field, and an explicit rename sets `Server.renamed`. The list, the tray and
 Quick Connect show the config's name; the location is shown beside it, never instead of it.
 

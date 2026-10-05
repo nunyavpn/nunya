@@ -14,9 +14,17 @@
  * line comes from the app's DNS setting when that names an address; when it names a host, the
  * sheet says so rather than choosing a resolver for the user.
  *
+ * Every server can also be shared as a whole client config — Xray JSON for v2rayN and v2rayNG's
+ * custom configs, sing-box JSON for the sing-box apps — for clients that take a config rather than
+ * a link. The Rust side writes both (`export_config`) with the code that writes the configs this
+ * app runs, so they are asked for rather than duplicated here; a server one of them cannot carry
+ * (XHTTP in sing-box, HTTP/2 or QUIC in Xray) shows the reason in place of the config. Neither
+ * gets a QR code: a whole config is past what a phone reads reliably off a laptop screen.
+ *
  * The sheet says plainly that what it shows is the credential. A QR code on screen looks like a
  * harmless picture, and anyone who photographs it can use the server exactly as the user does.
  */
+import { invoke } from "../bridge";
 import { h, render } from "../dom";
 import { describe, dnsAddressOf, toShareLink, toWgQuick, wgQuickRefusal } from "../share";
 import { store, type Server } from "../store";
@@ -57,6 +65,15 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/** The formats written on the Rust side, keyed as `config::export::Format` names them. */
+const EXPORTS = ["xray", "sing-box"] as const;
+type Exported = (typeof EXPORTS)[number];
+
+const EXPORT_HINT: Record<Exported, string> = {
+  xray: "Import it as a custom config in v2rayN or v2rayNG. It listens on SOCKS 10808 and HTTP 10809.",
+  "sing-box": "Import it as a profile in the sing-box app. It is a VPN (TUN) config.",
+};
+
 export function openShareServer(server: Server) {
   let link: string;
   try {
@@ -71,15 +88,25 @@ export function openShareServer(server: Server) {
   const dnsSetting = store.settings().dns;
   const dns = dnsAddressOf(dnsSetting);
   const config = wireguard && !refusal ? toWgQuick(server.profile, dns ? [dns] : []) : null;
-  let format: "link" | "config" = config ? "config" : "link";
+  let format: "link" | "config" | Exported = config ? "config" : "link";
+  const exported: Partial<Record<Exported, { text?: string; error?: string }>> = {};
+  let repaint = () => {};
+  for (const key of EXPORTS) {
+    invoke<string>("export_config", { profile: server.profile, format: key, dns: dnsSetting })
+      .then((text) => (exported[key] = { text }))
+      .catch((e) => (exported[key] = { error: String(e) }))
+      .finally(() => repaint());
+  }
 
   openSheet((close) => {
     const body = h("div", { class: "share-body" });
     const copyButton = h("button", { class: "btn brand" }) as HTMLButtonElement;
     let reset = 0;
-    const copyLabel = () => (format === "config" ? "Copy config" : "Copy link");
+    const copyLabel = () => (format === "link" ? "Copy link" : "Copy config");
+    const current = () =>
+      format === "config" ? config : format === "link" ? link : (exported[format]?.text ?? null);
     copyButton.onclick = async () => {
-      const text = format === "config" ? config : link;
+      const text = current();
       if (!text) return;
       const copied = await copyText(text);
       copyButton.textContent = copied ? "Copied" : "Copy failed";
@@ -103,37 +130,48 @@ export function openShareServer(server: Server) {
     const paint = () => {
       window.clearTimeout(reset);
       copyButton.textContent = copyLabel();
-      copyButton.disabled = format === "config" && !config;
+      copyButton.disabled = !current();
 
-      const choice = wireguard
-        ? h(
-            "span",
-            { class: "seg share-format", role: "radiogroup", "aria-label": "Share as" },
-            ...(
-              [
-                ["config", "WireGuard config"],
-                ["link", "Link"],
-              ] as const
-            ).map(([key, text]) =>
+      const formats: [typeof format, string][] = [
+        ...(wireguard ? [["config", "WireGuard"] as [typeof format, string]] : []),
+        ["link", "Link"],
+        ["xray", "Xray JSON"],
+        ["sing-box", "sing-box JSON"],
+      ];
+      const choice = h(
+        "span",
+        { class: "seg share-format", role: "radiogroup", "aria-label": "Share as" },
+        ...formats.map(([key, text]) =>
+          h(
+            "button",
+            {
+              class: key === format ? "on" : "",
+              role: "radio",
+              "aria-checked": String(key === format),
+              onclick: () => {
+                format = key;
+                paint();
+              },
+            },
+            text,
+          ),
+        ),
+      );
+
+      const json = format === "xray" || format === "sing-box" ? exported[format] : null;
+      const shown = json !== null
+        ? json?.text
+          ? [
+              h("p", { class: "fnote" }, EXPORT_HINT[format as Exported]),
+              textBox(json.text, `${format} config`, 14, " wgconf"),
               h(
-                "button",
-                {
-                  class: key === format ? "on" : "",
-                  role: "radio",
-                  "aria-checked": String(key === format),
-                  onclick: () => {
-                    format = key;
-                    paint();
-                  },
-                },
-                text,
+                "p",
+                { class: "fnote warn" },
+                "The config contains this server's credentials. Anyone who has it can use the server.",
               ),
-            ),
-          )
-        : null;
-
-      const shown =
-        format === "config"
+            ]
+          : [h("p", { class: json ? "fnote warn" : "fnote" }, json?.error ?? "Writing the config…")]
+        : format === "config"
           ? config
             ? [
                 h("div", { class: "share-qr" }, qrCode(config, 248)),
@@ -177,6 +215,7 @@ export function openShareServer(server: Server) {
       render(body, h("p", { class: "share-name" }, `${server.profile.name} · ${describe(server.profile)}`), choice, ...shown);
     };
     paint();
+    repaint = paint;
 
     return h(
       "div",

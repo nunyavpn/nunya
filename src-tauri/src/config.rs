@@ -9,6 +9,7 @@
 //! Anything emitted here is validated by the core's own `CheckConfig` before it is started, so a
 //! mistake surfaces as a readable error rather than a half-up tunnel.
 
+pub mod export;
 pub mod runtime;
 
 use serde::{Deserialize, Serialize};
