@@ -83,6 +83,28 @@ fn only_the_remote_resolver_names_a_detour() {
 }
 
 #[test]
+fn every_config_looks_server_addresses_up_with_the_system_resolver() {
+    let mut proxy = sample();
+    proxy.mode = Mode::Proxy;
+    let configs = [
+        build(&sample()),
+        build(&proxy),
+        build_test(&[sample().profile]).0,
+        build_probe(&[sample().profile], &[20000]),
+    ];
+    for cfg in configs {
+        assert_eq!(cfg["route"]["default_domain_resolver"], tags::DNS_DIRECT);
+        let direct = cfg["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == tags::DNS_DIRECT)
+            .unwrap();
+        assert_eq!(direct["type"], "local", "not a public resolver: {direct}");
+    }
+}
+
+#[test]
 fn the_test_config_resolver_names_no_detour_either() {
     let (cfg, _) = build_test(&[sample().profile]);
     let servers = cfg["dns"]["servers"].as_array().unwrap();
