@@ -364,6 +364,20 @@ fn dns_server(address: &str, tag: &str, detour: Option<&str>) -> Value {
     Value::Object(obj)
 }
 
+/// The resolver a server's own address is looked up with: the system's, as every other client
+/// does, rather than a public one.
+///
+/// It used to be `udp://1.1.1.1`. In Iran that is the wrong answer twice: plain DNS to a foreign
+/// resolver is routinely intercepted, and providers there hand out names their GeoDNS answers only
+/// to domestic resolvers — so a config that works in v2rayNG, which asks the phone's DNS, failed
+/// here with "lookup …: empty result". sing-box's `local` asks the physical interface's servers
+/// through the direct dialer and skips the TUN's own (`replaceOwnTunServers` on macOS, resolved's
+/// per-link servers on Linux), so naming it as `default_domain_resolver` does not loop back into
+/// the tunnel it is dialling.
+fn system_resolver() -> Value {
+    json!({ "type": "local", "tag": tags::DNS_DIRECT })
+}
+
 /// The `transport` object, or `None` for plain TCP.
 ///
 /// sing-box takes the absence of the key as "plain TCP"; there is no `{"type":"tcp"}` to emit, and
@@ -604,8 +618,8 @@ pub fn build(req: &BuildRequest) -> Value {
     let dns = json!({
         "servers": [
             dns_server(&req.dns, tags::DNS_REMOTE, Some(tags::PROXY)),
-            // Bootstrap for the bypass list only; never the final resolver.
-            dns_server("udp://1.1.1.1", tags::DNS_DIRECT, None),
+            // For the bypass list and the server's own address; never the final resolver.
+            system_resolver(),
         ],
         "rules": dns_rules,
         "final": tags::DNS_REMOTE,
@@ -702,6 +716,7 @@ pub fn build(req: &BuildRequest) -> Value {
             "rules": route_rules,
             "final": tags::PROXY,
             "auto_detect_interface": true,
+            "default_domain_resolver": tags::DNS_DIRECT,
         },
         // The mere presence of clash_api is what makes sing-box build its traffic manager
         // (see needClashAPI in the core's `internal/boxbox/box.go`), which is what QueryStats reads.
@@ -801,13 +816,13 @@ pub fn build_probe(profiles: &[Profile], ports: &[u16]) -> Value {
     let mut config = json!({
         "log": { "level": "error" },
         "dns": {
-            "servers": [dns_server("udp://1.1.1.1", tags::DNS_DIRECT, None)],
+            "servers": [system_resolver()],
             "final": tags::DNS_DIRECT,
             "strategy": "ipv4_only",
         },
         "inbounds": inbounds,
         "outbounds": outbounds,
-        "route": { "rules": rules, "final": tags::BLOCK },
+        "route": { "rules": rules, "final": tags::BLOCK, "default_domain_resolver": tags::DNS_DIRECT },
     });
 
     if !endpoints.is_empty() {
@@ -848,12 +863,12 @@ pub fn build_test(profiles: &[Profile]) -> (Value, Vec<String>) {
         // Quiet: a test of fifty servers at info level buries the log it shares with the tunnel.
         "log": { "level": "error" },
         "dns": {
-            "servers": [dns_server("udp://1.1.1.1", tags::DNS_DIRECT, None)],
+            "servers": [system_resolver()],
             "final": tags::DNS_DIRECT,
             "strategy": "ipv4_only",
         },
         "outbounds": outbounds,
-        "route": { "final": tags::DIRECT },
+        "route": { "final": tags::DIRECT, "default_domain_resolver": tags::DNS_DIRECT },
     });
 
     if !endpoints.is_empty() {

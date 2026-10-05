@@ -645,6 +645,11 @@ such networks cannot block wholesale. And a failed lookup is tried again on a gr
 (`HOME_RETRY_MS`, up to a minute), starting over on a network change or a disconnect, so a machine
 that could not be placed at launch still gets placed later — including after a spell with no DNS at
 all, which is what an Iranian network did once (every name failed in 92 ms, then resolved again).
+**A server's own address is looked up with the system's resolver** (`system_resolver` in
+`config.rs`: sing-box's `local`, named as `route.default_domain_resolver` in every config), never a
+public one. It was `udp://1.1.1.1`, and Iranian providers hand out names their GeoDNS answers only
+to domestic resolvers, so configs that worked in v2rayNG failed here with `lookup …: empty result`.
+`local` queries the physical interface's servers and skips the TUN's own, so it does not loop.
 `scripts/net-check.sh` tells a name that will not resolve from an address that will not answer; run
 it on the failing network before building anything for it. `tunnelEpoch` in `main.ts` is
 bumped on every connect and disconnect so an answer that was in flight across one is discarded.
