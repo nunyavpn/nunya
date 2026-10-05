@@ -783,3 +783,87 @@ async fn xhttp_carries_traffic_through_connect_latency_and_probe_paths() {
     client_proc.stop().await;
     http_task.abort();
 }
+
+/// Every shareable shape, exported as Xray JSON and as sing-box JSON, checked by the engines that
+/// would run it. The core embeds Xray, so a config another client's Xray would refuse fails here.
+#[tokio::test]
+#[ignore = "needs a built core; set NUNYA_CORE_PATH"]
+async fn exported_configs_are_accepted_by_both_engines() {
+    use config::export::{export, Format};
+    let (link, proc, _dir) = connect_core().await;
+
+    let base = sample_request().profile;
+    let tls = TlsOptions {
+        enabled: true,
+        sni: "cdn.example.net".into(),
+        alpn: vec!["http/1.1".into()],
+        fingerprint: "chrome".into(),
+        ..Default::default()
+    };
+    let with = |kind, path: &str| Profile {
+        flow: String::new(),
+        tls: tls.clone(),
+        transport: Transport {
+            kind,
+            path: path.into(),
+            host: "cdn.example.net".into(),
+            service_name: "TunService".into(),
+            max_early_data: 2048,
+            ..Default::default()
+        },
+        ..base.clone()
+    };
+    let cases = vec![
+        ("vless tcp reality", base.clone()),
+        ("vless ws", with(TransportKind::Ws, "/ws")),
+        ("vless grpc", with(TransportKind::Grpc, "")),
+        ("vless httpupgrade", with(TransportKind::Httpupgrade, "/up")),
+        ("vmess ws", Profile { protocol: Protocol::Vmess, security: "auto".into(), ..with(TransportKind::Ws, "/vm") }),
+        ("trojan tcp", Profile { protocol: Protocol::Trojan, password: "secret".into(), ..with(TransportKind::Tcp, "") }),
+        (
+            "wireguard",
+            Profile {
+                protocol: Protocol::Wireguard,
+                server: "162.159.192.1".into(),
+                port: 2408,
+                wireguard: Some(WireguardOptions {
+                    private_key: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=".into(),
+                    peer_public_key: "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=".into(),
+                    local_address: vec!["172.16.0.2/32".into()],
+                    reserved: vec![1, 2, 3],
+                    ..Default::default()
+                }),
+                ..Profile::default()
+            },
+        ),
+    ];
+
+    let runtime_core = config::build(&sample_request()).to_string();
+    let mut failures = Vec::new();
+    for (label, profile) in cases {
+        let xray = export(&profile, Format::Xray, "https://1.1.1.1/dns-query").unwrap();
+        let resp: gen::ErrorResp = link
+            .call(
+                method::CHECK_CONFIG,
+                &gen::LoadConfigReq {
+                    core_config: Some(runtime_core.clone()),
+                    need_xray: Some(true),
+                    xray_config: Some(xray.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("CheckConfig round trip");
+        if let Some(err) = resp.error.filter(|e| !e.is_empty()) {
+            failures.push(format!("{label} (xray): {err}\n{xray}"));
+        }
+        let sing_box: serde_json::Value =
+            serde_json::from_str(&export(&profile, Format::SingBox, "https://1.1.1.1/dns-query").unwrap()).unwrap();
+        if let Some(err) = core_check(&link, &sing_box).await {
+            failures.push(format!("{label} (sing-box): {err}"));
+        }
+    }
+
+    proc.stop().await;
+    assert!(failures.is_empty(), "the core rejected:\n\n{}", failures.join("\n\n"));
+}

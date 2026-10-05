@@ -89,7 +89,7 @@ fn xhttp_rejects_unsupported_options_and_carries_reality_and_protocol_credential
         public_key: "key".into(),
         short_id: "ab".into(),
     });
-    let outbound = xhttp_outbound(&p, "test").unwrap();
+    let outbound = xray_outbound(&p, "test").unwrap();
     assert_eq!(
         outbound["streamSettings"]["realitySettings"]["publicKey"],
         "key"
@@ -97,13 +97,13 @@ fn xhttp_rejects_unsupported_options_and_carries_reality_and_protocol_credential
     p.protocol = Protocol::Trojan;
     p.password = "secret".into();
     assert_eq!(
-        xhttp_outbound(&p, "test").unwrap()["settings"]["servers"][0]["password"],
+        xray_outbound(&p, "test").unwrap()["settings"]["servers"][0]["password"],
         "secret"
     );
     p.protocol = Protocol::Vmess;
     p.security = "chacha20-poly1305".into();
     assert_eq!(
-        xhttp_outbound(&p, "test").unwrap()["settings"]["vnext"][0]["users"][0]["security"],
+        xray_outbound(&p, "test").unwrap()["settings"]["vnext"][0]["users"][0]["security"],
         p.security
     );
 }

@@ -176,6 +176,16 @@ async fn check_config(
     Ok(pretty)
 }
 
+/// A server as a whole Xray or sing-box config, for the Share sheet; see `config::export`.
+#[tauri::command]
+fn export_config(
+    profile: config::Profile,
+    format: config::export::Format,
+    dns: String,
+) -> Result<String, String> {
+    config::export::export(&profile, format, &dns)
+}
+
 /// Asks for whatever consent the platform requires (`platform::grant`), once.
 ///
 /// What follows depends on how the platform grants it. Where the core binary itself is given the
@@ -1061,6 +1071,7 @@ pub fn run() {
             request_permission,
             app_log_backlog,
             check_config,
+            export_config,
             start_tunnel,
             stop_tunnel,
             query_stats,

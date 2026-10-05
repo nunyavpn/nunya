@@ -158,7 +158,8 @@ device only, and is kept for as long as the server is in your list.
 
 **⋯ → Share** shows a server as a QR code and a link, ready to scan on a phone or import in Nunya on
 another device. A WireGuard server can also be shared as a WireGuard config, which the official
-WireGuard apps scan. A share link contains the server's credentials, so share it only with people
+WireGuard apps scan. Any server can also be copied as a whole Xray JSON config (a custom config in
+v2rayN or v2rayNG) or a sing-box JSON config (the sing-box apps). A share link contains the server's credentials, so share it only with people
 you'd give access to.
 
 ### Settings: VPN or proxy

@@ -102,7 +102,7 @@ fn prepare(mut core: Value, profiles: &[Profile], tags: &[String]) -> Result<Run
         {
             continue;
         }
-        let outbound = xhttp_outbound(profile, tag)?;
+        let outbound = xray_outbound(profile, tag)?;
         let listener =
             TcpListener::bind("127.0.0.1:0").map_err(|e| format!("XHTTP bridge: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -138,8 +138,103 @@ fn prepare(mut core: Value, profiles: &[Profile], tags: &[String]) -> Result<Run
     Ok(Runtime { core, xray })
 }
 
-fn xhttp_outbound(p: &Profile, tag: &str) -> Result<Value, String> {
+/// One profile as an Xray outbound. The runtime bridges only XHTTP through it; `export` writes
+/// every profile with it, so a transport Xray no longer runs is refused here by name rather than
+/// written into a config the other client would reject or, worse, read as plain TCP.
+pub(super) fn xray_outbound(p: &Profile, tag: &str) -> Result<Value, String> {
     let t = &p.transport;
+    if p.protocol == Protocol::Wireguard {
+        if t.kind == TransportKind::Xhttp {
+            return Err("WireGuard cannot use XHTTP".into());
+        }
+        return Ok(json!({ "tag": tag, "protocol": "wireguard", "settings": wireguard_settings(p) }));
+    }
+    let xhttp = t.kind == TransportKind::Xhttp;
+    if xhttp && p.protocol == Protocol::Vless && !p.flow.is_empty() {
+        return Err("XHTTP does not support VLESS flow; remove the flow setting".into());
+    }
+    let settings = match p.protocol {
+        Protocol::Vless => {
+            let mut user = json!({ "id": p.uuid, "encryption": "none" });
+            if !p.flow.is_empty() {
+                user["flow"] = json!(p.flow);
+            }
+            json!({ "vnext": [{ "address": p.server, "port": p.port, "users": [user] }] })
+        }
+        Protocol::Vmess => {
+            if xhttp && p.alter_id != 0 {
+                return Err("XHTTP requires VMess AEAD (alterId 0)".into());
+            }
+            let mut user = json!({ "id": p.uuid,
+                "security": if p.security.is_empty() { "auto" } else { &p.security } });
+            // As in sing-box: a present alterId selects the pre-AEAD scheme.
+            if p.alter_id > 0 {
+                user["alterId"] = json!(p.alter_id);
+            }
+            json!({ "vnext": [{ "address": p.server, "port": p.port, "users": [user] }] })
+        }
+        Protocol::Trojan => {
+            json!({ "servers": [{ "address": p.server, "port": p.port, "password": p.password }] })
+        }
+        Protocol::Wireguard => unreachable!("handled above"),
+    };
+    let mut stream = json!({ "security": "none" });
+    // Xray carries WebSocket early data in the path, and only under its default header name.
+    let early_path = || -> Result<String, String> {
+        if t.max_early_data == 0 {
+            return Ok(t.path.clone());
+        }
+        if !t.early_data_header.is_empty() && t.early_data_header != "Sec-WebSocket-Protocol" {
+            return Err(format!("Xray cannot send early data in a {} header", t.early_data_header));
+        }
+        let sep = if t.path.contains('?') { '&' } else { '?' };
+        Ok(format!("{}{sep}ed={}", t.path, t.max_early_data))
+    };
+    match t.kind {
+        TransportKind::Tcp => stream["network"] = json!("tcp"),
+        TransportKind::Ws => {
+            stream["network"] = json!("ws");
+            stream["wsSettings"] = json!({ "path": early_path()?, "host": t.host });
+        }
+        TransportKind::Httpupgrade => {
+            stream["network"] = json!("httpupgrade");
+            stream["httpupgradeSettings"] = json!({ "path": early_path()?, "host": t.host });
+        }
+        TransportKind::Grpc => {
+            stream["network"] = json!("grpc");
+            stream["grpcSettings"] = json!({ "serviceName": t.service_name });
+        }
+        // Both were removed from Xray-core in v24.9; it now answers them with an error.
+        TransportKind::Http => return Err("Xray no longer runs the HTTP/2 transport".into()),
+        TransportKind::Quic => return Err("Xray no longer runs the QUIC transport".into()),
+        TransportKind::Xhttp => {
+            stream["network"] = json!("xhttp");
+            stream["xhttpSettings"] = xhttp_settings(t)?;
+        }
+    }
+    if p.tls.enabled {
+        let tls = &p.tls;
+        if let Some(reality) = &tls.reality {
+            stream["security"] = json!("reality");
+            stream["realitySettings"] = json!({ "serverName": tls.sni, "publicKey": reality.public_key,
+                "shortId": reality.short_id, "fingerprint": if tls.fingerprint.is_empty() { "chrome" } else { &tls.fingerprint } });
+        } else {
+            stream["security"] = json!("tls");
+            stream["tlsSettings"] = json!({ "serverName": tls.sni, "allowInsecure": tls.insecure });
+            if !tls.alpn.is_empty() {
+                stream["tlsSettings"]["alpn"] = json!(tls.alpn);
+            }
+            if !tls.fingerprint.is_empty() {
+                stream["tlsSettings"]["fingerprint"] = json!(tls.fingerprint);
+            }
+        }
+    }
+    Ok(
+        json!({ "tag": tag, "protocol": p.protocol, "settings": settings, "streamSettings": stream }),
+    )
+}
+
+fn xhttp_settings(t: &super::Transport) -> Result<Value, String> {
     let mode = if t.mode.is_empty() { "auto" } else { &t.mode };
     if !["auto", "packet-up", "stream-up", "stream-one"].contains(&mode) {
         return Err(format!("XHTTP mode {mode:?} is not supported"));
@@ -181,47 +276,32 @@ fn xhttp_outbound(p: &Profile, tag: &str) -> Result<Value, String> {
             }
         }
     }
-    if p.protocol == Protocol::Vless && !p.flow.is_empty() {
-        return Err("XHTTP does not support VLESS flow; remove the flow setting".into());
-    }
-    let settings = match p.protocol {
-        Protocol::Vless => json!({ "vnext": [{ "address": p.server, "port": p.port,
-            "users": [{ "id": p.uuid, "encryption": "none" }] }] }),
-        Protocol::Vmess => {
-            if p.alter_id != 0 {
-                return Err("XHTTP requires VMess AEAD (alterId 0)".into());
-            }
-            json!({ "vnext": [{ "address": p.server, "port": p.port, "users": [{ "id": p.uuid,
-                "security": if p.security.is_empty() { "auto" } else { &p.security } }] }] })
-        }
-        Protocol::Trojan => {
-            json!({ "servers": [{ "address": p.server, "port": p.port, "password": p.password }] })
-        }
-        Protocol::Wireguard => return Err("WireGuard cannot use XHTTP".into()),
+    Ok(json!({ "host": t.host, "path": if t.path.is_empty() { "/" } else { &t.path },
+        "mode": mode, "extra": t.extra }))
+}
+
+/// Xray's WireGuard outbound. `allowedIPs` is everything, for the reason `wireguard_endpoint` gives.
+fn wireguard_settings(p: &Profile) -> Value {
+    let wg = p.wireguard.clone().unwrap_or_default();
+    let endpoint = if p.server.contains(':') {
+        format!("[{}]:{}", p.server, p.port)
+    } else {
+        format!("{}:{}", p.server, p.port)
     };
-    let mut stream = json!({ "network": "xhttp", "security": "none", "xhttpSettings": {
-        "host": t.host, "path": if t.path.is_empty() { "/" } else { &t.path }, "mode": mode, "extra": t.extra
-    }});
-    if p.tls.enabled {
-        let tls = &p.tls;
-        if let Some(reality) = &tls.reality {
-            stream["security"] = json!("reality");
-            stream["realitySettings"] = json!({ "serverName": tls.sni, "publicKey": reality.public_key,
-                "shortId": reality.short_id, "fingerprint": if tls.fingerprint.is_empty() { "chrome" } else { &tls.fingerprint } });
-        } else {
-            stream["security"] = json!("tls");
-            stream["tlsSettings"] = json!({ "serverName": tls.sni, "allowInsecure": tls.insecure });
-            if !tls.alpn.is_empty() {
-                stream["tlsSettings"]["alpn"] = json!(tls.alpn);
-            }
-            if !tls.fingerprint.is_empty() {
-                stream["tlsSettings"]["fingerprint"] = json!(tls.fingerprint);
-            }
-        }
+    let mut peer = json!({ "publicKey": wg.peer_public_key, "endpoint": endpoint,
+        "allowedIPs": ["0.0.0.0/0", "::/0"] });
+    if wg.keepalive > 0 {
+        peer["keepAlive"] = json!(wg.keepalive);
     }
-    Ok(
-        json!({ "tag": tag, "protocol": p.protocol, "settings": settings, "streamSettings": stream }),
-    )
+    let mut settings = json!({ "secretKey": wg.private_key, "address": wg.local_address,
+        "peers": [peer] });
+    if !wg.reserved.is_empty() {
+        settings["reserved"] = json!(wg.reserved);
+    }
+    if wg.mtu > 0 {
+        settings["mtu"] = json!(wg.mtu);
+    }
+    settings
 }
 
 #[cfg(test)]
