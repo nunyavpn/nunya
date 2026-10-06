@@ -117,7 +117,9 @@ things at once, and Nunya sorts them before anything is added:
 
 - **Share links**: `vless://`, `vmess://`, `trojan://`, `wireguard://`
 - **Subscriptions**: an `https://` address, or a panel's *import to sing-box / Clash* link. Each
-  gets its own group, which you can update later.
+  gets its own group, which you can update later. Its **⋯** menu shares the subscription (its
+  address, as a QR code and text) and edits it: rename it, or move it to a new address when your
+  provider gives you one. A rename sticks across updates.
 - **WireGuard configs**: the `[Interface]` / `[Peer]` text the WireGuard apps export
 
 Anything Nunya can't run yet is named, with the reason, rather than silently dropped. The **QR
@@ -147,7 +149,7 @@ see why.
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/usage-dark.png"><img src="docs/screenshots/usage.png" width="420" alt="The usage of a subscription: totals for 30 days and all time, a daily chart, and a breakdown by server"></picture></p>
 
-Press the chart button on a subscription, or choose **⋯ → Usage** on a server, to see what it has
+Choose **⋯ → Usage** on a subscription or a server, to see what it has
 carried: the last 30 days and all time, a daily chart, and, for a subscription, each server's
 share. Where the provider reports your allowance, its figure is shown too. Usage is counted on your
 device only, and is kept for as long as the server is in your list.

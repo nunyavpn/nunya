@@ -36,10 +36,15 @@ export interface LocationsCallbacks {
   onEdit: (server: Server) => void;
   onDelete: (server: Server) => void;
   onRemoveGroup: (group: Group) => void;
+  onShareGroup: (group: Group) => void;
+  onEditGroup: (group: Group) => void;
   onAdd: () => void;
   /** Open Quick Connect's prompt: fastest, most used or most recent. */
   onQuickConnect: () => void;
 }
+
+/** One entry of a ⋯ menu: its label, icon and action. */
+type MenuItem = [string, string, () => void];
 
 /** Rows a group shows before "Show more". */
 const ROW_PAGE = 100;
@@ -236,21 +241,8 @@ export class LocationsPanel {
           meta,
         ),
       ),
-      // Nothing to chart in a group with no configs; the filter does not hide it, though, because
-      // the history is the group's whole, not what the search matched.
-      total
-        ? h(
-            "button",
-            {
-              class: "gsync",
-              "aria-label": `Usage of ${group.name}`,
-              title: "Usage",
-              onclick: () => this.callbacks.onGroupUsage(group),
-            },
-            icon("chart", 14),
-          )
-        : null,
-      // Only a subscription has somewhere to refresh from.
+      // Only a subscription has somewhere to refresh from. Kept as its own button rather than in
+      // the menu: it is what a group header is used for most.
       group.url
         ? h(
             "button",
@@ -264,20 +256,16 @@ export class LocationsPanel {
             icon("refresh", 14),
           )
         : null,
-      // The hand-added group is not removable: it is where a pasted link goes when no
-      // subscription was chosen, so there would be nowhere to put the next one.
-      group.id === MANUAL_GROUP_ID
-        ? null
-        : h(
-            "button",
-            {
-              class: "gsync danger",
-              "aria-label": `Delete ${group.name}`,
-              title: group.url ? "Delete this subscription" : "Delete this group",
-              onclick: () => this.callbacks.onRemoveGroup(group),
-            },
-            icon("trash", 14),
-          ),
+      h(
+        "button",
+        {
+          class: "gsync",
+          "aria-label": `Actions for ${group.name}`,
+          "aria-haspopup": "menu",
+          onclick: (e: Event) => this.openGroupMenu(group, total, e.currentTarget as HTMLElement),
+        },
+        icon("more", 14),
+      ),
     );
   }
 
@@ -343,7 +331,7 @@ export class LocationsPanel {
           class: "locact",
           "aria-label": `Actions for ${server.profile.name}`,
           "aria-haspopup": "menu",
-          onclick: (e: Event) => this.openMenu(server, e.currentTarget as HTMLElement),
+          onclick: (e: Event) => this.openServerMenu(server, e.currentTarget as HTMLElement),
         },
         icon("more", 15),
       ),
@@ -456,19 +444,49 @@ export class LocationsPanel {
     this.menu = null;
   }
 
+  /** Check, Usage, Share and Edit, then Delete on its own below a divider. */
+  private openServerMenu(server: Server, anchor: HTMLElement) {
+    this.openMenu(server.id, server.profile.name, anchor, [
+      [this.checking.has(server.id) ? "Checking…" : "Check", "refresh", () => this.callbacks.onCheck(server)],
+      ["Usage", "chart", () => this.callbacks.onUsage(server)],
+      ["Share", "share", () => this.callbacks.onShare(server)],
+      ["Edit", "pencil", () => this.callbacks.onEdit(server)],
+    ], () => this.callbacks.onDelete(server));
+  }
+
   /**
-   * Check, Usage, Share and Edit, then Delete on its own below a divider.
-   *
-   * Fixed to the viewport rather than placed inside the row, because the list scrolls and clips
-   * its overflow — a menu inside it would be cut off at the bottom rows.
+   * The group's own menu, in the row's shape. Share only for a subscription — its address is what
+   * is shared — and Delete not for the hand-added group, which is where a pasted link goes.
+   * Usage only with configs to chart; the search does not hide it, since the history is the
+   * group's whole, not what the search matched.
    */
-  private openMenu(server: Server, anchor: HTMLElement) {
-    const wasOpen = this.menu?.dataset.id === server.id;
+  private openGroupMenu(group: Group, total: number, anchor: HTMLElement) {
+    const items: MenuItem[] = [];
+    if (total) items.push(["Usage", "chart", () => this.callbacks.onGroupUsage(group)]);
+    if (group.url) items.push(["Share", "share", () => this.callbacks.onShareGroup(group)]);
+    items.push(["Edit", "pencil", () => this.callbacks.onEditGroup(group)]);
+    const remove = group.id === MANUAL_GROUP_ID ? null : () => this.callbacks.onRemoveGroup(group);
+    this.openMenu(`group:${group.id}`, group.name, anchor, items, remove);
+  }
+
+  /**
+   * Fixed to the viewport rather than placed inside the row, because the list scrolls and clips
+   * its overflow — a menu inside it would be cut off at the bottom rows. Delete, when there is
+   * one, sits alone below a divider and in red, a misclick away from nothing.
+   */
+  private openMenu(
+    key: string,
+    label: string,
+    anchor: HTMLElement,
+    items: MenuItem[],
+    remove: (() => void) | null,
+  ) {
+    const wasOpen = this.menu?.dataset.id === key;
     this.closeMenu();
     // Pressing ⋯ again closes it, as a menu button is expected to.
     if (wasOpen) return;
 
-    const item = (label: string, glyph: string, run: () => void, danger = false) =>
+    const item = (text: string, glyph: string, run: () => void, danger = false) =>
       h(
         "button",
         {
@@ -480,22 +498,15 @@ export class LocationsPanel {
           },
         },
         icon(glyph, 14),
-        label,
+        text,
       );
 
     const menu = h(
       "div",
-      { class: "rmenu", role: "menu", "aria-label": server.profile.name, "data-id": server.id },
-      item(
-        this.checking.has(server.id) ? "Checking…" : "Check",
-        "refresh",
-        () => this.callbacks.onCheck(server),
-      ),
-      item("Usage", "chart", () => this.callbacks.onUsage(server)),
-      item("Share", "share", () => this.callbacks.onShare(server)),
-      item("Edit", "pencil", () => this.callbacks.onEdit(server)),
-      h("div", { class: "rmenu-sep", role: "separator" }),
-      item("Delete…", "trash", () => this.callbacks.onDelete(server), true),
+      { class: "rmenu", role: "menu", "aria-label": label, "data-id": key },
+      ...items.map(([text, glyph, run]) => item(text, glyph, run)),
+      remove ? h("div", { class: "rmenu-sep", role: "separator" }) : null,
+      remove ? item("Delete…", "trash", remove, true) : null,
     );
     document.body.appendChild(menu);
     this.menu = menu;
