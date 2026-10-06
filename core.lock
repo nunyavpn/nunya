@@ -7,5 +7,5 @@
 #
 # Bump both fields together: scripts/fetch-core.sh --update <tag> rewrites them.
 
-tag = v0.1.0
-sha256_sums = b3cfa6acdc1e2cfe2e70f0bdd29a82683873708df8948afc9f87c77f0206a387
+tag = v0.1.1
+sha256_sums = a3a8773629612018b4616394f9e9c9420661215835a77668ed56289ce17eec6d
