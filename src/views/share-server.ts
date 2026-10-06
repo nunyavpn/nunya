@@ -21,13 +21,18 @@
  * (XHTTP in sing-box, HTTP/2 or QUIC in Xray) shows the reason in place of the config. Neither
  * gets a QR code: a whole config is past what a phone reads reliably off a laptop screen.
  *
+ * A subscription is shared as its address (`openShareSubscription`): the address is what any
+ * client imports, and handing it over shares every config the provider serves, now and at each
+ * update. It is shown exactly as stored — an import link stays one — because that is the form the
+ * user added and the form other clients of the same panel accept.
+ *
  * The sheet says plainly that what it shows is the credential. A QR code on screen looks like a
  * harmless picture, and anyone who photographs it can use the server exactly as the user does.
  */
 import { invoke } from "../bridge";
 import { h, render } from "../dom";
 import { describe, dnsAddressOf, toShareLink, toWgQuick, wgQuickRefusal } from "../share";
-import { store, type Server } from "../store";
+import { store, type Group, type Server } from "../store";
 import { qrCode } from "./qr";
 import { openSheet, sheetHead } from "./sheets";
 
@@ -222,6 +227,64 @@ export function openShareServer(server: Server) {
       { class: "app sheet share", role: "dialog", "aria-label": "Share server" },
       sheetHead("Share server", close),
       body,
+      h(
+        "div",
+        { class: "sheet-foot" },
+        h("span", { class: "gpick" }),
+        h("button", { class: "ghost", onclick: close }, "Done"),
+        copyButton,
+      ),
+    );
+  });
+}
+
+export function openShareSubscription(group: Group) {
+  const url = group.url;
+  if (!url) return;
+
+  openSheet((close) => {
+    const copyButton = h("button", { class: "btn brand" }, "Copy address") as HTMLButtonElement;
+    let reset = 0;
+    copyButton.onclick = async () => {
+      const copied = await copyText(url);
+      copyButton.textContent = copied ? "Copied" : "Copy failed";
+      window.clearTimeout(reset);
+      reset = window.setTimeout(() => (copyButton.textContent = "Copy address"), 1600);
+    };
+
+    const box = h("textarea", {
+      class: "val sharelink",
+      readonly: true,
+      rows: 3,
+      spellcheck: false,
+      "aria-label": "Subscription address",
+      onclick: (e: Event) => (e.target as HTMLTextAreaElement).select(),
+    }) as HTMLTextAreaElement;
+    box.value = url;
+    const count = store.serversIn(group.id).length;
+
+    return h(
+      "div",
+      { class: "app sheet share", role: "dialog", "aria-label": "Share subscription" },
+      sheetHead("Share subscription", close),
+      h(
+        "div",
+        { class: "share-body" },
+        h("p", { class: "share-name" }, `${group.name} · ${count} server${count === 1 ? "" : "s"}`),
+        h("div", { class: "share-qr" }, qrCode(url)),
+        h(
+          "p",
+          { class: "fnote" },
+          "Add it in Nunya on another device, or in any client that takes a subscription address.",
+        ),
+        box,
+        h(
+          "p",
+          { class: "fnote warn" },
+          "This address is your account with the provider. Anyone who has it gets every server on it, " +
+            "now and after each update, and uses your allowance.",
+        ),
+      ),
       h(
         "div",
         { class: "sheet-foot" },

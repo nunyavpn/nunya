@@ -78,7 +78,8 @@ import {
   sheetHead,
 } from "./views/sheets";
 import { initEditServer, openEditServer } from "./views/edit-server";
-import { copyText, initShareServer, openShareServer } from "./views/share-server";
+import { copyText, initShareServer, openShareServer, openShareSubscription } from "./views/share-server";
+import { initEditGroup, openEditGroup } from "./views/edit-group";
 import { initAddServersSheet, openAddServers } from "./views/add-servers-sheet";
 import { openGrantAccess } from "./views/grant-access";
 import { Splash } from "./views/splash";
@@ -213,6 +214,8 @@ const locations = new LocationsPanel(qs("#locations"), {
   onEdit: (server) => openEditServer(server),
   onDelete: (server) => confirmDeleteServer(server),
   onRemoveGroup: (group) => confirmDeleteGroup(group),
+  onShareGroup: (group) => openShareSubscription(group),
+  onEditGroup: (group) => openEditGroup(group),
   onAdd: () => openAddServers(),
   onQuickConnect: () => openQuickConnect(),
 });
@@ -1365,7 +1368,7 @@ async function refreshSubscription(group: Group) {
       g.lastError = null;
       g.updatedAt = Date.now();
       if (fetched.quota) g.quota = fetched.quota;
-      if (fetched.title) g.name = fetched.title;
+      if (fetched.title && !g.renamed) g.name = fetched.title;
     });
 
     const changes = [
@@ -1491,6 +1494,7 @@ initSheets({ log });
 // views/edit-server.ts asks this module for logging and for re-measuring a server whose address
 // just changed.
 initEditServer({ log, checkOne: (server) => void checkOne(server) });
+initEditGroup({ log, refreshSubscription: (group) => void refreshSubscription(group) });
 
 // views/share-server.ts asks this module for the one thing it cannot do on its own: logging.
 initShareServer({ log });

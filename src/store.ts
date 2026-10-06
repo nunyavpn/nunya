@@ -170,6 +170,11 @@ export interface Group {
   refreshing: boolean;
   quota: Quota | null;
   collapsed: boolean;
+  /**
+   * The user named this group themselves, so a refresh keeps their name instead of taking the
+   * provider's `profile-title` — which would otherwise undo every rename at the next update.
+   */
+  renamed?: boolean;
 }
 
 /** One entry in the bypass list: traffic that leaves on the physical link. */
@@ -704,6 +709,29 @@ class Store {
       });
     });
     return id;
+  }
+
+  /**
+   * Renames a group, or moves a subscription to a new address.
+   *
+   * A new address keeps the servers until the refresh that follows replaces them, the way any
+   * update does, so their ids — and with them their usage history — survive when the new address
+   * serves the same configs. The old error and timestamp belonged to the old address and go.
+   */
+  editGroup(id: string, change: { name: string; url: string | null }) {
+    this.update((data) => {
+      const group = data.groups.find((g) => g.id === id);
+      if (!group) return;
+      if (change.name !== group.name) {
+        group.name = change.name;
+        group.renamed = true;
+      }
+      if (group.kind === "subscription" && change.url && change.url !== group.url) {
+        group.url = change.url;
+        group.lastError = null;
+        group.updatedAt = null;
+      }
+    });
   }
 
   removeGroup(id: string) {

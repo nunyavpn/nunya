@@ -905,6 +905,15 @@ A row has one action button, **⋯**, which opens a menu: Check, Usage, Share, E
 alone below a divider, in red. It used to be three buttons side by side, and Delete sat a misclick away
 from Edit. The menu is fixed to the viewport (the list clips its overflow) and closes on scroll.
 
+A **group header** has the same menu (`openGroupMenu` in `locations.ts`): Usage, Share (a
+subscription's address, `openShareSubscription`), Edit, then Delete… — none for the hand-added
+group. Update stays a button of its own, as the header's most frequent action. Edit
+([views/edit-group.ts](src/views/edit-group.ts)) renames a group and moves a subscription to a new
+address, checked by `classify`, the Add box's own rule, plus a refusal of an address another group
+already has. A new address is fetched at once; until then the old servers stay, and configs it
+still serves keep their ids and history. A rename sets `Group.renamed`, so a refresh no longer
+replaces it with the provider's `profile-title`.
+
 One CSS trap worth not repeating: the row action button is revealed with `opacity` on
 `:hover`/`:focus-within`, and are **not** gated with `pointer-events: none`. That reads as the safer
 choice and is the opposite — the buttons sit inside the row, so a cursor can only reach them when

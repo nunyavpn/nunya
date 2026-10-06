@@ -1633,6 +1633,12 @@ button:disabled {
   height: min(760px, 100%);
 }
 
+/* Edit subscription: two fields, so it sizes to them rather than to the server editor's height. */
+.sheet.group-edit .fnote {
+  padding: 0 18px;
+  margin: 8px 0 14px;
+}
+
 .sheet {
   width: min(476px, 100%);
 }
