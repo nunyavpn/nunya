@@ -93,7 +93,10 @@ fn every_config_looks_server_addresses_up_with_the_system_resolver() {
         build_probe(&[sample().profile], &[20000]),
     ];
     for cfg in configs {
-        assert_eq!(cfg["route"]["default_domain_resolver"], tags::DNS_DIRECT);
+        let resolver = &cfg["route"]["default_domain_resolver"];
+        assert_eq!(resolver["server"], tags::DNS_DIRECT);
+        // Not the DNS block's ipv4_only, which would make an IPv6-only server unreachable.
+        assert_eq!(resolver["strategy"], "prefer_ipv4");
         let direct = cfg["dns"]["servers"]
             .as_array()
             .unwrap()
