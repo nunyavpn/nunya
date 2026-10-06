@@ -378,6 +378,17 @@ fn system_resolver() -> Value {
     json!({ "type": "local", "tag": tags::DNS_DIRECT })
 }
 
+/// `route.default_domain_resolver`: the system resolver, asked for both families.
+///
+/// The DNS block's `ipv4_only` is about what the user's apps are told — a TUN without IPv6 must not
+/// hand them addresses it cannot carry — but sing-box applies it to every lookup with no strategy
+/// of its own, the server's included. The server is dialled outside the tunnel, so its address is
+/// whatever the physical network can reach: an IPv6-only name (Iranian providers hand these out)
+/// came back as "empty result". IPv4 first, where both exist, as before.
+fn server_resolver() -> Value {
+    json!({ "server": tags::DNS_DIRECT, "strategy": "prefer_ipv4" })
+}
+
 /// The `transport` object, or `None` for plain TCP.
 ///
 /// sing-box takes the absence of the key as "plain TCP"; there is no `{"type":"tcp"}` to emit, and
@@ -716,7 +727,7 @@ pub fn build(req: &BuildRequest) -> Value {
             "rules": route_rules,
             "final": tags::PROXY,
             "auto_detect_interface": true,
-            "default_domain_resolver": tags::DNS_DIRECT,
+            "default_domain_resolver": server_resolver(),
         },
         // The mere presence of clash_api is what makes sing-box build its traffic manager
         // (see needClashAPI in the core's `internal/boxbox/box.go`), which is what QueryStats reads.
@@ -822,7 +833,7 @@ pub fn build_probe(profiles: &[Profile], ports: &[u16]) -> Value {
         },
         "inbounds": inbounds,
         "outbounds": outbounds,
-        "route": { "rules": rules, "final": tags::BLOCK, "default_domain_resolver": tags::DNS_DIRECT },
+        "route": { "rules": rules, "final": tags::BLOCK, "default_domain_resolver": server_resolver() },
     });
 
     if !endpoints.is_empty() {
@@ -868,7 +879,7 @@ pub fn build_test(profiles: &[Profile]) -> (Value, Vec<String>) {
             "strategy": "ipv4_only",
         },
         "outbounds": outbounds,
-        "route": { "final": tags::DIRECT, "default_domain_resolver": tags::DNS_DIRECT },
+        "route": { "final": tags::DIRECT, "default_domain_resolver": server_resolver() },
     });
 
     if !endpoints.is_empty() {

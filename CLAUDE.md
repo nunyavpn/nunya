@@ -650,6 +650,10 @@ all, which is what an Iranian network did once (every name failed in 92 ms, then
 public one. It was `udp://1.1.1.1`, and Iranian providers hand out names their GeoDNS answers only
 to domestic resolvers, so configs that worked in v2rayNG failed here with `lookup …: empty result`.
 `local` queries the physical interface's servers and skips the TUN's own, so it does not loop.
+The resolver is asked for **both families** (`server_resolver`: `prefer_ipv4`): the DNS block's
+`ipv4_only` is about what apps are told while the TUN has no IPv6, but sing-box applies it to any
+lookup without a strategy of its own, and the same providers hand out IPv6-only names. XHTTP's
+lookups go through nunya-core's `xraydns`, which still falls back to `ipv4_only`.
 `scripts/net-check.sh` tells a name that will not resolve from an address that will not answer; run
 it on the failing network before building anything for it. `tunnelEpoch` in `main.ts` is
 bumped on every connect and disconnect so an answer that was in flight across one is discarded.
