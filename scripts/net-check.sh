@@ -8,6 +8,10 @@
 # own, endpoints reached by address, or something else — so this asks each question separately.
 #
 #   ./scripts/net-check.sh
+#   ./scripts/net-check.sh de6.fizikade.ir:8462    also a server that will not connect
+#
+# A server is asked about per address family, because the two fail differently: a name with only
+# an IPv6 address needs both the lookup to ask for one and the network to route to it.
 #
 # It sends nothing but these probes, reads nothing of yours, and prints one line each. Paste the
 # output into the issue. Addresses it prints are the public ones a web server would see anyway.
@@ -114,3 +118,51 @@ echo
 echo "== block lists (blocklists.rs) =="
 timed "raw.githubusercontent.com" curl -sS --max-time "$TIMEOUT" -o /dev/null -w "%{http_code} %{size_download} bytes" \
   https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs
+
+# One server per argument, as host:port ([v6]:port for an address). Python is asked rather than
+# dig because it uses the same system resolver an app does; errors print as one line.
+probe() { # probe <python body> <host> <port> <4|6> — the body sees host, port and fam
+  local body="$1"
+  shift
+  python3 - "$@" <<PY
+import socket, sys
+host, port, fam = sys.argv[1], int(sys.argv[2]), socket.AF_INET if sys.argv[3] == "4" else socket.AF_INET6
+def found():
+    # macOS answers an IPv6 lookup for an IPv4-only name with mapped ::ffff: addresses.
+    return sorted({a[4][0] for a in socket.getaddrinfo(host, port, fam, socket.SOCK_STREAM)
+                   if not a[4][0].startswith("::ffff:")})
+try:
+$body
+except Exception as e:
+    print(type(e).__name__, e); sys.exit(1)
+PY
+}
+
+if [ "$#" -gt 0 ]; then
+  echo
+  echo "== IPv6 on this network =="
+  timed "route to the IPv6 internet" probe '    s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    s.connect(("2001:4860:4860::8888", 53))  # sends nothing; asks which address would be used
+    print(s.getsockname()[0])' - 0 6
+fi
+
+for server in "$@"; do
+  host="${server%:*}"
+  port="${server##*:}"
+  host="${host#[}"
+  host="${host%]}"
+  echo
+  echo "== $host port $port =="
+  for family in 4 6; do
+    timed "system resolver, IPv$family" probe '    a = found()
+    if not a: raise LookupError("no address")
+    print(" ".join(a))' "$host" "$port" "$family"
+    timed "TCP connect over IPv$family" probe "    a = found()
+    if not a: raise LookupError('no address to connect to')
+    socket.create_connection((a[0], port), timeout=$TIMEOUT).close()
+    print('connected to', a[0])" "$host" "$port" "$family"
+  done
+  [[ "$host" == *:* || "$host" =~ ^[0-9.]+$ ]] && continue  # an address: nothing to look up
+  timed "AAAA over DNS-over-HTTPS (1.1.1.1)" curl -sS --max-time "$TIMEOUT" -H "accept: application/dns-json" \
+    "https://1.1.1.1/dns-query?name=$host&type=AAAA"
+done
