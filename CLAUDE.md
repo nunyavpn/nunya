@@ -653,7 +653,8 @@ to domestic resolvers, so configs that worked in v2rayNG failed here with `looku
 The resolver is asked for **both families** (`server_resolver`: `prefer_ipv4`): the DNS block's
 `ipv4_only` is about what apps are told while the TUN has no IPv6, but sing-box applies it to any
 lookup without a strategy of its own, and the same providers hand out IPv6-only names. XHTTP's
-lookups go through nunya-core's `xraydns`, which still falls back to `ipv4_only`.
+lookups go through nunya-core's `xraydns`, which takes this same strategy from
+`default_domain_resolver` since core v0.1.1 — so the setting covers both engines from here.
 `scripts/net-check.sh` tells a name that will not resolve from an address that will not answer; run
 it on the failing network before building anything for it. `tunnelEpoch` in `main.ts` is
 bumped on every connect and disconnect so an answer that was in flight across one is discarded.
